@@ -1,5 +1,8 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+APP="StickyNotes.app"
+BUNDLE_ID="com.suryatejlalam.StickyNotes"
 
 # The macOS 27 beta Command Line Tools ship a swiftc (6.2.3) that cannot read the
 # installed SDK (built with 6.2 effective-5.10) — any `import SwiftUI` hangs and
@@ -24,23 +27,23 @@ DEVELOPER_DIR="$(find_developer_dir)" || {
 SWIFTC="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
 SDK="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 
-echo "Using toolchain: $DEVELOPER_DIR"
+echo "Toolchain: $DEVELOPER_DIR"
 
-mkdir -p StickyNotes.app/Contents/MacOS
-mkdir -p StickyNotes.app/Contents/Resources
+# The bundle is build output. Assemble it from scratch every time so a stale
+# binary or signature can never survive a rebuild.
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp resources/Info.plist "$APP/Contents/Info.plist"
 
 "$SWIFTC" \
     -sdk "$SDK" \
     -target arm64-apple-macos14.0 \
-    src/StickyNotes.swift src/ContentView.swift \
-    -o StickyNotes.app/Contents/MacOS/StickyNotes
-
-if [ ! -f StickyNotes.app/Contents/Info.plist ]; then
-    echo "warning: StickyNotes.app/Contents/Info.plist is missing" >&2
-fi
+    -O \
+    src/*.swift \
+    -o "$APP/Contents/MacOS/StickyNotes"
 
 # Ad-hoc sign (required on Apple Silicon) and clear the quarantine flag.
-codesign --force --deep --sign - StickyNotes.app
-xattr -cr StickyNotes.app
+codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
+xattr -cr "$APP"
 
-echo "Build complete. Run 'open StickyNotes.app' to launch."
+echo "Build complete. Run 'open $APP' to launch."
