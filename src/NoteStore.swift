@@ -39,6 +39,7 @@ struct NoteStore {
         if let data = try? Data(contentsOf: fileURL),
            let notes = try? JSONDecoder().decode([String].self, from: data),
            !notes.isEmpty {
+            writeBackup(data, of: notes)
             return notes
         }
 
@@ -63,6 +64,23 @@ struct NoteStore {
         } catch {
             NSLog("StickyNotes: failed to save notes to \(fileURL.path): \(error)")
         }
+    }
+
+    var backupFileURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("notes.backup.json")
+    }
+
+    /// Keeps the last known-good contents beside the live file.
+    ///
+    /// A scratchpad's whole value is that the text is still there. One note was
+    /// lost to a clobbered save during development, which is one more than this
+    /// should ever cost — a copy per launch is cheap insurance against the next
+    /// bug doing the same thing silently.
+    private func writeBackup(_ data: Data, of notes: [String]) {
+        // Never let a backup of nothing overwrite a backup of something.
+        let meaningful = notes.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard meaningful else { return }
+        try? data.write(to: backupFileURL, options: .atomic)
     }
 
     /// One-time import of notes written by the pre-1.0 `UserDefaults` build.

@@ -30,6 +30,8 @@ OUT="$(mktemp -d)/NotesManagerTests"
     -target arm64-apple-macos14.0 \
     src/NoteStore.swift \
     src/NotesManager.swift \
+    src/TextStatistics.swift \
+    src/KeyCombo.swift \
     tests/NotesManagerTests.swift \
     tests/main.swift \
     -o "$OUT"

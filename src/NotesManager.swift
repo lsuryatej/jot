@@ -20,6 +20,9 @@ final class NotesManager: ObservableObject {
     /// restarts itself on the next keystroke, forever.
     private var timerSource: String?
 
+    /// Configurable via Preferences; "5m <keyword>" starts a countdown.
+    var timerKeyword: String = "timer"
+
     private let store: NoteStore
     private var pendingSave: DispatchWorkItem?
     private let saveDebounce: TimeInterval
@@ -29,7 +32,7 @@ final class NotesManager: ObservableObject {
         self.saveDebounce = saveDebounce
         self.notes = store.load()
         self.currentIndex = max(0, notes.count - 1)
-        self.timerSource = Self.firstTimerDirective(in: notes[currentIndex])?.source
+        self.timerSource = Self.firstTimerDirective(in: notes[currentIndex], keyword: timerKeyword)?.source
     }
 
     // MARK: - Text
@@ -113,13 +116,31 @@ final class NotesManager: ObservableObject {
     // MARK: - Timers
 
     /// Matches "90s timer", "5m timer", "2h timer" (case-insensitive).
-    private static let timerPattern = try? NSRegularExpression(
-        pattern: "([0-9]+)\\s*([smh])\\s*timer",
-        options: .caseInsensitive
-    )
+    ///
+    /// The keyword is configurable, so the pattern is built per keyword and
+    /// cached rather than compiled as a constant.
+    private static var patternCache: [String: NSRegularExpression] = [:]
+    private static let patternCacheLock = NSLock()
 
-    static func firstTimerDirective(in text: String) -> TimerDirective? {
-        guard let regex = timerPattern else { return nil }
+    static func timerRegex(keyword: String) -> NSRegularExpression? {
+        let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effective = keyword.isEmpty ? "timer" : keyword
+
+        patternCacheLock.lock()
+        defer { patternCacheLock.unlock() }
+
+        if let cached = patternCache[effective] { return cached }
+        let escaped = NSRegularExpression.escapedPattern(for: effective)
+        guard let regex = try? NSRegularExpression(
+            pattern: "([0-9]+)\\s*([smh])\\s*" + escaped,
+            options: .caseInsensitive
+        ) else { return nil }
+        patternCache[effective] = regex
+        return regex
+    }
+
+    static func firstTimerDirective(in text: String, keyword: String = "timer") -> TimerDirective? {
+        guard let regex = timerRegex(keyword: keyword) else { return nil }
         let ns = text as NSString
         guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
               let amount = Int(ns.substring(with: match.range(at: 1)))
@@ -140,7 +161,7 @@ final class NotesManager: ObservableObject {
     }
 
     private func evaluateTimer(in text: String) {
-        guard let directive = Self.firstTimerDirective(in: text) else {
+        guard let directive = Self.firstTimerDirective(in: text, keyword: timerKeyword) else {
             activeTimerEnd = nil
             timerSource = nil
             return
@@ -156,7 +177,14 @@ final class NotesManager: ObservableObject {
     /// it does not spontaneously start counting down.
     private func adoptTimerState(for text: String) {
         activeTimerEnd = nil
-        timerSource = Self.firstTimerDirective(in: text)?.source
+        timerSource = Self.firstTimerDirective(in: text, keyword: timerKeyword)?.source
+    }
+
+    /// Re-parses the current note after the keyword changes in Preferences.
+    func timerKeywordDidChange(to keyword: String) {
+        timerKeyword = keyword
+        activeTimerEnd = nil
+        timerSource = Self.firstTimerDirective(in: currentText, keyword: keyword)?.source
     }
 
     /// Marks the running timer as finished without clearing `timerSource`.

@@ -3,7 +3,9 @@ import AppKit
 import Combine
 
 struct ContentView: View {
-    @StateObject private var notesManager = NotesManager()
+    @ObservedObject var notesManager: NotesManager
+    @ObservedObject var settings: SettingsManager
+
     @State private var selectedRange = NSRange(location: 0, length: 0)
     @State private var timeRemaining: String = ""
 
@@ -14,6 +16,9 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 headerView
                 editor
+                if settings.showsFooter {
+                    footerView
+                }
             }
 
             if notesManager.activeTimerEnd != nil {
@@ -21,11 +26,9 @@ struct ContentView: View {
             }
         }
         .background(VisualEffectView().ignoresSafeArea())
-        .onReceive(NotificationCenter.default.publisher(for: .stickyNotesWillTerminate)) { _ in
-            // Debounced saves must not be lost when the process exits.
-            notesManager.flushForTermination()
-        }
     }
+
+    // MARK: - Editor
 
     private var editor: some View {
         PlainTextEditor(
@@ -42,6 +45,8 @@ struct ContentView: View {
             }
         )
     }
+
+    // MARK: - Header
 
     private var headerView: some View {
         HStack(spacing: 10) {
@@ -68,6 +73,44 @@ struct ContentView: View {
         .padding(.vertical, 10)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.8))
     }
+
+    // MARK: - Footer
+
+    /// Live counts, and sum/average whenever the selection holds numbers.
+    private var footerView: some View {
+        HStack(spacing: 8) {
+            Text(countsLabel)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            if let math = selectionMath {
+                Text(math.summary)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .help("\(math.count) numbers in the selection")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+    }
+
+    private var countsLabel: String {
+        TextStatistics.of(notesManager.currentText).summary
+    }
+
+    private var selectionMath: SelectionMath? {
+        guard selectedRange.length > 0 else { return nil }
+        let ns = notesManager.currentText as NSString
+        guard selectedRange.location >= 0,
+              selectedRange.location + selectedRange.length <= ns.length
+        else { return nil }
+        return SelectionMath.of(ns.substring(with: selectedRange))
+    }
+
+    // MARK: - Timer
 
     private var timerOverlay: some View {
         Text(timeRemaining.isEmpty ? "--:--" : timeRemaining)
@@ -102,15 +145,16 @@ struct ContentView: View {
             : String(format: "%02d:%02d", minutes, seconds)
     }
 
+    // MARK: - Share
+
     private func shareNote() {
         let text = notesManager.currentText
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        // The panel is a non-activating panel, so it is frequently not the key
-        // window. Anchoring to NSApp.keyWindow made this button silently do
-        // nothing; anchor to the panel itself instead.
-        guard let panel = NSApp.windows.first(where: { $0 is FloatingPanel }),
-              let anchor = panel.contentView
+        // The panel is often not the key window, so anchoring to
+        // NSApp.keyWindow made this button silently do nothing.
+        guard let anchor = NSApp.windows.first(where: { $0 is FloatingPanel })?.contentView
+                ?? NSApp.keyWindow?.contentView
         else { return }
 
         let picker = NSSharingServicePicker(items: [text])

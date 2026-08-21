@@ -154,6 +154,94 @@ func runAllTests() {
         equal(m.currentText, "    [ ] nested item", "indent kept ahead of the checkbox")
     }
 
+    // MARK: - Configurable timer keyword
+
+    suite("timer keyword is configurable") {
+        equal(NotesManager.firstTimerDirective(in: "5m pomodoro", keyword: "pomodoro")?.duration, 300,
+              "custom keyword matches")
+        equal(NotesManager.firstTimerDirective(in: "5m timer", keyword: "pomodoro")?.duration, nil,
+              "default keyword no longer matches once changed")
+
+        let m = makeManager()
+        m.timerKeyword = "countdown"
+        m.currentText = "10m countdown"
+        check(m.activeTimerEnd != nil, "manager honours its keyword")
+    }
+
+    suite("an empty keyword falls back rather than matching everything") {
+        equal(NotesManager.firstTimerDirective(in: "5m timer", keyword: "   ")?.duration, 300,
+              "blank keyword falls back to 'timer'")
+    }
+
+    suite("regex-special keywords are escaped") {
+        // An unescaped "c++" would be an invalid pattern and match nothing.
+        equal(NotesManager.firstTimerDirective(in: "5m c++", keyword: "c++")?.duration, 300,
+              "keyword with regex metacharacters still matches literally")
+    }
+
+    suite("changing the keyword re-evaluates the current note") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        check(m.activeTimerEnd != nil, "running under the old keyword")
+        m.timerKeywordDidChange(to: "pomodoro")
+        check(m.activeTimerEnd == nil, "stale directive no longer keeps a timer alive")
+    }
+
+    // MARK: - Text statistics
+
+    suite("word, character, and line counts") {
+        let stats = TextStatistics.of("hello world\nsecond line")
+        equal(stats.words, 4, "words")
+        equal(stats.characters, 23, "characters")
+        equal(stats.lines, 2, "lines")
+
+        equal(TextStatistics.of("").words, 0, "empty has no words")
+        equal(TextStatistics.of("").lines, 1, "empty is still one line")
+        equal(TextStatistics.of("one\n").lines, 1, "a trailing newline does not open a new line")
+        equal(TextStatistics.of("  spaced   out  ").words, 2, "runs of whitespace are one separator")
+        equal(TextStatistics.of("café").characters, 4, "accented characters count once")
+    }
+
+    suite("footer label pluralises") {
+        equal(TextStatistics.of("word").summary, "1 word · 4 chars · 1 line", "singular")
+        equal(TextStatistics.of("two words").summary, "2 words · 9 chars · 1 line", "plural words")
+        equal(TextStatistics.of("a\nb").summary, "2 words · 3 chars · 2 lines", "plural lines")
+    }
+
+    // MARK: - Selection maths
+
+    suite("sum and average over a selection") {
+        let math = SelectionMath.of("10 20 30")
+        equal(math?.count, 3, "three numbers")
+        equal(math?.sum, 60, "sum")
+        equal(math?.average, 20, "average")
+    }
+
+    suite("numbers are parsed out of surrounding text") {
+        let math = SelectionMath.of("rent $1,240.50 and food $310.25")
+        equal(math?.count, 2, "currency symbols and separators do not break parsing")
+        equal(math?.sum, 1550.75, "thousands separator handled")
+    }
+
+    suite("negatives and decimals") {
+        let math = SelectionMath.of("-5 2.5")
+        equal(math?.sum, -2.5, "negative plus decimal")
+    }
+
+    suite("a selection worth no summary returns nil") {
+        equal(SelectionMath.of("no numbers here") == nil, true, "no numbers")
+        equal(SelectionMath.of("just 42") == nil, true, "one number has no meaningful average")
+    }
+
+    // MARK: - Key combos
+
+    suite("key combo display and validation") {
+        equal(KeyCombo.default.displayString, "\u{2325}A", "default renders as option-A")
+        check(KeyCombo.default.isValid, "default is valid")
+        check(!KeyCombo(keyCode: 0, carbonModifiers: 0).isValid,
+              "a bare key is rejected, since it would swallow ordinary typing")
+    }
+
     // MARK: - Storage
 
     suite("notes survive a store round trip") {
@@ -167,6 +255,42 @@ func runAllTests() {
 
         store.save([])
         equal(store.load(), [""], "empty input never yields an unaddressable array")
+    }
+
+    suite("loading takes a backup of what was already on disk") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-backup-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("notes.json")
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+
+        store.save(["important"])
+        _ = store.load()
+        check(FileManager.default.fileExists(atPath: store.backupFileURL.path), "backup written")
+
+        // Simulate the clobber that cost a note during development.
+        store.save([""])
+        equal(store.load(), [""], "live file is now empty")
+
+        let recovered = try? JSONDecoder().decode([String].self, from: Data(contentsOf: store.backupFileURL))
+        equal(recovered, ["important"], "backup still holds the real content")
+    }
+
+    suite("a blank document never overwrites a good backup") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-backup2-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("notes.json")
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+
+        store.save(["keep me"])
+        _ = store.load()
+        store.save([""])
+        _ = store.load()
+        _ = store.load()
+
+        let recovered = try? JSONDecoder().decode([String].self, from: Data(contentsOf: store.backupFileURL))
+        equal(recovered, ["keep me"], "repeated loads of an empty file leave the backup alone")
     }
 
     suite("a missing file yields one empty note") {

@@ -93,6 +93,12 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 12, height: 12)
 
+        // Native in-note search. The Find menu items drive this through the
+        // responder chain, giving real match highlighting and next/previous
+        // rather than a hand-rolled search bar.
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
+
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
