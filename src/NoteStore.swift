@@ -15,8 +15,13 @@ struct NoteStore {
     private static let legacyDomain = "com.example.StickyNotes"
     private static let legacyKey = "saved_notes"
 
-    init(fileURL: URL = NoteStore.defaultFileURL()) {
+    /// `allowsLegacyMigration` exists so tests can point at a temporary file
+    /// without silently importing (and then rewriting) the user's real notes.
+    private let allowsLegacyMigration: Bool
+
+    init(fileURL: URL = NoteStore.defaultFileURL(), allowsLegacyMigration: Bool = true) {
         self.fileURL = fileURL
+        self.allowsLegacyMigration = allowsLegacyMigration
     }
 
     static func defaultFileURL() -> URL {
@@ -37,7 +42,7 @@ struct NoteStore {
             return notes
         }
 
-        if let migrated = migrateFromUserDefaults() {
+        if allowsLegacyMigration, let migrated = migrateFromUserDefaults() {
             save(migrated)
             return migrated
         }
