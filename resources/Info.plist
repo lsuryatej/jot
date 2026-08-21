@@ -6,6 +6,8 @@
     <string>StickyNotes</string>
     <key>CFBundleIdentifier</key>
     <string>com.suryatejlalam.StickyNotes</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>StickyNotes</string>
     <key>CFBundlePackageType</key>
