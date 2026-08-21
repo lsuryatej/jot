@@ -21,6 +21,10 @@ struct ContentView: View {
             }
         }
         .background(VisualEffectView().ignoresSafeArea())
+        .onReceive(NotificationCenter.default.publisher(for: .stickyNotesWillTerminate)) { _ in
+            // Debounced saves must not be lost when the process exits.
+            notesManager.flushForTermination()
+        }
     }
 
     private var editor: some View {

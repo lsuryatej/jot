@@ -2,6 +2,11 @@ import SwiftUI
 import AppKit
 import Carbon.HIToolbox
 
+extension Notification.Name {
+    /// Broadcast so the notes model can purge and flush before the process exits.
+    static let stickyNotesWillTerminate = Notification.Name("StickyNotesWillTerminate")
+}
+
 @main
 struct StickyNotesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -29,10 +34,12 @@ private func hotKeyEventHandler(
 class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: FloatingPanel!
     private var hotKeyRef: EventHotKeyRef?
+    private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = FloatingPanel()
         registerGlobalHotKey()
+        installStatusItem()
 
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -53,6 +60,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
         }
+        NotificationCenter.default.post(name: .stickyNotesWillTerminate, object: nil)
+    }
+
+    /// A menu bar icon, so the app is reachable when the hot key is unavailable.
+    ///
+    /// This is LSUIElement with no Dock icon; before this existed, a hot key
+    /// claimed by another app left the running process with no way in at all
+    /// short of `pkill`.
+    private func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(
+            systemSymbolName: "note.text",
+            accessibilityDescription: "StickyNotes"
+        )
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked(_:))
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem = item
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else {
+            togglePanel()
+            return
+        }
+
+        // Left click toggles; right click opens the menu. Assigning a menu
+        // outright would make left click open the menu too, costing the
+        // one-click toggle that is the point of the icon.
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            showStatusMenu()
+        } else {
+            togglePanel()
+        }
+    }
+
+    private func showStatusMenu() {
+        let menu = NSMenu()
+
+        let toggle = NSMenuItem(
+            title: panel.isVisible ? "Hide StickyNotes" : "Show StickyNotes",
+            action: #selector(togglePanelFromMenu),
+            keyEquivalent: "a"
+        )
+        toggle.keyEquivalentModifierMask = [.option]
+        toggle.target = self
+        menu.addItem(toggle)
+
+        menu.addItem(.separator())
+
+        let quit = NSMenuItem(title: "Quit StickyNotes", action: #selector(quit), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+
+        statusItem?.menu = menu
+        statusItem?.button?.performClick(nil)
+        // Detach immediately so the next left click toggles instead of
+        // reopening this menu.
+        statusItem?.menu = nil
+    }
+
+    @objc private func togglePanelFromMenu() {
+        togglePanel()
+    }
+
+    @objc private func quit() {
+        NSApp.terminate(nil)
     }
 
     /// Registers Option+A via Carbon's RegisterEventHotKey.
