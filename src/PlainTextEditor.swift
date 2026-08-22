@@ -564,6 +564,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        drawMathResults(in: dirtyRect)
         for placed in placedImages() where placed.rect.intersects(dirtyRect) {
             placed.image.draw(
                 in: placed.rect,
@@ -627,6 +628,64 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         }
     }
 
+    // MARK: - Inline math
+
+    /// One result per line that evaluated, recomputed whenever the text
+    /// changes. Evaluated top to bottom in one pass so later lines see
+    /// earlier variables — the whole reason this recomputes on every
+    /// keystroke rather than tracking a dependency graph.
+    private var mathResults: [(lineRange: NSRange, text: String)] = []
+
+    func recomputeMathResults() {
+        guard let textStorage else { mathResults = []; return }
+        let ns = textStorage.string as NSString
+        var environment: [String: MathExpression.Value] = [:]
+        var results: [(NSRange, String)] = []
+
+        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: [.byLines]) { line, lineRange, _, _ in
+            guard let line, let node = MathExpression.parse(line) else { return }
+            if case .success(let value) = MathExpression.evaluate(node, environment: &environment) {
+                results.append((lineRange, MathExpression.format(value)))
+            }
+        }
+        mathResults = results
+    }
+
+    private func drawMathResults(in dirtyRect: NSRect) {
+        guard let layoutManager, let textContainer, !mathResults.isEmpty else { return }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: max(10, baseFont.pointSize - 1), weight: .medium),
+            .foregroundColor: NSColor.controlAccentColor,
+        ]
+
+        for (lineRange, text) in mathResults {
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
+            guard glyphRange.length > 0 || lineRange.length == 0 else { continue }
+            let fragment = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: min(glyphRange.location, max(0, layoutManager.numberOfGlyphs - 1)),
+                effectiveRange: nil
+            )
+            var lineRect = fragment
+            lineRect.origin.x += textContainerInset.width
+            lineRect.origin.y += textContainerInset.height
+            guard lineRect.intersects(dirtyRect) else { continue }
+
+            let size = (text as NSString).size(withAttributes: attributes)
+            // Right-aligned in the margin, never overlapping the text itself
+            // even on a long line — it simply sits past the end of it.
+            //
+            // Bounded against the text container's own width, not the view's
+            // `bounds.width`: the scroll view can report a wider bounds than
+            // what is actually visible, which pushed results out past the
+            // window edge where they were clipped.
+            let textEnd = lineRect.minX + layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).width
+            let rightEdge = textContainer.size.width + textContainerInset.width
+            let x = min(max(textEnd + 16, rightEdge - size.width - 14), rightEdge - size.width - 4)
+            let drawRect = NSRect(x: x, y: lineRect.minY + (lineRect.height - size.height) / 2, width: size.width, height: size.height)
+            (text as NSString).draw(in: drawRect, withAttributes: attributes)
+        }
+    }
+
     // MARK: - Styling
 
     func textStorage(
@@ -640,6 +699,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         // Title styling spans the first line, which an edit anywhere can change
         // the extent of, so restyle the whole note when that mode is on.
         applyChecklistStyling(in: stylesFirstLineAsTitle ? nil : editedRange)
+        recomputeMathResults()
+        needsDisplay = true
     }
 
     /// Restyles the lines touching `range`, or the whole note when nil.
@@ -807,6 +868,7 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.enableImageDrops()
         textView.string = text
         textView.applyChecklistStyling()
+        textView.recomputeMathResults()
 
         scrollView.documentView = textView
         return scrollView

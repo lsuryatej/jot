@@ -145,6 +145,7 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.enableImageDrops()
         textView.string = text
         textView.applyChecklistStyling()
+        textView.recomputeMathResults()
 
         return textView
     }
@@ -161,6 +162,8 @@ struct NoteCardEditor: NSViewRepresentable {
         if textView.string != text {
             textView.string = text
             textView.applyChecklistStyling()
+            textView.recomputeMathResults()
+            textView.needsDisplay = true
         }
         textView.reportHeight()
     }

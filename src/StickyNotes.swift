@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        CurrencyRates.bootstrap()
         notesManager.timerKeyword = settings.effectiveTimerKeyword
         notesManager.onPersist = { [weak self] notes in
             self?.scheduleAppleNotesSync(notes)
@@ -86,6 +87,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// In Dock mode, clicking the Dock icon should bring the note back.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // A copy left running across midnight should not be stuck on
+        // yesterday's exchange rates until the next relaunch.
+        CurrencyRates.refreshIfNeeded()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showInterface()
         return true

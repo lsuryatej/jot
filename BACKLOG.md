@@ -5,18 +5,10 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
 
 ## Next up
 
-The three remaining Antinote features, agreed as the priority:
-
-- [ ] **Inline maths with variables** — `x = 40`, `x * 3`, `1200 * 1.18`,
-      `10 + 20%`. Results drawn in the right margin so the note stays plain
-      text. Recursive-descent parser, no dependency; re-evaluate the document
-      top to bottom per keystroke rather than building a dependency graph.
-- [ ] **Unit and currency conversion** — `5 km to miles` comes largely free
-      from Foundation's `Measurement` once the parser exists. Currency via
-      `fawazahmed0/exchange-api`: no API key, CDN-served, includes crypto,
-      fetched once and cached so conversions work offline.
 - [ ] **Link shrink** — collapse a long URL to its domain, Cmd-click to expand.
       TextKit 2 rendering attributes, so the full URL stays in the file.
+      The last of the three originally-scoped Antinote features; math and
+      currency/unit conversion are both done (see Done).
 
 ## Bugs
 

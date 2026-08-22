@@ -469,6 +469,153 @@ func runAllTests() {
         check(!TextRecognition.containsImage(pasteboard), "text pastes as text")
     }
 
+    // MARK: - Math engine
+
+    /// Evaluates one line in a fresh environment and returns the numeric
+    /// result, or nil if the line does not evaluate (prose, or an error).
+    func evalLine(_ line: String, env: inout [String: MathExpression.Value]) -> Double? {
+        guard let node = MathExpression.parse(line) else { return nil }
+        guard case .success(let value) = MathExpression.evaluate(node, environment: &env) else { return nil }
+        return value.amount
+    }
+
+    func evalDoc(_ lines: [String]) -> [Double?] {
+        var env: [String: MathExpression.Value] = [:]
+        return lines.map { evalLine($0, env: &env) }
+    }
+
+    suite("prose does not evaluate") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("just some words", env: &env), nil, "no numbers at all")
+        equal(evalLine("5 apples", env: &env), nil, "a bare number with a word is not math")
+        equal(evalLine("1200", env: &env), nil, "a bare number alone is not math either")
+        equal(evalLine("meeting at 3pm", env: &env), nil, "a number embedded in prose")
+    }
+
+    suite("basic arithmetic") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("2 + 2", env: &env), 4, "addition")
+        equal(evalLine("10 - 3", env: &env), 7, "subtraction")
+        equal(evalLine("4 * 5", env: &env), 20, "multiplication")
+        equal(evalLine("10 / 4", env: &env), 2.5, "division")
+        equal(evalLine("2 ^ 8", env: &env), 256, "exponent")
+        equal(evalLine("(2 + 3) * 4", env: &env), 20, "parentheses")
+        equal(evalLine("-5 + 10", env: &env), 5, "leading negative literal")
+        equal(evalLine("10 - -5", env: &env), 15, "subtracting a negative")
+        equal(evalLine("2 + 3 * 4", env: &env), 14, "precedence: multiplication before addition")
+    }
+
+    suite("thousands separators and decimals") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("1,200 + 800", env: &env), 2000, "comma-grouped thousands")
+        equal(evalLine("1,234,567 + 1", env: &env), 1234568, "multiple groups")
+        equal(evalLine("0.5 + 0.25", env: &env), 0.75, "decimals")
+        equal(evalLine("$50 + $25", env: &env), 75, "dollar-prefixed numbers")
+    }
+
+    suite("percentages: of, plain add/subtract, on/off") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("20% of 50", env: &env), 10, "of")
+        equal(evalLine("10 + 20%", env: &env), 12, "add: 20% of 10, added to 10")
+        equal(evalLine("200 + 10%", env: &env), 220, "matches Soulver's documented example")
+        equal(evalLine("100 - 50%", env: &env), 50, "subtract a percentage")
+        equal(evalLine("10% on 200", env: &env), 220, "on: adds the percentage")
+        equal(evalLine("20% off 50", env: &env), 40, "off: subtracts the percentage")
+        equal(evalLine("50% * 30", env: &env), 15, "multiplying a percentage always yields a plain number")
+        equal(evalLine("10% + 20%", env: &env), 30, "pure percentages add")
+    }
+
+    suite("variables") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("x = 40", env: &env), 40, "assignment evaluates to its value")
+        equal(evalLine("x * 3", env: &env), 120, "later line references it")
+        equal(evalLine("x", env: &env), 40, "a bare variable reference resolves")
+        equal(evalLine("y = x + 10", env: &env), 50, "one variable used to define another")
+        _ = evalLine("x = 5", env: &env)
+        equal(evalLine("x * 2", env: &env), 10, "redefinition silently overrides for lines below it")
+    }
+
+    suite("an undefined variable does not evaluate") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("undefined_name * 2", env: &env), nil, "unknown identifier fails quietly")
+    }
+
+    suite("unit conversion") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("1 km to m", env: &env), 1000, "km to m")
+        equal(evalLine("5 km in miles", env: &env).map { ($0 * 1000).rounded() / 1000 }, 3.107, "in, and miles conversion factor")
+        equal(evalLine("100 cm as m", env: &env), 1, "as")
+        equal(evalLine("0 c to f", env: &env), 32, "freezing point, celsius to fahrenheit")
+        equal(evalLine("100 c to f", env: &env), 212, "boiling point")
+        equal(evalLine("0 c to k", env: &env), 273.15, "celsius to kelvin")
+    }
+
+    suite("incompatible units do not evaluate") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("5 km + 3 kg", env: &env), nil, "length plus mass is refused rather than silently wrong")
+    }
+
+    suite("division by zero does not evaluate") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("5 / 0", env: &env), nil, "refused rather than infinity or a crash")
+    }
+
+    suite("a document evaluates top to bottom") {
+        let results = evalDoc(["budget = 5000", "budget * 1.2", "10 + 5", "just some notes"])
+        equal(results, [5000, 6000, 15, nil], "each line in order, prose lines nil")
+    }
+
+    suite("currency conversion resolves to a number") {
+        var env: [String: MathExpression.Value] = [:]
+        let result = evalLine("50 USD to EUR", env: &env)
+        check(result != nil && result! > 0, "converts to a positive amount")
+    }
+
+    suite("mutation check: reintroducing the try?-flatten bug would fail here") {
+        // Regression guard for the specific bug that made every dimensionless
+        // calculation fail: Swift auto-flattens `try? throwingCall().get()`
+        // when the success type is itself Optional, so a reconciled-but-nil
+        // unit and an actual thrown error became indistinguishable.
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("2 + 2", env: &env), 4, "plain dimensionless addition must not hit the unit-mismatch path")
+    }
+
+    suite("prefix dollar sign attaches as a trailing unit, not a leading token") {
+        // $50 must tokenize as (number 50, unit usd) — the same shape as
+        // "50 usd" — or the parser's number-then-unit grammar cannot see it.
+        let tokens = MathExpression.tokenize("$50")
+        equal(tokens, [.number(50), .identifier("usd")], "number first, unit second")
+    }
+
+    suite("malformed grouping does not silently misparse") {
+        var env: [String: MathExpression.Value] = [:]
+        // "1,2345" is not valid thousands grouping (second group isn't three
+        // digits) — the comma is dropped as punctuation and two separate
+        // numbers remain with no operator between them, so the line is prose.
+        equal(evalLine("1,2345", env: &env), nil, "invalid grouping does not produce a number")
+    }
+
+    suite("word wrapped as identifier is not mistaken for percent-of prose") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("weight of 50", env: &env), nil, "'of' with no leading percent is not math")
+    }
+
+    suite("case-insensitive variable names") {
+        var env: [String: MathExpression.Value] = [:]
+        _ = evalLine("Rate = 10", env: &env)
+        equal(evalLine("rate * 2", env: &env), 20, "lookup is case-insensitive")
+    }
+
+    suite("negative percent") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine("100 - -10%", env: &env), 110, "subtracting a negative percentage adds")
+    }
+
+    suite("chained assignment references") {
+        let results = evalDoc(["a = 10", "b = a * 2", "c = b + a", "c"])
+        equal(results, [10, 20, 30, 30], "each variable available to every later line")
+    }
+
     // MARK: - Storage
 
     suite("notes survive a store round trip") {

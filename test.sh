@@ -32,6 +32,9 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/Attachments.swift \
     src/AppleNotesSync.swift \
     src/TextRecognition.swift \
+    src/Units.swift \
+    src/CurrencyRates.swift \
+    src/MathExpression.swift \
     src/NoteStore.swift \
     src/NotesManager.swift \
     src/TextStatistics.swift \
