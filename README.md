@@ -219,7 +219,7 @@ glass if that's what you want.
 | **Tab** / **Shift+Tab** | Nest or un-nest a checklist item |
 | **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** | Move the current note up or down the list |
 | Drag a card's grip (hover, Screen Edge mode) | Reorder notes in the sidebar |
-| Two-finger swipe | Move between notes (single-note display modes) |
+| Two-finger swipe | Move between notes (single-note display modes); with the header hidden, a brief badge names the note you landed on |
 | Drag an image's edge | Resize it in place |
 | Cmd-click a shrunk link | Expand it to the full URL, click again to collapse |
 

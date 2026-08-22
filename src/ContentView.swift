@@ -15,6 +15,10 @@ struct ContentView: View {
     /// already visible and there's a card to scroll to instead of a range.
     @State private var edgeScrollIndex: Int?
     @State private var showingGlobalSearch = false
+    /// What a swipe landed on, shown briefly when the header bar is hidden
+    /// and nothing else on screen says which note you are now reading.
+    @State private var swipeFeedback: String?
+    @State private var swipeFeedbackDismiss: DispatchWorkItem?
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -39,6 +43,8 @@ struct ContentView: View {
             if notesManager.activeTimerEnd != nil {
                 timerOverlay
             }
+
+            swipeFeedbackOverlay
 
             if showingGlobalSearch {
                 GlobalSearchView(notesManager: notesManager, isPresented: $showingGlobalSearch) { result in
@@ -113,10 +119,7 @@ struct ContentView: View {
             selectedRange: $selectedRange,
             scrollTarget: $scrollTarget,
             onSwipe: { direction in
-                switch direction {
-                case .right: notesManager.previousNote()
-                case .left:  notesManager.nextNote()
-                }
+                navigate(direction)
             }
         )
     }
@@ -220,6 +223,57 @@ struct ContentView: View {
         timeRemaining = hours > 0
             ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
             : String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    // MARK: - Swipe feedback
+
+    /// Swiping moves between notes; with the header hidden there is no
+    /// "Note N of M" anywhere to say where you landed, so a chip says it
+    /// briefly instead. Shown only when it is saying something the screen
+    /// does not already show.
+    @ViewBuilder
+    private var swipeFeedbackOverlay: some View {
+        if let swipeFeedback {
+            Text(swipeFeedback)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.white.opacity(settings.appearance.wantsLitEdge ? 0.18 : 0.08), lineWidth: 1))
+                .frame(maxWidth: .infinity)
+                .padding(.top, 44)
+                .allowsHitTesting(false)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    private func navigate(_ direction: SwipeDirection) {
+        switch direction {
+        case .right: notesManager.previousNote()
+        case .left:  notesManager.nextNote()
+        }
+        showSwipeFeedback()
+    }
+
+    private func showSwipeFeedback() {
+        guard !settings.showsHeader,
+              notesManager.notes.indices.contains(notesManager.currentIndex)
+        else { return }
+
+        let note = notesManager.notes[notesManager.currentIndex]
+        withAnimation(.easeOut(duration: 0.15)) {
+            swipeFeedback = "\(note.title) · \(notesManager.currentIndex + 1)/\(notesManager.notes.count)"
+        }
+
+        // A quick run of swipes restarts the clock rather than stacking
+        // dismissals that fight each other.
+        swipeFeedbackDismiss?.cancel()
+        let dismiss = DispatchWorkItem {
+            withAnimation(.easeIn(duration: 0.3)) { swipeFeedback = nil }
+        }
+        swipeFeedbackDismiss = dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: dismiss)
     }
 
     // MARK: - Share
