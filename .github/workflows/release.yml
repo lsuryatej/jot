@@ -1,0 +1,54 @@
+name: Release
+
+# Triggered by pushing a tag like v1.2.3. Builds Jot.app and attaches it,
+# zipped, to a GitHub release for that tag.
+#
+# UNTESTED: this was written without the ability to run a macOS GitHub
+# Actions runner from the environment that authored it. GitHub-hosted macOS
+# runners ship stable Xcode/macOS, not the macOS 27 beta this project's
+# local toolchain workaround exists for, so build.sh's second lookup path
+# (/Applications/Xcode.app) should be the one that fires here — but "should"
+# is not "verified". Push a tag and watch the run before relying on this for
+# a real release; scripts/release.sh (run by hand) is the path that has
+# actually been exercised end to end.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Package
+        run: |
+          VERSION="$(plutil -extract CFBundleShortVersionString raw resources/Info.plist)"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent Jot.app "dist/Jot-$VERSION.zip"
+          shasum -a 256 "dist/Jot-$VERSION.zip" > "dist/Jot-$VERSION.zip.sha256"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "dist/Jot-$VERSION.zip" \
+            "dist/Jot-$VERSION.zip.sha256" \
+            --title "Jot $VERSION" \
+            --generate-notes
+
+      - name: Reminder
+        run: |
+          echo "::notice::Release published. The Homebrew cask at lsuryatej/homebrew-jot still needs its version and sha256 bumped by hand (or via a follow-up automation) — this workflow does not touch that repo."

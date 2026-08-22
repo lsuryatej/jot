@@ -1,141 +1,170 @@
-# StickyNotes
+# Jot
 
-A plain-text floating scratchpad for macOS, in the spirit of Antinote.
+A fast, native, plain-text scratchpad for macOS. No Electron, no dependencies, no telemetry.
 
-Swift + SwiftUI + AppKit, compiled directly with `swiftc`. There is no Xcode
-project and no SwiftPM manifest; `build.sh` assembles the `.app` bundle itself.
+![platform](https://img.shields.io/badge/platform-macOS%2014%2B-black?logo=apple&logoColor=white)
+![swift](https://img.shields.io/badge/Swift-AppKit%20%2B%20SwiftUI-orange?logo=swift&logoColor=white)
+![dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
+![license](https://img.shields.io/github/license/lsuryatej/jot)
+![binary size](https://img.shields.io/badge/binary-~950KB-blue)
 
-## Build and run
+Option+A summons a note from anywhere. It floats, docks to the menu bar, sits
+in a screen-edge sidebar, or lives in the Dock — plain text, with checklists,
+inline math, unit and currency conversion, images, and OCR, all built on
+nothing but Swift, AppKit, and SwiftUI. There is no Xcode project, no
+package manager, and no runtime dependency: the whole app is one `swiftc`
+invocation compiling straight to a ~950KB binary with zero non-system
+libraries linked in.
+
+## Install
 
 ```bash
-./build.sh && open StickyNotes.app
+brew install lsuryatej/jot/jot
 ```
+
+Or, without Homebrew:
 
 ```bash
-./test.sh
+curl -fsSL https://raw.githubusercontent.com/lsuryatej/jot/main/install.sh | bash
 ```
 
-Both scripts locate a toolchain themselves, checking `/Applications/Xcode-beta.app`,
-then `/Applications/Xcode.app`, then `~/Downloads/Xcode-beta.app`.
+Both install a prebuilt, checksum-verified `Jot.app` to `/Applications` (or
+`~/Applications` if that's not writable) and never ask for `sudo`. Update with
+`brew upgrade jot`, or from Jot's own menu bar icon → **Check for Updates**.
 
-Xcode is required, not just the Command Line Tools. The macOS 27 beta CLT ships
-a `swiftc` (6.2.3) that cannot read its own SDK (built with 6.2 effective-5.10);
-any `import SwiftUI` hangs and aborts while building the CoreFoundation module.
-Xcode bundles a matched toolchain and SDK pair, so the scripts pass `-sdk`
-explicitly rather than trusting `xcode-select`.
+## Why this exists
 
-## What it does
+Most "quick note" apps on macOS are either a $5–15 indie tool (Antinote,
+Numi, Soulver) or, at the other end, a full Electron shell burning 150MB+
+before you've typed a word. Jot is the native answer: it does the scratchpad
+things well — instant recall, math that just works, images you can drop in
+without thinking — and it does them in a binary smaller than most icon files.
 
-**Floating panel.** An `NSPanel` at floating level that stays above other
-windows, joins all Spaces, and uses `NSVisualEffectView` for native translucency.
-The close button hides the panel rather than destroying it.
+## Features
 
-**Option+A** toggles the note from anywhere, and is rebindable in Settings.
-Registered through Carbon's `RegisterEventHotKey`, which needs no Accessibility
-permission and consumes the keystroke, so it will not also type `å` into
-whatever app is in front.
+**Global hotkey.** Option+A toggles the note from anywhere, rebindable in
+Settings. Registered through Carbon's `RegisterEventHotKey`, which needs no
+Accessibility permission and consumes the keystroke — it won't also type `å`
+into whatever app is in front.
 
-**Four display modes**, switchable in Settings:
+**Five display modes**, switchable live in Settings:
 
 | Mode | Behaviour |
 |---|---|
-| Floating | Always on top, no Dock icon. Does not steal focus. |
-| Menu Bar | Ordinary window level, shown and hidden from the menu bar icon. |
-| Menu Bar Dropdown | Drops down under the icon and hides when you click away. |
+| Floating | Always on top, no Dock icon, never steals focus. |
+| Menu Bar | Ordinary window level, toggled from the menu bar icon. |
+| Menu Bar Dropdown | Drops down under the icon, hides when you click away. |
 | Dock | Dock icon and app switcher entry, like a normal app. |
-| Screen Edge | A sidebar on the left or right edge holding every note as its own card, revealed by resting the cursor against that edge. |
+| Screen Edge | A sidebar docked to a screen edge, holding every note as its own card, revealed by resting the cursor against that edge. |
 
-**Menu bar icon.** Left click toggles the panel, right click opens Show/Hide and
-Quit. The app is `LSUIElement` with no Dock icon, so this is the fallback if the
-hot key is ever claimed by another app.
+**Inline math with variables.**
 
-**Swipe between notes.** A horizontal two-finger swipe over the editor moves
-through note history. Swipe right to go back. Blank notes are dropped when you
-navigate away or quit, except the one you are currently in.
+```
+budget = 5000
+budget * 1.2          → 6000
+10 + 20%               → 12
+5 km to miles          → 3.1069 mi
+50 usd to inr           → 4385.96 inr
+```
 
-**Timers.** Typing `5m timer`, `30s timer`, or `2h timer` starts a countdown in
-the top-right corner and plays a sound when it finishes. A timer belongs to the
-note that started it, and an expired directive does not restart itself.
+A recursive-descent parser evaluates the whole note top to bottom on every
+keystroke — variables assigned on one line are visible to every line below
+it. A line with no operator is left as prose, even if it starts with a
+number, so "5 apples" never turns into a calculation. Results are drawn in
+the right margin and never touch the text itself.
 
-**Checklists.** The Toggle Checklist button flips `[ ]` and `[x]` on the line
-containing the caret. A line with no checkbox gains one, indentation preserved.
+**Unit and currency conversion.** Length, mass, time, data, and temperature
+convert offline via a fixed table. Currency rates are fetched from a public,
+key-free API — **off by default** (see Privacy below); when off, conversion
+uses the last cached rate or a built-in snapshot.
 
-**Screen edge.** In Screen Edge mode a thin bar sits against your chosen edge.
-Rest the cursor there for a moment and the sidebar slides out; move away and it
-slides back. Revealing by hover deliberately does not take keyboard focus, so
-brushing the edge never redirects your typing. Clicking the bar, or using the
-shortcut, reveals it *and* hands it focus. Edge and width are configurable.
+**Checklists.** Type `list` alone on the first line and the whole note
+becomes a checklist — every line below it turns into an item, and Return
+keeps making more. Click a checkbox to toggle it, Cmd+L toggles the current
+line or a whole selection, Tab/Shift-Tab nest items, and completed items dim
+and strike through. The file on disk stays plain markdown (`- [ ]` / `- [x]`),
+so it renders as a real task list in Obsidian, Bear, or GitHub.
 
-The sidebar shows every note at once as a stack of cards, each sized to its
-content, rather than one note stretched down the screen. Swipe navigation is
-for the single-note modes; here you scroll. The first line of each note renders
-as its title, which is styling only — the file is still plain text. Add a note
-with the +, remove one with the × that appears on hover.
-
-**Appearance.** Frosted, Glass, or Solid. Glass lets the desktop through and
-adds a lit edge along the window. The header bar can be hidden entirely, and
-line spacing is adjustable, so the window can be nothing but text.
-
-**Search.** Cmd+F opens the native find bar with match highlighting; Cmd+G and
-Shift+Cmd+G step through matches.
-
-**Counts and totals.** A footer shows live word, character, and line counts.
-Select text containing two or more numbers and it also shows their sum and
-average, so "rent $1,240.50 and food $310.25" totals without leaving the note.
-
-**Images.** Paste or drop an image and it stays an image, drawn inline and
-resizable by dragging it. The file is written beside your notes and the text
-holds a markdown reference to it, so a note with a picture in it is still
-plain text.
+**Images.** Paste or drop an image and it stays an image — drawn inline,
+resizable by dragging its edge. It's written to `Attachments/` beside your
+notes, referenced from the text as `![width](Attachments/<id>.png)`, so a
+note with a picture in it is still something you can read in `cat`.
 
 **Screenshot to text.** Shift-Cmd-V reads the image on your clipboard with
-Apple's Vision framework and inserts what it says, offline. Holding Option
-while dropping an image does the same.
+Apple's Vision framework and inserts the text it finds — fully offline, on
+the Neural Engine, no cloud OCR service involved.
 
-**Apple Notes sync.** Optional, off by default. Turn it on in Settings and each
-note is pushed into a "StickyNotes" folder in Apple Notes, keyed to a stable
-id so edits update the same note rather than piling up duplicates. One
-direction only: changes made in Apple Notes are not read back, and notes
-deleted here are left alone there. macOS asks for Automation permission the
-first time.
+**Native search, counts, and totals.** Cmd+F opens the real macOS find bar
+with match highlighting. A footer shows live word/character/line counts, and
+selecting text with two or more numbers in it shows their sum and average —
+select `rent $1,240.50 and food $310.25` and see the total without leaving
+the note.
 
-**Share.** The share button opens the standard macOS share sheet for the current
-note (Notes, Mail, Messages, and so on).
+**Timers.** `5m timer`, `30s timer`, `2h timer` — the keyword is
+configurable. A timer belongs to the note that started it and won't restart
+itself after firing.
 
-**Settings** (Cmd+, or the menu bar icon's right-click menu) covers the display
-mode, the shortcut, the timer keyword, and whether the footer is shown.
+**Optional Apple Notes sync.** Off by default. Turn it on and each note is
+pushed into a "Jot" folder in Apple Notes, one direction only — nothing
+written there is ever read back, and deleting a note in Jot never deletes it
+in Notes.
 
-## Storage
+**Appearance.** Frosted, Glass, or Solid surfaces; the header and footer can
+be hidden entirely; line spacing is adjustable — down to nothing but text on
+glass, if that's what you want.
 
-Images live in `Attachments/` beside the notes, referenced from the text as
-`![width](Attachments/<id>.png)`.
+## Privacy
 
-Notes are a JSON array at
-`~/Library/Application Support/StickyNotes/notes.json`, written atomically and
-debounced 600ms, then flushed on navigation and on quit. Notes written by the
-earlier `UserDefaults`-backed build are migrated once, automatically, from the
-`com.example.StickyNotes` domain.
+Jot makes **zero network requests by default.** The only two things that can
+ever leave your machine, both opt-in and both toggleable in Settings:
 
-Each launch copies the last known-good contents to `notes.backup.json` beside
-it. A note was lost to a clobbered save during development; a copy per launch is
-cheap insurance against the next bug doing the same thing quietly.
+- **Live currency rates** — off by default. On, it's one request a day to a
+  public, key-free exchange-rate API; nothing about you or your notes is in
+  the request.
+- **Update checks** — on by default, since a stale copy silently missing bug
+  fixes is a worse outcome than one anonymous GET a day to GitHub's public
+  releases API. Turn it off in Settings if you'd rather not.
 
-Preferences stay in `UserDefaults` under `com.suryatejlalam.StickyNotes`. They
-are small and reconstructible, unlike the notes.
+Nothing else — no analytics, no crash reporting, no identifiers. Apple Notes
+sync, when you turn it on, talks to Notes.app locally via AppleScript; it
+never touches the network itself.
+
+## Building from source
+
+```bash
+git clone https://github.com/lsuryatej/jot.git
+cd jot
+./build.sh && open Jot.app
+```
+
+```bash
+./test.sh   # logic tests — no Xcode project, no simulator, just swiftc
+```
+
+**Xcode is required** — not just the Command Line Tools. The macOS 27 beta
+CLT ships a `swiftc` that can't read its own SDK; Xcode bundles a matched
+toolchain and SDK pair, so `build.sh` locates one explicitly (checking
+`/Applications/Xcode-beta.app`, then `/Applications/Xcode.app`) rather than
+trusting `xcode-select`. On a non-beta macOS this constraint likely doesn't
+apply at all — a normal Xcode install should just work.
 
 ## Layout
 
 | Path | Role |
 |---|---|
 | `src/main.swift` | AppKit entry point |
-| `src/StickyNotes.swift` | App delegate, display modes, panel, status item |
+| `src/Jot.swift` | App delegate, display modes, panel, status item |
 | `src/MainMenu.swift` | Menu bar, including the Find items that drive Cmd+F |
-| `src/SettingsManager.swift` | Preferences and the display-mode definitions |
+| `src/SettingsManager.swift` | Preferences, display-mode and privacy-toggle definitions |
 | `src/PreferencesView.swift` | Settings window and the shortcut recorder |
 | `src/HotKeyController.swift` | Global shortcut registration |
 | `src/KeyCombo.swift` | Shortcut model and its display form |
+| `src/MathExpression.swift` | The math parser and evaluator |
+| `src/Units.swift` | Unit conversion tables |
+| `src/CurrencyRates.swift` | Opt-in live exchange rates, cached |
+| `src/UpdateChecker.swift` | Opt-out GitHub release check |
 | `src/TextStatistics.swift` | Word counts and selection sum/average |
-| `src/Checklist.swift` | Checklist parsing and rewriting |
+| `src/Checklist.swift` | Checklist parsing, rewriting, and list mode |
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/Note.swift` | The note model and its stable identity |
@@ -143,24 +172,41 @@ are small and reconstructible, unlike the notes.
 | `src/TextRecognition.swift` | Vision-backed screenshot to text |
 | `src/AppleNotesSync.swift` | One-way push into Apple Notes |
 | `src/ContentView.swift` | Panel UI: header, editor, timer overlay, share |
-| `src/PlainTextEditor.swift` | `NSTextView` wrapper plus the swipe-reading scroll view |
-| `src/NotesManager.swift` | Note state, navigation, timer parsing, checklists |
-| `src/NoteStore.swift` | Atomic file persistence and legacy migration |
+| `src/PlainTextEditor.swift` | `NSTextView` wrapper: swipe, images, math rendering |
+| `src/NotesManager.swift` | Note state, navigation, timer parsing |
+| `src/NoteStore.swift` | Atomic file persistence, backups, and migrations |
 | `tests/` | Logic tests, run by `./test.sh` |
 | `resources/Info.plist` | Bundle metadata |
 | `resources/AppIcon.icns` | App icon, regenerated by `scripts/make-icon.swift` |
+| `scripts/release.sh` | Builds and packages a release zip |
+| `install.sh` | The curl-installable install path |
 
-`NotesManager` and `NoteStore` are deliberately free of SwiftUI so they compile
-into a plain test executable.
+`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, and `Attachments`
+are deliberately free of SwiftUI and AppKit, so every rule in them is covered
+by a fast, dependency-free test — 191 checks, run by `./test.sh` in under a
+few seconds.
 
-`StickyNotes.app/` is build output and is gitignored. `build.sh` deletes and
-rebuilds it every run so a stale binary or signature cannot survive.
+`Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes
+and rebuilds the bundle every run, so a stale binary or signature can never
+survive.
+
+## Data
+
+Notes live at `~/Library/Application Support/Jot/notes.json`, written
+atomically and debounced, with ten rotating dated backups kept in `Backups/`
+alongside it. Images live in `Attachments/`. Settings are in `UserDefaults`
+under `com.suryatejlalam.Jot`.
 
 ## Not done yet
 
-- Checklist markers are fixed at `[ ]` and `[x]`; only the timer keyword is
-  configurable.
-- Notes cannot be reordered.
-- Apple Notes sync is one-way; nothing is read back.
-- No inline maths or unit conversion yet, and no URL shortening.
+- No URL shortening/elision for long links yet.
+- Notes can't be reordered.
+- Apple Notes sync doesn't carry images across, and is one-way.
 - The build targets `arm64` only.
+
+See [BACKLOG.md](BACKLOG.md) for the fuller list, including bugs, planned
+polish, and ideas under consideration.
+
+## License
+
+[MIT](LICENSE)

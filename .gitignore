@@ -8,5 +8,6 @@ DerivedData/
 .netrc
 
 # Build output: the .app bundle is assembled entirely by build.sh
-/StickyNotes.app
+/Jot.app
 /build
+/dist

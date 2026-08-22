@@ -39,6 +39,14 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
 - [ ] Font customisation.
 - [ ] Colour tints for the glass appearance.
 - [ ] Configurable from macOS's hot-corner settings.
+- [ ] The GitHub Actions release workflow (.github/workflows/release.yml)
+      publishes a GitHub release automatically on a version tag, but does not
+      update the Homebrew cask at lsuryatej/homebrew-jot — its version and
+      sha256 still need a manual bump (or a follow-up automation) after each
+      release. Also genuinely untested on a real macOS Actions runner;
+      scripts/release.sh (run by hand) is the path that has actually been
+      exercised end to end.
+- [ ] No screenshot in the README yet.
 
 ## Lists
 
