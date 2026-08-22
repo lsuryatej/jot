@@ -95,9 +95,13 @@ what you get for free with Jot versus what they charge for.
 | Network requests | Zero by default, two opt-in toggles | iCloud only, if enabled | iCloud only, if paid | Live data on by default |
 | Source | Open, MIT | Closed | Core open, paid features closed | Closed |
 
-Jot doesn't beat any of these on every axis, see [where it falls short of
-Antinote](BACKLOG.md#compared-to-antinote) in particular. It's what you get
-for the price of downloading it.
+Jot doesn't beat any of these on every axis. Against Antinote specifically:
+no search across notes (Cmd+F is per-note only), no sync across devices, no
+link shrink yet, no scripting or theming, no AutoPaste. Antinote is also a
+mature, several-year-old product; Jot is new. What Jot gives you instead is
+free and open source, inline resizable images, five display modes instead
+of menu-bar-only, and an explicit zero-telemetry stance with both
+network-facing features off or opt-in rather than bundled into iCloud.
 
 ## Features
 
@@ -291,11 +295,10 @@ under `com.suryatejlalam.Jot`.
 
 - No URL shortening/elision for long links yet.
 - Notes can't be reordered.
+- No search across notes, only within the one you have open.
+- No sync across devices.
 - Apple Notes sync is one-way, nothing written there is read back.
 - The build targets `arm64` only.
-
-See [BACKLOG.md](BACKLOG.md) for the fuller list, including bugs, planned
-polish, and ideas under consideration.
 
 ## License
 

@@ -16,3 +16,6 @@ DerivedData/
 /Jot.app
 /build
 /dist
+
+# Working notes, kept local
+/BACKLOG.md
