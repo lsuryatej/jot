@@ -60,6 +60,22 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
 - [ ] Font customisation.
 - [ ] Colour tints for the glass appearance.
 - [ ] Configurable from macOS's hot-corner settings.
+- [x] **Fixed: `brew install` triggered a Gatekeeper "Not Opened" dialog.**
+      `install.sh` strips quarantine after download, but that script never
+      runs on the Homebrew path — Homebrew's own download/stage process
+      applies `com.apple.quarantine` to the archive the same way a browser
+      download does, and nothing removed it before first launch. Fixed with
+      a `postflight` block in the cask that runs `xattr -cr` on the installed
+      app, mirroring what install.sh already does. Verified end to end: full
+      uninstall + untap + retap + install, confirmed no quarantine attribute
+      and a clean launch with no dialog.
+
+      Also worth knowing: `rm -rf`ing the installed .app directly (instead of
+      `brew uninstall --cask jot`) leaves Homebrew's own receipt in
+      /opt/homebrew/Caskroom/jot/ pointing at a copy that no longer exists,
+      so the next `brew install` sees "already installed" and does nothing.
+      Use `brew uninstall --cask jot` (or `brew reinstall --cask jot`) to
+      remove it, not rm -rf, or Homebrew's bookkeeping goes stale.
 - [x] **Verified the release workflow for real.** Pushed v1.1.0, watched
       .github/workflows/release.yml run on an actual GitHub-hosted macOS
       runner: build, package, and publish all succeeded in 28 seconds. The
