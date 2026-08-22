@@ -11,6 +11,7 @@ enum MainMenu {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem(target: target, preferencesAction: preferencesAction))
         mainMenu.addItem(editMenuItem())
+        mainMenu.addItem(formatMenuItem())
         return mainMenu
     }
 
@@ -41,6 +42,20 @@ enum MainMenu {
             keyEquivalent: "q"
         )
 
+        item.submenu = menu
+        return item
+    }
+
+    /// nil target: the key equivalent walks the responder chain to the text
+    /// view, so Cmd+L works whether or not the panel is the key window's focus.
+    private static func formatMenuItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "Format")
+        menu.addItem(
+            withTitle: "Toggle Checklist",
+            action: #selector(ChecklistTextView.toggleChecklist(_:)),
+            keyEquivalent: "l"
+        )
         item.submenu = menu
         return item
     }

@@ -31,6 +31,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/NoteStore.swift \
     src/NotesManager.swift \
     src/TextStatistics.swift \
+    src/Checklist.swift \
     src/KeyCombo.swift \
     tests/NotesManagerTests.swift \
     tests/main.swift \

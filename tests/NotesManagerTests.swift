@@ -127,32 +127,8 @@ func runAllTests() {
 
     // MARK: - Checklists
 
-    suite("checklist toggles the line under the caret") {
-        let m = makeManager()
-        m.currentText = "[ ] alpha\n[ ] bravo\n[ ] charlie"
 
-        // Caret on line 2 ("bravo" starts at index 10).
-        m.toggleChecklist(atCharacterIndex: 12)
-        equal(m.currentText, "[ ] alpha\n[x] bravo\n[ ] charlie", "second line checked, others untouched")
 
-        // The old implementation could never uncheck anything but the first item.
-        m.toggleChecklist(atCharacterIndex: 12)
-        equal(m.currentText, "[ ] alpha\n[ ] bravo\n[ ] charlie", "same line unchecks again")
-    }
-
-    suite("checklist adds a checkbox to a plain line") {
-        let m = makeManager()
-        m.currentText = "buy milk"
-        m.toggleChecklist(atCharacterIndex: 3)
-        equal(m.currentText, "[ ] buy milk", "checkbox introduced")
-    }
-
-    suite("checklist preserves indentation") {
-        let m = makeManager()
-        m.currentText = "    nested item"
-        m.toggleChecklist(atCharacterIndex: 6)
-        equal(m.currentText, "    [ ] nested item", "indent kept ahead of the checkbox")
-    }
 
     // MARK: - Configurable timer keyword
 
@@ -240,6 +216,76 @@ func runAllTests() {
         check(KeyCombo.default.isValid, "default is valid")
         check(!KeyCombo(keyCode: 0, carbonModifiers: 0).isValid,
               "a bare key is rejected, since it would swallow ordinary typing")
+    }
+
+    // MARK: - Checklists
+
+    suite("lenient parsing, strict output") {
+        equal(Checklist.item(in: "- [ ] task")?.isChecked, false, "markdown unchecked")
+        equal(Checklist.item(in: "- [x] task")?.isChecked, true, "markdown checked")
+        equal(Checklist.item(in: "- [X] task")?.isChecked, true, "uppercase X")
+        equal(Checklist.item(in: "* [ ] task")?.body, "task", "asterisk bullet")
+        equal(Checklist.item(in: "+ [ ] task")?.body, "task", "plus bullet")
+        // Notes written by earlier versions must keep working without migration.
+        equal(Checklist.item(in: "[ ] legacy")?.body, "legacy", "bare bracket form still parses")
+        equal(Checklist.item(in: "    - [ ] nested")?.indent, "    ", "indent captured")
+        check(Checklist.item(in: "not a task") == nil, "plain line is not an item")
+        check(Checklist.item(in: "") == nil, "empty line is not an item")
+    }
+
+    suite("legacy markers are rewritten to markdown on toggle") {
+        equal(Checklist.toggled(block: "[ ] legacy"), "- [x] legacy", "bare bracket becomes a markdown task")
+    }
+
+    suite("toggling a single line") {
+        equal(Checklist.toggled(block: "- [ ] task"), "- [x] task", "check")
+        equal(Checklist.toggled(block: "- [x] task"), "- [ ] task", "uncheck")
+        equal(Checklist.toggled(block: "buy milk"), "- [ ] buy milk", "plain line becomes an item")
+        equal(Checklist.toggled(block: "    buy milk"), "    - [ ] buy milk", "indent preserved")
+    }
+
+    suite("toggling a multi-line selection") {
+        // The old implementation only ever touched one line.
+        equal(Checklist.toggled(block: "- [ ] a\n- [ ] b"), "- [x] a\n- [x] b", "all unchecked become checked")
+        equal(Checklist.toggled(block: "- [x] a\n- [x] b"), "- [ ] a\n- [ ] b", "all checked become unchecked")
+        equal(Checklist.toggled(block: "- [x] a\n- [ ] b"), "- [x] a\n- [x] b", "mixed resolves to checked")
+        equal(Checklist.toggled(block: "a\n- [x] b"), "- [ ] a\n- [x] b", "a non-item makes everything an item first")
+    }
+
+    suite("toggling skips blank lines") {
+        equal(Checklist.toggled(block: "a\n\nb"), "- [ ] a\n\n- [ ] b",
+              "paragraph breaks do not collect empty checkboxes")
+        equal(Checklist.toggled(block: ""), "- [ ] ", "an empty line starts a list")
+    }
+
+    suite("toggling preserves a trailing newline") {
+        equal(Checklist.toggled(block: "- [ ] a\n"), "- [x] a\n", "line ending kept")
+    }
+
+    suite("Return continues the list") {
+        equal(Checklist.newline(inLine: "- [ ] task"), .continueList("\n- [ ] "), "new item")
+        equal(Checklist.newline(inLine: "    - [x] task"), .continueList("\n    - [ ] "),
+              "continues unchecked at the same indent")
+        check(Checklist.newline(inLine: "plain text") == nil, "ordinary line gets an ordinary newline")
+    }
+
+    suite("Return on an empty item leaves the list") {
+        equal(Checklist.newline(inLine: "- [ ] "), .exitList(""), "empty item is cleared")
+        equal(Checklist.newline(inLine: "    - [ ]"), .exitList(""), "nested empty item too")
+    }
+
+    suite("nesting") {
+        equal(Checklist.indented(block: "- [ ] a", by: 1), "    - [ ] a", "indent one level")
+        equal(Checklist.indented(block: "    - [ ] a", by: -1), "- [ ] a", "outdent one level")
+        equal(Checklist.indented(block: "- [ ] a", by: -1), nil, "outdenting at column zero does nothing")
+        equal(Checklist.indented(block: "plain", by: 1), nil, "Tab keeps its ordinary meaning outside a list")
+        equal(Checklist.indented(block: "- [ ] a\n- [x] b", by: 1), "    - [ ] a\n    - [x] b", "whole selection")
+    }
+
+    suite("marker range covers the clickable box") {
+        let item = Checklist.item(in: "  - [x] task")
+        equal(item?.markerRange.location, 2, "starts after the indent")
+        equal(item?.markerRange.length, 5, "covers exactly \"- [x]\"")
     }
 
     // MARK: - Storage

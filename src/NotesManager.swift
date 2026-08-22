@@ -77,42 +77,6 @@ final class NotesManager: ObservableObject {
         flush()
     }
 
-    // MARK: - Checklists
-
-    /// Toggles the checkbox on the line containing `characterIndex`.
-    ///
-    /// The previous implementation toggled the first `[ ]` in the entire note,
-    /// which made it impossible to ever uncheck anything but the first item.
-    /// Lines with no checkbox gain one, so the button is never a no-op.
-    ///
-    /// Returns the character index the caret should land on afterwards.
-    @discardableResult
-    func toggleChecklist(atCharacterIndex characterIndex: Int) -> Int {
-        let text = currentText
-        let ns = text as NSString
-        let clamped = min(max(0, characterIndex), ns.length)
-        let lineRange = ns.lineRange(for: NSRange(location: clamped, length: 0))
-        let line = ns.substring(with: lineRange)
-
-        let replacement: String
-        let caretShift: Int
-        if let r = line.range(of: "[ ]") {
-            replacement = line.replacingCharacters(in: r, with: "[x]")
-            caretShift = 0
-        } else if let r = line.range(of: "[x]") {
-            replacement = line.replacingCharacters(in: r, with: "[ ]")
-            caretShift = 0
-        } else {
-            // Preserve leading indentation when introducing a checkbox.
-            let indent = line.prefix { $0 == " " || $0 == "\t" }
-            replacement = indent + "[ ] " + line.dropFirst(indent.count)
-            caretShift = 4
-        }
-
-        currentText = ns.replacingCharacters(in: lineRange, with: replacement)
-        return clamped + caretShift
-    }
-
     // MARK: - Timers
 
     /// Matches "90s timer", "5m timer", "2h timer" (case-insensitive).

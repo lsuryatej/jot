@@ -54,12 +54,14 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Button("Toggle Checklist") {
-                notesManager.toggleChecklist(atCharacterIndex: selectedRange.location)
+            Button("Checklist") {
+                // Routed through the responder chain so the button and Cmd+L
+                // run the same code path in the text view.
+                NSApp.sendAction(#selector(ChecklistTextView.toggleChecklist(_:)), to: nil, from: nil)
             }
             .font(.caption)
             .buttonStyle(.plain)
-            .help("Toggle the checkbox on the current line")
+            .help("Toggle the checkbox on the current line or selection (⌘L)")
 
             Spacer()
 
