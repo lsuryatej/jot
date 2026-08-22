@@ -402,6 +402,16 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             insertImage(image, at: selectedRange().location)
             return
         }
+        if let pasted = NSPasteboard.general.string(forType: .string),
+           let converted = Checklist.pastedAsListItems(pasted, into: string, keyword: listKeyword) {
+            let range = clamped(selectedRange())
+            replace(
+                range: range,
+                with: converted,
+                selecting: NSRange(location: range.location + (converted as NSString).length, length: 0)
+            )
+            return
+        }
         super.paste(sender)
     }
 

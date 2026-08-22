@@ -134,20 +134,40 @@ enum Checklist {
         return firstLine == keyword
     }
 
+    /// One line made list-shaped: a plain, non-blank line becomes an unchecked
+    /// item at its own indent. Lines that are already items and blank lines
+    /// come back alone — blanks stay paragraph breaks.
+    static func itemized(line: String) -> String {
+        guard !line.trimmingCharacters(in: .whitespaces).isEmpty,
+              item(in: line) == nil
+        else { return line }
+        let indent = leadingWhitespace(of: line)
+        return render(indent: indent, isChecked: false, body: String(line.dropFirst(indent.count)))
+    }
+
     /// Turns every line below the keyword into an item, leaving ones that
     /// already are alone.
     static func convertedToList(_ text: String, keyword: String) -> String {
         guard isListMode(text, keyword: keyword) else { return text }
 
         var lines = text.components(separatedBy: "\n")
+        // Line 0 holds the keyword itself and stays untouched.
         for index in lines.indices.dropFirst() {
-            let line = lines[index]
-            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            guard item(in: line) == nil else { continue }
-            let indent = leadingWhitespace(of: line)
-            lines[index] = render(indent: indent, isChecked: false, body: String(line.dropFirst(indent.count)))
+            lines[index] = itemized(line: lines[index])
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// What a paste of `block` into the note `target` should become, or nil
+    /// when the paste should proceed as ordinary text.
+    ///
+    /// A multi-line paste into a list note lands as separate items rather than
+    /// one raw block that would sit un-itemised until each line was
+    /// individually left with Return. Single-line pastes and pastes into
+    /// ordinary notes are none of this business.
+    static func pastedAsListItems(_ block: String, into target: String, keyword: String) -> String? {
+        guard block.contains("\n"), isListMode(target, keyword: keyword) else { return nil }
+        return block.components(separatedBy: "\n").map { itemized(line: $0) }.joined(separator: "\n")
     }
 
     /// The text a fresh, empty item is made of.

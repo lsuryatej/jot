@@ -148,10 +148,11 @@ the last cached rate or a built-in snapshot.
 
 **Checklists.** Type `list` alone on the first line and the whole note
 becomes a checklist. Every line below it turns into an item, and Return keeps
-making more. Click a checkbox to toggle it, Cmd+L toggles the current line or
-a whole selection, Tab/Shift-Tab nest items, completed items dim and strike
-through. The file on disk stays plain markdown (`- [ ]` / `- [x]`), so it
-renders as a real task list in Obsidian, Bear, or GitHub.
+making more. Pasting multi-line text splits it into items, one per line.
+Click a checkbox to toggle it, Cmd+L toggles the current line or a whole
+selection, Tab/Shift-Tab nest items, completed items dim and strike through.
+The file on disk stays plain markdown (`- [ ]` / `- [x]`), so it renders as a
+real task list in Obsidian, Bear, or GitHub.
 
 ![A checklist, with completed items struck through](docs/screenshots/checklist.jpeg)
 
@@ -301,7 +302,7 @@ apply at all, a normal Xcode install should just work.
 `NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `GlobalSearch`,
 `LinkShrink`, and `Attachments` are deliberately free of SwiftUI and AppKit,
 so every rule in them is covered by a dependency-free test. `./test.sh` runs
-246 checks total, that plus a UI-layer slice against real `NSTextView`
+272 checks total, that plus a UI-layer slice against real `NSTextView`
 instances, in a few seconds.
 
 `Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes

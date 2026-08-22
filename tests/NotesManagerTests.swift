@@ -469,6 +469,44 @@ func runAllTests() {
         )
     }
 
+    suite("a multi-line paste into a list note becomes items") {
+        equal(
+            Checklist.pastedAsListItems("eggs\nmilk\nbread", into: "list", keyword: "list"),
+            "- [ ] eggs\n- [ ] milk\n- [ ] bread",
+            "each pasted line lands as its own unchecked item"
+        )
+        equal(
+            Checklist.pastedAsListItems("eggs\nmilk", into: "groceries", keyword: "list"),
+            nil,
+            "an ordinary note takes the paste as-is"
+        )
+        equal(
+            Checklist.pastedAsListItems("one line only", into: "list", keyword: "list"),
+            nil,
+            "a single-line paste is left to paste normally"
+        )
+        equal(
+            Checklist.pastedAsListItems("- [x] done\nplain\n\nnext", into: "list", keyword: "list"),
+            "- [x] done\n- [ ] plain\n\n- [ ] next",
+            "lines that are already items keep their state and blanks survive as breaks"
+        )
+        equal(
+            Checklist.pastedAsListItems("    sub\ntop", into: "list", keyword: "list"),
+            "    - [ ] sub\n- [ ] top",
+            "each line keeps its own indentation"
+        )
+        equal(
+            Checklist.pastedAsListItems("eggs\n", into: "list", keyword: "list"),
+            "- [ ] eggs\n",
+            "a trailing newline is preserved"
+        )
+        equal(
+            Checklist.pastedAsListItems("a\nb", into: "todo", keyword: "todo"),
+            "- [ ] a\n- [ ] b",
+            "the configured keyword counts, not just the default"
+        )
+    }
+
     // MARK: - Inline images
 
     suite("image references parse out of a line") {
