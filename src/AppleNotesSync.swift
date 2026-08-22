@@ -39,14 +39,50 @@ actor AppleNotesSync {
     // MARK: - HTML
 
     /// Apple Notes takes HTML for a note body.
-    static func htmlBody(for note: Note) -> String {
+    ///
+    /// `attachmentsDirectory` is overridable so this is testable without
+    /// touching the real notes directory.
+    static func htmlBody(
+        for note: Note,
+        attachmentsBase: URL = NoteStore.defaultFileURL().deletingLastPathComponent()
+    ) -> String {
         note.text
             .components(separatedBy: "\n")
-            .map { line in
-                let escaped = escape(line)
-                return "<div>\(escaped.isEmpty ? "<br>" : escaped)</div>"
-            }
+            .map { htmlForLine($0, attachmentsBase: attachmentsBase) }
             .joined()
+    }
+
+    private static func htmlForLine(_ line: String, attachmentsBase: URL) -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let references = Attachments.references(in: trimmed)
+
+        // A line that is *only* an image reference embeds as a real <img>,
+        // which Notes turns into a genuine inline image and attachment on its
+        // side. A line mixing text and an image reference — not something the
+        // editor itself produces, since inserting an image always puts it on
+        // its own line — falls back to escaped text below, so nothing is ever
+        // silently dropped even if that assumption turns out to be wrong.
+        if references.count == 1,
+           references[0].range.length == (trimmed as NSString).length,
+           let imageTag = imgTag(for: references[0], base: attachmentsBase) {
+            return "<div>\(imageTag)</div>"
+        }
+
+        let escaped = escape(line)
+        return "<div>\(escaped.isEmpty ? "<br>" : escaped)</div>"
+    }
+
+    /// Notes has no attachment API over AppleScript. A base64 data URI in the
+    /// body HTML is the documented, commonly-used workaround — Notes decodes
+    /// it into a real inline image (and a real attachment) when the note is
+    /// created, not just inert markup.
+    ///
+    /// Every image Jot saves is a PNG (see Attachments.save), so the MIME
+    /// type is not detected — it is simply what is always written.
+    private static func imgTag(for reference: ImageReference, base: URL) -> String? {
+        guard let data = try? Data(contentsOf: base.appendingPathComponent(reference.path)) else { return nil }
+        let base64 = data.base64EncodedString()
+        return "<img src=\"data:image/png;base64,\(base64)\">"
     }
 
     static func escape(_ text: String) -> String {
@@ -156,10 +192,19 @@ actor AppleNotesSync {
 
     // MARK: - Plumbing
 
+    /// Written to a temp file and run as a script path rather than passed via
+    /// `-e`: an embedded image is a base64 string in the script body, which
+    /// can be large enough to bump into the command-line argument length
+    /// limit. A file has no such ceiling.
     private func runScript(_ source: String) throws -> String {
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("jot-sync-\(UUID().uuidString).applescript")
+        try source.write(to: scriptURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: scriptURL) }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", source]
+        process.arguments = [scriptURL.path]
 
         let out = Pipe()
         let err = Pipe()

@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem?
     private var preferencesWindow: NSWindow?
+    private var settingsCloseMonitor: Any?
     private var edgeTrigger: EdgeTriggerWindow?
     private var edgeAutoHideTimer: Timer?
     /// Guards against re-applying a mode that is already in effect. The
@@ -38,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.scheduleAppleNotesSync(notes)
         }
 
-        NSApp.mainMenu = MainMenu.build(target: self, preferencesAction: #selector(showPreferences))
+        NSApp.mainMenu = MainMenu.build(target: self, preferencesAction: #selector(showPreferences), newNoteAction: #selector(newNoteFromMenu))
 
         panel = FloatingPanel(rootView: contentView())
         panel.delegate = self
@@ -182,6 +183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let self else { return }
                 self.notesManager.timerKeywordDidChange(to: self.settings.effectiveTimerKeyword)
             }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .jotRequestNewNote)
+            .sink { [weak self] _ in self?.newNoteFromMenu() }
             .store(in: &cancellables)
     }
 
@@ -493,6 +498,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Preferences
 
+    /// Cmd+N. Unconditional, like the edge sidebar's own + button: always
+    /// appends a fresh note and switches to it, regardless of whether the
+    /// current note is blank.
+    @objc private func newNoteFromMenu() {
+        notesManager.appendNote()
+        if isInterfaceVisible {
+            if !settings.displayMode.isEdgeDocked { panel.focusEditor() }
+        } else {
+            showInterface()
+        }
+    }
+
     @objc func showPreferences() {
         if let window = preferencesWindow {
             window.makeKeyAndOrderFront(nil)
@@ -512,6 +529,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // Belt and suspenders: the app menu's Close item (Cmd+W) should reach
+        // this window through the normal responder chain since opening
+        // Settings genuinely activates the app, unlike the main panel's
+        // .nonactivatingPanel. A local monitor guarantees it regardless —
+        // cheap, and matches the direct-handling pattern Cmd+L and
+        // Shift-Cmd-V needed for the same class of menu-routing doubt.
+        settingsCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
+            guard window?.isKeyWindow == true,
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.charactersIgnoringModifiers?.lowercased() == "w"
+            else { return event }
+            window?.performClose(nil)
+            return nil
+        }
 
         preferencesWindow = window
     }

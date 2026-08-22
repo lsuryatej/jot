@@ -7,12 +7,38 @@ import AppKit
 /// those through the responder chain from the menu, not on its own. The Find
 /// items are what give in-note search its native find bar.
 enum MainMenu {
-    static func build(target: AnyObject, preferencesAction: Selector) -> NSMenu {
+    static func build(target: AnyObject, preferencesAction: Selector, newNoteAction: Selector) -> NSMenu {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem(target: target, preferencesAction: preferencesAction))
+        mainMenu.addItem(fileMenuItem(target: target, newNoteAction: newNoteAction))
         mainMenu.addItem(editMenuItem())
         mainMenu.addItem(formatMenuItem())
         return mainMenu
+    }
+
+    private static func fileMenuItem(target: AnyObject, newNoteAction: Selector) -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "File")
+
+        let newNote = NSMenuItem(title: "New Note", action: newNoteAction, keyEquivalent: "n")
+        newNote.target = target
+        menu.addItem(newNote)
+
+        menu.addItem(.separator())
+
+        // nil target: walks the responder chain to whichever window is key.
+        // The main panel already turns a real close into a hide (see
+        // FloatingPanel.close()), so this closes Settings when it is key and
+        // just hides the note otherwise — one shortcut, the right behaviour
+        // in both places.
+        menu.addItem(
+            withTitle: "Close",
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w"
+        )
+
+        item.submenu = menu
+        return item
     }
 
     private static func appMenuItem(target: AnyObject, preferencesAction: Selector) -> NSMenuItem {

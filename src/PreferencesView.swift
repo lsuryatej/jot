@@ -8,6 +8,9 @@ extension Notification.Name {
     /// never be pressed to re-record it.
     static let jotBeginHotKeyRecording = Notification.Name("JotBeginHotKeyRecording")
     static let jotEndHotKeyRecording = Notification.Name("JotEndHotKeyRecording")
+    /// Posted by the text view's Cmd+N handling; observed by AppDelegate,
+    /// which is the one place that knows how to reveal/focus correctly.
+    static let jotRequestNewNote = Notification.Name("JotRequestNewNote")
 }
 
 struct PreferencesView: View {

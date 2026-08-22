@@ -17,11 +17,24 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
       the mapping with it attached, the next lookup failed, and the code did
       the reasonable thing for a note that no longer exists — made a new one.
       Identifiers are now trimmed, and existing mappings are repaired on read.
-- [ ] **[bug] Apple Notes sync does not carry images.** The body is sent as
-      markdown, so an image line arrives as the literal `![280](…)` text.
-      Notes' AppleScript interface has no clean attachment API; the likely
-      route is embedding the image as a base64 `<img>` in the HTML body, which
-      needs testing to see whether Notes renders it.
+- [x] **[bug] Apple Notes sync does not carry images.** Fixed by embedding
+      each image as a base64 `<img>` in the HTML body Notes receives — the
+      documented workaround for the lack of a real attachment API over
+      AppleScript. Switched `runScript` from `osascript -e` to a temp-file
+      invocation at the same time, since a base64 payload can be large enough
+      to bump into the command-line argument length limit that `-e` is
+      subject to and a script file is not.
+
+      **Not independently verified against real Apple Notes.** The TCC
+      permission grant for Jot's own Automation access got reset while
+      testing something unrelated earlier, and re-granting it needs an
+      interactive click on a system dialog that could not be done headlessly
+      in the environment this was built in. The base64-`<img>`-in-body
+      technique is well-documented and widely used, and the logic is covered
+      by unit tests (image line → embedded tag, missing file → falls back to
+      text rather than dropping the line, mixed text+image line → not
+      embedded), but someone needs to turn sync on, add a note with an image,
+      and confirm it actually shows up as a real image in Apple Notes.
 - [ ] **[bug] Swiping with the title bar hidden gives no feedback.** Nothing
       indicates which note you moved to. Worth checking what Antinote does
       here before designing it.
@@ -34,7 +47,9 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
 - [ ] Pasting multi-line text into a `list` note should split it line by line
       into separate items rather than dropping in one block.
 - [ ] Should keep floating above a background app that goes fullscreen.
-- [ ] Cmd+W should close the Settings window.
+- [x] Cmd+W closes the Settings window (and now hides the main panel too,
+      since the panel already turns a real close into a hide). Also added
+      Cmd+N for a new note, and a shortcuts table in the README.
 - [ ] Text/letter spacing control, alongside the existing line spacing.
 - [ ] Font customisation.
 - [ ] Colour tints for the glass appearance.

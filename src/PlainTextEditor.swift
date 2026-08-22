@@ -205,6 +205,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
             toggleChecklist(nil)
             return true
         }
+        if flags == [.command], key == "n" {
+            NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
+            return true
+        }
         return super.performKeyEquivalent(with: event)
     }
 

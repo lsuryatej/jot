@@ -659,6 +659,46 @@ func runAllTests() {
         equal(survived, "[\"current\"]", "the real directory's content is untouched")
     }
 
+    suite("Apple Notes sync embeds images as base64") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("jot-notesync-img-\(UUID().uuidString)")
+        let attachDir = dir.appendingPathComponent("Attachments")
+        try? FileManager.default.createDirectory(at: attachDir, withIntermediateDirectories: true)
+        let imageData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A]) // PNG-ish bytes, contents don't matter here
+        try? imageData.write(to: attachDir.appendingPathComponent("a.png"))
+
+        let note = Note(text: "before text\n![240](Attachments/a.png)\nafter text")
+        let html = AppleNotesSync.htmlBody(for: note, attachmentsBase: dir)
+
+        check(html.contains("<img src=\"data:image/png;base64,"), "image line becomes a base64 <img> tag")
+        check(html.contains(imageData.base64EncodedString()), "the actual image bytes are embedded")
+        check(!html.contains("Attachments/a.png"), "the markdown path itself does not leak into the synced body")
+        check(html.contains("<div>before text</div>"), "surrounding text lines are untouched")
+        check(html.contains("<div>after text</div>"), "including the line after the image")
+    }
+
+    suite("a missing attachment file falls back to escaped text rather than dropping the line") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("jot-notesync-missing-\(UUID().uuidString)")
+        let note = Note(text: "![240](Attachments/does-not-exist.png)")
+        let html = AppleNotesSync.htmlBody(for: note, attachmentsBase: dir)
+        check(!html.contains("<img"), "no <img> tag when the file can't be read")
+        check(html.contains("Attachments"), "the markdown reference is preserved as text instead of vanishing")
+    }
+
+    suite("a line mixing text and an image reference is not embedded as an image") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("jot-notesync-mixed-\(UUID().uuidString)")
+        let attachDir = dir.appendingPathComponent("Attachments")
+        try? FileManager.default.createDirectory(at: attachDir, withIntermediateDirectories: true)
+        try? Data([1,2,3]).write(to: attachDir.appendingPathComponent("a.png"))
+
+        let note = Note(text: "see this: ![240](Attachments/a.png)")
+        let html = AppleNotesSync.htmlBody(for: note, attachmentsBase: dir)
+        check(!html.contains("<img"), "not embedded, since the editor never produces this shape")
+        check(html.contains("see this"), "text is preserved rather than silently discarded")
+    }
+
     // MARK: - Storage
 
     suite("notes survive a store round trip") {

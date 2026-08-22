@@ -107,11 +107,33 @@ itself after firing.
 **Optional Apple Notes sync.** Off by default. Turn it on and each note is
 pushed into a "Jot" folder in Apple Notes, one direction only — nothing
 written there is ever read back, and deleting a note in Jot never deletes it
-in Notes.
+in Notes. Images sync too, embedded as real inline images, not just their
+markdown reference.
 
 **Appearance.** Frosted, Glass, or Solid surfaces; the header and footer can
 be hidden entirely; line spacing is adjustable — down to nothing but text on
 glass, if that's what you want.
+
+## Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| **Option+A** (configurable) | Show or hide Jot from anywhere on macOS |
+| **Cmd+N** | New note |
+| **Cmd+W** | Close the frontmost window — hides the note, or closes Settings |
+| **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
+| **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
+| **Cmd+F** | Find in the current note |
+| **Cmd+G** / **Shift+Cmd+G** | Find next / find previous |
+| **Cmd+E** | Use the current selection as the find term |
+| **Cmd+,** | Settings |
+| **Cmd+Q** | Quit |
+| **Tab** / **Shift+Tab** | Nest or un-nest a checklist item |
+| Two-finger swipe | Move between notes (single-note display modes) |
+| Drag an image's edge | Resize it in place |
+
+Cut/Copy/Paste/Select All/Undo/Redo are the standard Cmd+X/C/V/A/Z/Shift+Cmd+Z
+you'd expect anywhere on macOS.
 
 ## Privacy
 
@@ -201,7 +223,7 @@ under `com.suryatejlalam.Jot`.
 
 - No URL shortening/elision for long links yet.
 - Notes can't be reordered.
-- Apple Notes sync doesn't carry images across, and is one-way.
+- Apple Notes sync is one-way; nothing written there is read back.
 - The build targets `arm64` only.
 
 See [BACKLOG.md](BACKLOG.md) for the fuller list, including bugs, planned
