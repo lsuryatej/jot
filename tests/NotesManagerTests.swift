@@ -41,7 +41,7 @@ func makeManager(seed: [String]? = nil) -> NotesManager {
         .appendingPathComponent("stickynotes-tests-\(UUID().uuidString)")
         .appendingPathComponent("notes.json")
     let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
-    if let seed { store.save(seed) }
+    if let seed { store.save(seed.map { Note(text: $0) }) }
     return NotesManager(store: store, saveDebounce: 0)
 }
 
@@ -103,9 +103,9 @@ func runAllTests() {
         m.currentIndex = 2
         m.previousNote()
 
-        check(!m.notes.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+        check(!m.notes.contains(where: { $0.isBlank }),
               "blank note removed")
-        equal(m.notes, ["first", "third"], "surviving notes intact")
+        equal(m.texts, ["first", "third"], "surviving notes intact")
     }
 
     suite("the note you are editing is never purged") {
@@ -288,6 +288,37 @@ func runAllTests() {
         equal(item?.markerRange.length, 5, "covers exactly \"- [x]\"")
     }
 
+    suite("notes files written before identities still load") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-legacyshape-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("notes.json")
+        // The pre-identity on-disk shape: a bare array of strings.
+        try? Data("[\"first\",\"second\"]".utf8).write(to: url)
+
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+        let loaded = store.load()
+        equal(loaded.map(\.text), ["first", "second"], "text survives the format change")
+        equal(loaded.count, Set(loaded.map(\.id)).count, "each note gets a distinct identity")
+    }
+
+    suite("identities survive a round trip") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-ids-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = NoteStore(fileURL: dir.appendingPathComponent("notes.json"), allowsLegacyMigration: false)
+
+        let original = [Note(text: "alpha"), Note(text: "bravo")]
+        store.save(original)
+        equal(store.load().map(\.id), original.map(\.id), "ids are stable across save and load")
+    }
+
+    suite("note titles") {
+        equal(Note(text: "Groceries\nmilk").title, "Groceries", "first line")
+        equal(Note(text: "\n\n  Real title\nbody").title, "Real title", "leading blank lines skipped")
+        equal(Note(text: "   ").title, "Untitled note", "blank note has a fallback title")
+    }
+
     // MARK: - Storage
 
     suite("notes survive a store round trip") {
@@ -296,11 +327,11 @@ func runAllTests() {
             .appendingPathComponent("notes.json")
         let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
 
-        store.save(["alpha", "bravo"])
-        equal(store.load(), ["alpha", "bravo"], "round trip")
+        store.save([Note(text: "alpha"), Note(text: "bravo")])
+        equal(store.load().map(\.text), ["alpha", "bravo"], "round trip")
 
         store.save([])
-        equal(store.load(), [""], "empty input never yields an unaddressable array")
+        equal(store.load().map(\.text), [""], "empty input never yields an unaddressable array")
     }
 
     suite("loading takes a backup of what was already on disk") {
@@ -310,15 +341,15 @@ func runAllTests() {
         let url = dir.appendingPathComponent("notes.json")
         let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
 
-        store.save(["important"])
+        store.save([Note(text: "important")])
         _ = store.load()
         check(FileManager.default.fileExists(atPath: store.backupFileURL.path), "backup written")
 
         // Simulate the clobber that cost a note during development.
-        store.save([""])
-        equal(store.load(), [""], "live file is now empty")
+        store.save([Note()])
+        equal(store.load().map(\.text), [""], "live file is now empty")
 
-        let recovered = try? JSONDecoder().decode([String].self, from: Data(contentsOf: store.backupFileURL))
+        let recovered = (try? JSONDecoder().decode([Note].self, from: Data(contentsOf: store.backupFileURL)))?.map(\.text)
         equal(recovered, ["important"], "backup still holds the real content")
     }
 
@@ -329,13 +360,13 @@ func runAllTests() {
         let url = dir.appendingPathComponent("notes.json")
         let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
 
-        store.save(["keep me"])
+        store.save([Note(text: "keep me")])
         _ = store.load()
-        store.save([""])
+        store.save([Note()])
         _ = store.load()
         _ = store.load()
 
-        let recovered = try? JSONDecoder().decode([String].self, from: Data(contentsOf: store.backupFileURL))
+        let recovered = (try? JSONDecoder().decode([Note].self, from: Data(contentsOf: store.backupFileURL)))?.map(\.text)
         equal(recovered, ["keep me"], "repeated loads of an empty file leave the backup alone")
     }
 
@@ -344,7 +375,7 @@ func runAllTests() {
             .appendingPathComponent("stickynotes-missing-\(UUID().uuidString)")
             .appendingPathComponent("notes.json")
         let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
-        equal(store.load(), [""], "safe default")
+        equal(store.load().map(\.text), [""], "safe default")
     }
 
     suite("corrupt file does not crash or lose the shape") {
@@ -355,6 +386,6 @@ func runAllTests() {
         try? Data("{ not json".utf8).write(to: url)
 
         let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
-        equal(store.load(), [""], "falls back cleanly")
+        equal(store.load().map(\.text), [""], "falls back cleanly")
     }
 }

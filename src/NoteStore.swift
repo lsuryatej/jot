@@ -8,7 +8,6 @@ import Foundation
 /// "my text is still there", a non-atomic write on every keypress is the wrong
 /// trade.
 struct NoteStore {
-    /// Notes are written as a JSON array of strings.
     private let fileURL: URL
 
     /// The pre-migration `UserDefaults` domain and key.
@@ -35,12 +34,20 @@ struct NoteStore {
     ///
     /// Always returns at least one (possibly empty) note so `currentIndex` can
     /// never address past the end of the array.
-    func load() -> [String] {
-        if let data = try? Data(contentsOf: fileURL),
-           let notes = try? JSONDecoder().decode([String].self, from: data),
-           !notes.isEmpty {
-            writeBackup(data, of: notes)
-            return notes
+    func load() -> [Note] {
+        if let data = try? Data(contentsOf: fileURL) {
+            // Current format: objects carrying an id.
+            if let notes = try? JSONDecoder().decode([Note].self, from: data), !notes.isEmpty {
+                writeBackup(data, of: notes)
+                return notes
+            }
+            // Files written before notes had identities are a bare string array.
+            // Read them, and they are rewritten in the new shape on next save.
+            if let legacy = try? JSONDecoder().decode([String].self, from: data), !legacy.isEmpty {
+                let notes = legacy.map { Note(text: $0) }
+                writeBackup(data, of: notes)
+                return notes
+            }
         }
 
         if allowsLegacyMigration, let migrated = migrateFromUserDefaults() {
@@ -48,12 +55,12 @@ struct NoteStore {
             return migrated
         }
 
-        return [""]
+        return [Note()]
     }
 
     /// Writes atomically, so an interrupted save cannot truncate the file.
-    func save(_ notes: [String]) {
-        let notes = notes.isEmpty ? [""] : notes
+    func save(_ notes: [Note]) {
+        let notes = notes.isEmpty ? [Note()] : notes
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
@@ -76,16 +83,16 @@ struct NoteStore {
     /// lost to a clobbered save during development, which is one more than this
     /// should ever cost — a copy per launch is cheap insurance against the next
     /// bug doing the same thing silently.
-    private func writeBackup(_ data: Data, of notes: [String]) {
+    private func writeBackup(_ data: Data, of notes: [Note]) {
         // Never let a backup of nothing overwrite a backup of something.
-        let meaningful = notes.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let meaningful = notes.contains { !$0.isBlank }
         guard meaningful else { return }
         try? data.write(to: backupFileURL, options: .atomic)
     }
 
     /// One-time import of notes written by the pre-1.0 `UserDefaults` build.
     /// Returns nil when there is nothing to migrate.
-    private func migrateFromUserDefaults() -> [String]? {
+    private func migrateFromUserDefaults() -> [Note]? {
         guard let defaults = UserDefaults(suiteName: Self.legacyDomain),
               let legacy = defaults.stringArray(forKey: Self.legacyKey)
         else { return nil }
@@ -94,6 +101,6 @@ struct NoteStore {
         guard !salvaged.isEmpty else { return nil }
 
         NSLog("StickyNotes: migrated \(salvaged.count) note(s) from \(Self.legacyDomain)")
-        return salvaged
+        return salvaged.map { Note(text: $0) }
     }
 }

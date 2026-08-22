@@ -28,6 +28,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
 "$SWIFTC" \
     -sdk "$SDK" \
     -target arm64-apple-macos14.0 \
+    src/Note.swift \
     src/NoteStore.swift \
     src/NotesManager.swift \
     src/TextStatistics.swift \

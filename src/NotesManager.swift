@@ -11,7 +11,10 @@ struct TimerDirective: Equatable {
 }
 
 final class NotesManager: ObservableObject {
-    @Published var notes: [String] = [""]
+    @Published var notes: [Note] = [Note()]
+
+    /// Convenience for call sites that only care about the text.
+    var texts: [String] { notes.map(\.text) }
     @Published var currentIndex: Int = 0
     @Published private(set) var activeTimerEnd: Date?
 
@@ -32,16 +35,16 @@ final class NotesManager: ObservableObject {
         self.saveDebounce = saveDebounce
         self.notes = store.load()
         self.currentIndex = max(0, notes.count - 1)
-        self.timerSource = Self.firstTimerDirective(in: notes[currentIndex], keyword: timerKeyword)?.source
+        self.timerSource = Self.firstTimerDirective(in: notes[currentIndex].text, keyword: timerKeyword)?.source
     }
 
     // MARK: - Text
 
     var currentText: String {
-        get { notes.indices.contains(currentIndex) ? notes[currentIndex] : "" }
+        get { notes.indices.contains(currentIndex) ? notes[currentIndex].text : "" }
         set {
             guard notes.indices.contains(currentIndex) else { return }
-            notes[currentIndex] = newValue
+            notes[currentIndex].text = newValue
             evaluateTimer(in: newValue)
             scheduleSave()
         }
@@ -50,12 +53,12 @@ final class NotesManager: ObservableObject {
     // MARK: - Indexed access (edge stack)
 
     func text(at index: Int) -> String {
-        notes.indices.contains(index) ? notes[index] : ""
+        notes.indices.contains(index) ? notes[index].text : ""
     }
 
     func setText(_ newValue: String, at index: Int) {
         guard notes.indices.contains(index) else { return }
-        notes[index] = newValue
+        notes[index].text = newValue
         if index == currentIndex { evaluateTimer(in: newValue) }
         scheduleSave()
     }
@@ -63,7 +66,7 @@ final class NotesManager: ObservableObject {
     /// Unconditional, unlike addNewNote: the stack shows every note at once, so
     /// there is no ambiguity about which blank one you meant.
     func appendNote() {
-        notes.append("")
+        notes.append(Note())
         currentIndex = notes.count - 1
         flush()
     }
@@ -71,7 +74,7 @@ final class NotesManager: ObservableObject {
     func deleteNote(at index: Int) {
         guard notes.indices.contains(index), notes.count > 1 else {
             // Never leave the model with nothing to address.
-            if notes.indices.contains(index) { notes[index] = "" }
+            if notes.indices.contains(index) { notes[index].text = "" }
             flush()
             return
         }
@@ -104,7 +107,7 @@ final class NotesManager: ObservableObject {
     func addNewNote() {
         // Refuse to stack blank notes on top of a blank note.
         guard !currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        notes.append("")
+        notes.append(Note())
         currentIndex = notes.count - 1
         adoptTimerState(for: "")
         flush()
@@ -199,17 +202,16 @@ final class NotesManager: ObservableObject {
     /// would delete the very note being written.
     private func purgeEmptyNotesPreservingCurrent() {
         let current = currentText
-        var kept: [String] = []
+        var kept: [Note] = []
         var newIndex = 0
         for (i, note) in notes.enumerated() {
-            let isBlank = note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            if !isBlank || i == currentIndex {
+            if !note.isBlank || i == currentIndex {
                 if i == currentIndex { newIndex = kept.count }
                 kept.append(note)
             }
         }
         if kept.isEmpty {
-            kept = [""]
+            kept = [Note()]
             newIndex = 0
         }
         notes = kept
