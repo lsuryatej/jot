@@ -34,6 +34,13 @@ struct EdgeStackView: View {
                                 settings: settings,
                                 index: index,
                                 noteID: note.id,
+                                baseFont: NoteFont.resolved(
+                                    settings.noteFontName,
+                                    // Cards stay compact previews: the chosen
+                                    // family, but never larger than the old
+                                    // fixed 12pt body no matter the size setting.
+                                    size: min(12, settings.noteFontSize)
+                                ),
                                 draggingNoteID: $draggingNoteID
                             )
                         }
@@ -82,6 +89,7 @@ struct NoteCard: View {
     /// This card's note by identity — what drag and drop resolve through,
     /// since `index` shifts underneath a live reorder.
     let noteID: UUID
+    let baseFont: NSFont
     @Binding var draggingNoteID: UUID?
 
     @State private var height: CGFloat = 40
@@ -95,7 +103,9 @@ struct NoteCard: View {
                     set: { notesManager.setText($0, at: index) }
                 ),
                 lineHeightMultiple: settings.lineSpacing,
+                baseFont: baseFont,
                 listKeyword: settings.effectiveListKeyword,
+                ink: settings.appearance.ink,
                 onHeightChange: { height = $0 }
             )
             .frame(height: height)
@@ -117,7 +127,11 @@ struct NoteCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(settings.appearance.wantsLitEdge ? 0.16 : 0.06), lineWidth: 1)
+                .strokeBorder(
+                    Color(nsColor: settings.appearance.hairlineColor)
+                        .opacity(settings.appearance.wantsLitEdge ? 0.16 : 0.10),
+                    lineWidth: 1
+                )
         )
         .overlay(alignment: .topLeading) { reorderGrip }
         .onDrop(of: [.text], delegate: NoteCardDropDelegate(
@@ -152,8 +166,8 @@ struct NoteCard: View {
     /// Cards sit on the window's own material, so they need their own surface
     /// to read as separate pieces of paper rather than panels of the same glass.
     private var cardBackground: some View {
-        Color(nsColor: .controlBackgroundColor)
-            .opacity(settings.appearance == .solid ? 1.0 : 0.55)
+        Color(nsColor: settings.appearance.cardColor)
+            .opacity(settings.appearance.wantsOpaqueCards ? 1.0 : 0.55)
     }
 }
 
@@ -204,7 +218,9 @@ private struct NoteCardDropDelegate: DropDelegate {
 struct NoteCardEditor: NSViewRepresentable {
     @Binding var text: String
     var lineHeightMultiple: Double
+    var baseFont: NSFont
     var listKeyword: String
+    var ink: InkTheme
     var onHeightChange: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -222,7 +238,7 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
 
-        textView.baseFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.baseFont = baseFont
         textView.textColor = .labelColor
         textView.insertionPointColor = .labelColor
         textView.drawsBackground = false
@@ -235,6 +251,8 @@ struct NoteCardEditor: NSViewRepresentable {
 
         textView.stylesFirstLineAsTitle = true
         textView.listKeyword = listKeyword
+        // Repaints text and caret itself, superseding the labelColor above.
+        textView.ink = ink
         textView.lineHeightMultiple = lineHeightMultiple
         textView.onHeightChange = onHeightChange
         textView.textStorage?.delegate = textView
@@ -256,6 +274,12 @@ struct NoteCardEditor: NSViewRepresentable {
         if textView.lineHeightMultiple != lineHeightMultiple {
             textView.lineHeightMultiple = lineHeightMultiple
             textView.applyChecklistStyling()
+        }
+        if textView.baseFont != baseFont {
+            textView.baseFont = baseFont
+        }
+        if textView.ink != ink {
+            textView.ink = ink
         }
         if textView.string != text {
             textView.string = text

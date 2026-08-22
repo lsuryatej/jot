@@ -67,7 +67,34 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// How the note's surface is rendered.
+/// What text is painted with on a surface.
+///
+/// Opaque papers need their own ink because the system label colors follow
+/// macOS's light/dark mode rather than the paper: a light-mode user picking
+/// True Dark would otherwise get black text on a near-black page.
+struct InkTheme: Equatable {
+    let text: NSColor
+    /// Checkboxes' markers, the keyword line, struck-through items.
+    let secondary: NSColor
+    /// Checked markers, math results.
+    let accent: NSColor
+    let link: NSColor
+    /// Dot and square guides, drawn at low opacity by the editor.
+    let guide: NSColor
+
+    /// The system palette, for the translucent appearances where macOS's own
+    /// light/dark resolution is exactly right.
+    static let system = InkTheme(
+        text: .labelColor,
+        secondary: .tertiaryLabelColor,
+        accent: .controlAccentColor,
+        link: .linkColor,
+        guide: .labelColor
+    )
+}
+
+/// How the note's surface is rendered: three translucent window materials,
+/// or an opaque paper that carries its own ink.
 enum Appearance: String, CaseIterable, Identifiable {
     /// The standard popover material: translucent but muted.
     case frosted
@@ -75,35 +102,153 @@ enum Appearance: String, CaseIterable, Identifiable {
     case glass
     /// Opaque window background, for when the desktop underneath is noisy.
     case solid
+    /// Near-black paper, warmer than system dark mode and independent of it.
+    case trueDark
+    /// Warm off-white, the long-writing-session paper.
+    case cream
+    /// Plain white, for daylight and screenshots.
+    case white
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .frosted: return "Frosted"
-        case .glass:   return "Glass"
-        case .solid:   return "Solid"
+        case .frosted:  return "Frosted"
+        case .glass:    return "Glass"
+        case .solid:    return "Solid"
+        case .trueDark: return "True Dark"
+        case .cream:    return "Cream"
+        case .white:    return "White"
         }
     }
 
     var detail: String {
         switch self {
-        case .frosted: return "Translucent, with the desktop softened behind it."
-        case .glass:   return "The desktop shows through clearly, with a lit edge."
-        case .solid:   return "Opaque. Easiest to read over a busy desktop."
+        case .frosted:  return "Translucent, with the desktop softened behind it."
+        case .glass:    return "The desktop shows through clearly, with a lit edge."
+        case .solid:    return "Opaque. Easiest to read over a busy desktop."
+        case .trueDark: return "Near-black paper with its own light ink, whatever mode the system is in."
+        case .cream:    return "Warm off-white stock, easier on the eyes over a long session."
+        case .white:    return "Plain white paper with dark ink."
         }
     }
 
+    /// The opaque paper color, or nil for the translucent appearances, which
+    /// render through `NSVisualEffectView` instead (see `materialRawValue`).
+    var paperColor: NSColor? {
+        switch self {
+        case .frosted, .glass, .solid:
+            return nil
+        case .trueDark:
+            // Tinted near-black rather than pure black, so it reads as
+            // paper rather than a void.
+            return NSColor(srgbRed: 0.075, green: 0.074, blue: 0.080, alpha: 1)
+        case .cream:
+            return NSColor(srgbRed: 0.969, green: 0.941, blue: 0.882, alpha: 1)
+        case .white:
+            return .white
+        }
+    }
+
+    /// Only meaningful when `paperColor` is nil.
+    ///
     /// Matches NSVisualEffectView.Material.
     var materialRawValue: Int {
         switch self {
         case .frosted: return 6  // .popover
         case .glass:   return 13 // .hudWindow
         case .solid:   return 12 // .windowBackground
+        default:       return 12
         }
     }
 
-    var wantsLitEdge: Bool { self == .glass }
+    var ink: InkTheme {
+        switch self {
+        case .frosted, .glass, .solid:
+            // Translucent surfaces sit inside whatever mode the system is
+            // in, so the system palette is exactly right for them.
+            return .system
+        case .white:
+            // Forced light even in dark mode, or a dark-mode user would get
+            // white text on white paper.
+            return InkTheme(
+                text: NSColor(srgbRed: 0.110, green: 0.110, blue: 0.118, alpha: 1),
+                secondary: NSColor(srgbRed: 0.560, green: 0.560, blue: 0.570, alpha: 1),
+                accent: .controlAccentColor,
+                link: NSColor(srgbRed: 0.100, green: 0.360, blue: 0.720, alpha: 1),
+                guide: .black
+            )
+        case .trueDark:
+            return InkTheme(
+                text: NSColor(srgbRed: 0.910, green: 0.898, blue: 0.878, alpha: 1),
+                secondary: NSColor(srgbRed: 0.560, green: 0.549, blue: 0.529, alpha: 1),
+                accent: NSColor(srgbRed: 0.480, green: 0.780, blue: 0.560, alpha: 1),
+                link: NSColor(srgbRed: 0.520, green: 0.720, blue: 0.930, alpha: 1),
+                guide: NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1)
+            )
+        case .cream:
+            return InkTheme(
+                text: NSColor(srgbRed: 0.180, green: 0.153, blue: 0.110, alpha: 1),
+                secondary: NSColor(srgbRed: 0.560, green: 0.507, blue: 0.420, alpha: 1),
+                accent: .controlAccentColor,
+                link: NSColor(srgbRed: 0.100, green: 0.360, blue: 0.720, alpha: 1),
+                guide: NSColor(srgbRed: 0.400, green: 0.340, blue: 0.240, alpha: 1)
+            )
+        }
+    }
+
+    /// The hairline around edge cards and the window edge.
+    var hairlineColor: NSColor {
+        switch self {
+        case .trueDark: return .white
+        case .cream, .white: return .black
+        default: return .white
+        }
+    }
+
+    /// Edge cards sit directly on the surface; on an opaque paper they read
+    /// as a second sheet of similar stock rather than a system-white chip.
+    var cardColor: NSColor {
+        switch self {
+        case .trueDark: return NSColor(srgbRed: 0.125, green: 0.124, blue: 0.133, alpha: 1)
+        case .cream:    return NSColor(srgbRed: 0.992, green: 0.976, blue: 0.937, alpha: 1)
+        case .white:    return .white
+        default:        return .controlBackgroundColor
+        }
+    }
+
+    /// Cards on opaque papers are fully opaque; on glass they stay partly
+    /// transparent so the desktop keeps coming through.
+    var wantsOpaqueCards: Bool {
+        paperColor != nil || self == .solid
+    }
+
+    /// Background for chrome strips (header, footer) sitting on the surface.
+    var chromeColor: NSColor {
+        paperColor ?? .windowBackgroundColor
+    }
+
+    var wantsLitEdge: Bool {
+        self == .glass
+    }
+}
+
+/// Writing guides drawn faintly under the text. Edge cards skip them: on a
+/// card a few lines tall a repeating pattern reads as noise, not structure.
+enum PaperGuide: String, CaseIterable, Identifiable {
+    case none
+    case dots
+    case grid
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .dots: return "Dot Grid"
+        case .grid: return "Square Grid"
+        }
+    }
 }
 
 /// Which side of the screen the edge-docked note lives on.
@@ -154,6 +299,10 @@ final class SettingsManager: ObservableObject {
         static let listKeyword    = "listKeyword"
         static let fetchesLiveRates = "fetchesLiveCurrencyRates"
         static let checksForUpdates = "checksForUpdates"
+        static let noteFontName   = "noteFontName"
+        static let noteFontSize   = "noteFontSize"
+        static let letterSpacing  = "letterSpacing"
+        static let guide          = "paperGuide"
 
         /// Every key this type persists, for the one-time migration below.
         /// Kept as a literal list rather than reflection: `UserDefaults`
@@ -163,6 +312,7 @@ final class SettingsManager: ObservableObject {
             displayMode, hotKeyCode, hotKeyMods, timerKeyword, showsFooter,
             screenEdge, edgeWidth, appearance, showsHeader, lineSpacing,
             windowFrame, syncsToNotes, listKeyword, fetchesLiveRates, checksForUpdates,
+            noteFontName, noteFontSize, letterSpacing, guide,
         ]
     }
 
@@ -206,6 +356,37 @@ final class SettingsManager: ObservableObject {
     /// Line height multiple for the editor.
     @Published var lineSpacing: Double {
         didSet { defaults.set(lineSpacing, forKey: Key.lineSpacing) }
+    }
+
+    /// The note's font, by curated name (see `NoteFont`).
+    @Published var noteFontName: String {
+        didSet { defaults.set(noteFontName, forKey: Key.noteFontName) }
+    }
+
+    /// The note's font size in points. Clamped on the way in: a wild value
+    /// from an old or hand-edited default would otherwise wreck layout.
+    @Published var noteFontSize: Double {
+        didSet {
+            noteFontSize = min(max(noteFontSize, 11), 24)
+            defaults.set(noteFontSize, forKey: Key.noteFontSize)
+        }
+    }
+
+    /// Extra tracking between characters, in points. Zero is the font's own
+    /// spacing.
+    @Published var letterSpacing: Double {
+        didSet { defaults.set(letterSpacing, forKey: Key.letterSpacing) }
+    }
+
+    /// Writing guides under the text.
+    @Published var guide: PaperGuide {
+        didSet { defaults.set(guide.rawValue, forKey: Key.guide) }
+    }
+
+    /// The editor's font, resolved from the stored name. Unknown names
+    /// resolve to the default inside `NoteFont`, so this never fails.
+    var editorFont: NSFont {
+        NoteFont.resolved(noteFontName, size: CGFloat(noteFontSize))
     }
 
     /// A bare keyword on the first line turns the note into a checklist.
@@ -295,6 +476,10 @@ final class SettingsManager: ObservableObject {
         self.appearance = Appearance(rawValue: rawAppearance) ?? .frosted
         self.showsHeader = defaults.object(forKey: Key.showsHeader) as? Bool ?? true
         self.lineSpacing = defaults.object(forKey: Key.lineSpacing) as? Double ?? 1.0
+        self.noteFontName = defaults.string(forKey: Key.noteFontName) ?? NoteFont.defaultName
+        self.noteFontSize = defaults.object(forKey: Key.noteFontSize) as? Double ?? 13
+        self.letterSpacing = defaults.object(forKey: Key.letterSpacing) as? Double ?? 0
+        self.guide = PaperGuide(rawValue: defaults.string(forKey: Key.guide) ?? "") ?? .none
 
         self.syncsToAppleNotes = defaults.object(forKey: Key.syncsToNotes) as? Bool ?? false
         self.listKeyword = defaults.string(forKey: Key.listKeyword) ?? "list"

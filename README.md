@@ -195,9 +195,17 @@ written there is ever read back, and deleting a note in Jot never deletes it
 in Notes. Images sync too, embedded as real inline images, not just their
 markdown reference.
 
-**Appearance.** Frosted, Glass, or Solid surfaces, header and footer can be
-hidden entirely, line spacing is adjustable, down to nothing but text on
-glass if that's what you want.
+**Typography.** Eight curated system fonts, SF Mono through American
+Typewriter, plus size and letter-spacing sliders beside the existing line
+spacing control. Curated rather than a full font panel: everything offered
+ships with macOS, so the zero-dependency stance holds.
+
+**Paper types.** Six surfaces: Frosted, Glass, Solid, True Dark, Cream, and
+White. The opaque papers bring their own ink colors rather than following
+the system's light or dark mode, so True Dark stays readable in daylight.
+Optional writing guides underneath the text, dot grid or square grid, drawn
+to follow your font and line spacing. Header and footer can still be hidden
+entirely, down to nothing but text on paper.
 
 ![Appearance settings alongside a frosted note](docs/screenshots/appearance-settings.jpeg)
 
@@ -302,7 +310,7 @@ apply at all, a normal Xcode install should just work.
 `NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `GlobalSearch`,
 `LinkShrink`, and `Attachments` are deliberately free of SwiftUI and AppKit,
 so every rule in them is covered by a dependency-free test. `./test.sh` runs
-272 checks total, that plus a UI-layer slice against real `NSTextView`
+294 checks total, that plus a UI-layer slice against real `NSTextView`
 instances, in a few seconds.
 
 `Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes

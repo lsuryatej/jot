@@ -430,6 +430,46 @@ func runAllTests() {
         equal(Note(text: "   ").title, "Untitled note", "blank note has a fallback title")
     }
 
+    // MARK: - Typography
+
+    suite("every curated font resolves at the requested size") {
+        for name in NoteFont.all {
+            let font = NoteFont.resolved(name, size: 13)
+            check(font.pointSize == 13, "\(name) resolves")
+        }
+    }
+
+    suite("an unknown stored font name degrades to the default, not nil") {
+        let unknown = NoteFont.resolved("No Such Font", size: 15)
+        let fallback = NoteFont.resolved(NoteFont.defaultName, size: 15)
+        equal(unknown.fontName, fallback.fontName, "same family as the default")
+        equal(unknown.pointSize, fallback.pointSize, "size preserved through the fallback")
+    }
+
+    suite("opaque papers bring their own ink") {
+        // The whole point of an opaque paper: system label colors follow
+        // macOS's mode, not the paper, so a dark-mode user on Cream would be
+        // reading white-on-cream without this rule.
+        for appearance in Appearance.allCases where appearance.paperColor != nil {
+            check(appearance.ink.text != NSColor.labelColor,
+                  "\(appearance.title) does not inherit the system label color")
+        }
+    }
+
+    suite("translucent appearances follow the system palette") {
+        for appearance in Appearance.allCases where appearance.paperColor == nil {
+            equal(appearance.ink, InkTheme.system, "\(appearance.title) uses system ink")
+            check(appearance.materialRawValue == 6 || appearance.materialRawValue == 12 || appearance.materialRawValue == 13,
+                  "\(appearance.title) maps to a real material")
+        }
+    }
+
+    suite("paper guide round-trips through its persisted form") {
+        for guide in PaperGuide.allCases {
+            equal(PaperGuide(rawValue: guide.rawValue), guide, "\(guide.title) round-trips")
+        }
+    }
+
     suite("a bare keyword on the first line turns the note into a list") {
         check(Checklist.isListMode("list", keyword: "list"), "exactly the keyword")
         check(Checklist.isListMode("List\nmilk", keyword: "list"), "case-insensitive")

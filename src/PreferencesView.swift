@@ -67,18 +67,26 @@ struct PreferencesView: View {
             Divider()
 
             section("Appearance") {
-                Picker("", selection: $settings.appearance) {
+                Picker("Paper", selection: $settings.appearance) {
                     ForEach(Appearance.allCases) { style in
                         Text(style.title).tag(style)
                     }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 240)
+                .pickerStyle(.menu)
+                .frame(width: 220)
 
                 Text(settings.appearance.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Picker("Guides", selection: $settings.guide) {
+                    ForEach(PaperGuide.allCases) { guide in
+                        Text(guide.title).tag(guide)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 220)
 
                 Toggle("Show the header bar", isOn: $settings.showsHeader)
 
@@ -91,6 +99,40 @@ struct PreferencesView: View {
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .frame(width: 26, alignment: .trailing)
+                }
+            }
+
+            Divider()
+
+            section("Typography") {
+                Picker("Font", selection: $settings.noteFontName) {
+                    ForEach(NoteFont.all, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 220)
+
+                HStack(spacing: 12) {
+                    Text("Size")
+                        .font(.caption)
+                    Slider(value: $settings.noteFontSize, in: 11...24, step: 1)
+                        .frame(width: 140)
+                    Text("\(Int(settings.noteFontSize))pt")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, alignment: .trailing)
+                }
+
+                HStack(spacing: 12) {
+                    Text("Letter spacing")
+                        .font(.caption)
+                    Slider(value: $settings.letterSpacing, in: 0...3)
+                        .frame(width: 140)
+                    Text(String(format: "%.1f", settings.letterSpacing))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, alignment: .trailing)
                 }
             }
 
@@ -160,7 +202,7 @@ struct PreferencesView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 480, height: 900, alignment: .topLeading)
+        .frame(width: 480, height: 1060, alignment: .topLeading)
     }
 
     private func section<Content: View>(

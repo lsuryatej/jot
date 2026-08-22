@@ -76,9 +76,16 @@ struct ContentView: View {
     // MARK: - Surface
 
     private var backdrop: some View {
-        VisualEffectView(
-            material: NSVisualEffectView.Material(rawValue: settings.appearance.materialRawValue) ?? .popover
-        )
+        Group {
+            if let paper = settings.appearance.paperColor {
+                // An opaque paper replaces the blur entirely.
+                Rectangle().fill(Color(nsColor: paper))
+            } else {
+                VisualEffectView(
+                    material: NSVisualEffectView.Material(rawValue: settings.appearance.materialRawValue) ?? .popover
+                )
+            }
+        }
         .ignoresSafeArea()
     }
 
@@ -110,6 +117,10 @@ struct ContentView: View {
     private var editor: some View {
         PlainTextEditor(
             lineHeightMultiple: settings.lineSpacing,
+            baseFont: settings.editorFont,
+            letterSpacing: settings.letterSpacing,
+            ink: settings.appearance.ink,
+            guide: settings.guide,
             listKeyword: settings.effectiveListKeyword,
             topInset: settings.showsHeader ? 12 : 38,
             text: Binding(
@@ -151,7 +162,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.8))
+        .background(Color(nsColor: settings.appearance.chromeColor).opacity(0.8))
     }
 
     // MARK: - Footer
@@ -174,7 +185,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+        .background(Color(nsColor: settings.appearance.chromeColor).opacity(0.6))
     }
 
     private var countsLabel: String {
@@ -240,7 +251,7 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color.white.opacity(settings.appearance.wantsLitEdge ? 0.18 : 0.08), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(Color(nsColor: settings.appearance.hairlineColor).opacity(settings.appearance.wantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
                 .frame(maxWidth: .infinity)
                 .padding(.top, 44)
                 .allowsHitTesting(false)

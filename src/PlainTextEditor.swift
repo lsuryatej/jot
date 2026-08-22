@@ -66,8 +66,35 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         didSet { defaultParagraphStyle = paragraphStyle }
     }
 
+    /// Extra tracking between characters, in points. Applied by the styling
+    /// pass like every other visual property, so the file never holds it.
+    var letterSpacing: Double = 0 {
+        didSet {
+            guard letterSpacing != oldValue else { return }
+            applyChecklistStyling()
+        }
+    }
+
     /// A bare keyword on the first line puts the note in checklist mode.
     var listKeyword: String = "list"
+
+    /// The palette text is painted with, derived from the chosen surface.
+    var ink: InkTheme = .system {
+        didSet {
+            guard ink != oldValue else { return }
+            textColor = ink.text
+            insertionPointColor = ink.text
+            applyChecklistStyling()
+        }
+    }
+
+    /// Writing guides drawn under the glyphs.
+    var guide: PaperGuide = .none {
+        didSet {
+            guard guide != oldValue else { return }
+            needsDisplay = true
+        }
+    }
 
     /// Whether the note was in list mode at the last edit, so the switch can be
     /// noticed and the existing body converted once.
@@ -562,6 +589,60 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         return caret
     }
 
+    // MARK: - Writing guides
+
+    /// Dots and grid lines drawn behind the glyphs.
+    ///
+    /// The vertical pitch follows the real line height, so the pattern
+    /// breathes with the font size and line-spacing settings instead of
+    /// fighting them. Both axes are phase-locked to the text container's
+    /// inset so the pattern starts where the text does rather than drifting
+    /// with window size. Lines span the full bounds rather than just the
+    /// dirty rect, so partial redraws can't leave seams at their edges.
+    private func drawGuide(in dirtyRect: NSRect) {
+        guard guide != .none else { return }
+        let color = ink.guide.withAlphaComponent(0.16)
+        // The standard line box: ascent, descent, leading.
+        let lineHeight = baseFont.ascender - baseFont.descender + baseFont.leading
+        let verticalPitch = max(18, lineHeight * CGFloat(lineHeightMultiple))
+        let horizontalPitch: CGFloat = 22
+
+        // The text view is only as tall as its content; cover the visible
+        // clip too so an empty tail of the window stays patterned.
+        let covered = CGSize(
+            width: bounds.width,
+            height: max(bounds.height, enclosingScrollView?.contentView.bounds.height ?? 0)
+        )
+
+        let xs = stride(from: textContainerInset.width, through: covered.width, by: horizontalPitch)
+        let ys = stride(from: textContainerInset.height, through: covered.height, by: verticalPitch)
+
+        switch guide {
+        case .dots:
+            color.setFill()
+            for y in ys where y >= dirtyRect.minY - 2 && y <= dirtyRect.maxY + 2 {
+                for x in xs where x >= dirtyRect.minX - 2 && x <= dirtyRect.maxX + 2 {
+                    NSBezierPath(ovalIn: NSRect(x: x - 1, y: y - 1, width: 2, height: 2)).fill()
+                }
+            }
+        case .grid:
+            let path = NSBezierPath()
+            path.lineWidth = 0.5
+            for x in xs where x >= dirtyRect.minX && x <= dirtyRect.maxX {
+                path.move(to: NSPoint(x: x, y: 0))
+                path.line(to: NSPoint(x: x, y: covered.height))
+            }
+            for y in ys where y >= dirtyRect.minY && y <= dirtyRect.maxY {
+                path.move(to: NSPoint(x: 0, y: y))
+                path.line(to: NSPoint(x: covered.width, y: y))
+            }
+            color.setStroke()
+            path.stroke()
+        case .none:
+            break
+        }
+    }
+
     // MARK: - Inline images
 
     /// Width being previewed during a resize drag, so the text is rewritten
@@ -615,6 +696,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        drawGuide(in: dirtyRect)
         super.draw(dirtyRect)
         drawMathResults(in: dirtyRect)
         for placed in placedImages() where placed.rect.intersects(dirtyRect) {
@@ -707,7 +789,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         guard let layoutManager, let textContainer, !mathResults.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: max(10, baseFont.pointSize - 1), weight: .medium),
-            .foregroundColor: NSColor.controlAccentColor,
+            .foregroundColor: ink.accent,
         ]
 
         for (lineRange, text) in mathResults {
@@ -786,9 +868,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
             textStorage.addAttributes(
                 [
-                    .foregroundColor: NSColor.linkColor,
+                    .foregroundColor: ink.link,
                     .underlineStyle: NSUnderlineStyle.single.rawValue,
-                    .underlineColor: NSColor.linkColor,
+                    .underlineColor: ink.link,
                 ],
                 range: isExpanded ? match.range : match.displayRange
             )
@@ -931,20 +1013,22 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let whole = NSRange(location: 0, length: ns.length)
         let target = ns.length == 0 ? whole : ns.lineRange(for: clamped(range ?? whole))
 
-        textStorage.setAttributes(
-            [
-                .font: baseFont,
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: paragraphStyle,
-            ],
-            range: target
-        )
+        var baseline: [NSAttributedString.Key: Any] = [
+            .font: baseFont,
+            .foregroundColor: ink.text,
+            .paragraphStyle: paragraphStyle,
+        ]
+        // Kern 0 is the same as no kern, so it only goes on when asked for.
+        if letterSpacing != 0 {
+            baseline[.kern] = letterSpacing
+        }
+        textStorage.setAttributes(baseline, range: target)
 
         if Checklist.isListMode(ns as String, keyword: listKeyword), ns.length > 0 {
             let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
             let marker = NSIntersectionRange(firstLine, target)
             if marker.length > 0 {
-                textStorage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: marker)
+                textStorage.addAttribute(.foregroundColor, value: ink.secondary, range: marker)
             }
         }
 
@@ -999,7 +1083,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             )
             textStorage.addAttribute(
                 .foregroundColor,
-                value: item.isChecked ? NSColor.controlAccentColor : NSColor.tertiaryLabelColor,
+                value: item.isChecked ? self.ink.accent : self.ink.secondary,
                 range: markerRange
             )
 
@@ -1011,8 +1095,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             textStorage.addAttributes(
                 [
                     .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    .strikethroughColor: NSColor.tertiaryLabelColor,
-                    .foregroundColor: NSColor.tertiaryLabelColor,
+                    .strikethroughColor: self.ink.secondary,
+                    .foregroundColor: self.ink.secondary,
                 ],
                 range: NSRange(location: bodyStart, length: bodyLength)
             )
@@ -1026,6 +1110,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 /// which made per-line checklist toggling and swipe navigation impossible.
 struct PlainTextEditor: NSViewRepresentable {
     var lineHeightMultiple: Double = 1.0
+    var baseFont: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
+    var letterSpacing: Double = 0
+    var ink: InkTheme = .system
+    var guide: PaperGuide = .none
     var listKeyword: String = "list"
     /// Extra room at the top when the header bar is hidden, so the first line
     /// clears the traffic lights instead of tucking under them.
@@ -1064,7 +1152,6 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
 
-        textView.baseFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
         textView.textColor = .labelColor
         textView.insertionPointColor = .labelColor
         textView.drawsBackground = false
@@ -1082,7 +1169,13 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
 
         textView.lineHeightMultiple = lineHeightMultiple
+        textView.baseFont = baseFont
+        textView.letterSpacing = letterSpacing
         textView.listKeyword = listKeyword
+        // The ink assignment repaints text and caret itself; the labelColor
+        // above only covers the moment before it.
+        textView.ink = ink
+        textView.guide = guide
         textView.textStorage?.delegate = textView
         textView.enableImageDrops()
         textView.string = text
@@ -1112,6 +1205,21 @@ struct PlainTextEditor: NSViewRepresentable {
         if textView.lineHeightMultiple != lineHeightMultiple {
             textView.lineHeightMultiple = lineHeightMultiple
             textView.applyChecklistStyling()
+        }
+
+        // Both fire their own restyle in didSet, so only touch them on a
+        // real change.
+        if textView.baseFont != baseFont {
+            textView.baseFont = baseFont
+        }
+        if textView.letterSpacing != letterSpacing {
+            textView.letterSpacing = letterSpacing
+        }
+        if textView.ink != ink {
+            textView.ink = ink
+        }
+        if textView.guide != guide {
+            textView.guide = guide
         }
 
         // Only touch the text view when the model genuinely diverged (note

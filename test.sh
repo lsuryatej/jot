@@ -29,6 +29,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     -sdk "$SDK" \
     -target arm64-apple-macos14.0 \
     src/Note.swift \
+    src/NoteFont.swift \
     src/GlobalSearch.swift \
     src/LinkShrink.swift \
     src/Attachments.swift \
