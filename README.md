@@ -178,6 +178,12 @@ word/character/line counts, and selecting text with two or more numbers in
 it shows their sum and average. Select `rent $1,240.50 and food $310.25` and
 see the total without leaving the note.
 
+**Reorder notes.** Hover a card in the Screen Edge sidebar and drag it by the
+grip in its corner; the stack parts around the drag and the order you leave
+it in is the saved order. Away from the edge, Ctrl-Cmd-Up and Ctrl-Cmd-Down
+walk the open note through the list one slot at a time. Either way you stay
+on the note you were reading.
+
 **Timers.** `5m timer`, `30s timer`, `2h timer`, the keyword is configurable.
 A timer belongs to the note that started it and won't restart itself after
 firing.
@@ -210,6 +216,8 @@ glass if that's what you want.
 | **Cmd+,** | Settings |
 | **Cmd+Q** | Quit |
 | **Tab** / **Shift+Tab** | Nest or un-nest a checklist item |
+| **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** | Move the current note up or down the list |
+| Drag a card's grip (hover, Screen Edge mode) | Reorder notes in the sidebar |
 | Two-finger swipe | Move between notes (single-note display modes) |
 | Drag an image's edge | Resize it in place |
 | Cmd-click a shrunk link | Expand it to the full URL, click again to collapse |
@@ -309,7 +317,6 @@ under `com.suryatejlalam.Jot`.
 
 ## Not done yet
 
-- Notes can't be reordered.
 - No sync across devices.
 - Apple Notes sync is one-way, nothing written there is read back.
 - The build targets `arm64` only.

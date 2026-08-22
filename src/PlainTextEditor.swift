@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 
 
 enum SwipeDirection {
@@ -193,6 +194,20 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         if flags == [.command, .shift], key == "v" {
             extractTextFromClipboardImage(nil)
             return true
+        }
+        // Ctrl-Cmd-Up/Down walk the current note through the list. Like Cmd+N
+        // and Cmd+Shift+F below, this posts rather than acts: the text view
+        // exists in every display mode, and AppDelegate owns the one
+        // NotesManager along with the knowledge of whether the panel shows.
+        if flags == [.command, .control] {
+            if event.keyCode == UInt16(kVK_UpArrow) {
+                NotificationCenter.default.post(name: .jotRequestMoveNoteUp, object: nil)
+                return true
+            }
+            if event.keyCode == UInt16(kVK_DownArrow) {
+                NotificationCenter.default.post(name: .jotRequestMoveNoteDown, object: nil)
+                return true
+            }
         }
         // Cmd+V is routed here too. The main menu is not displayed outside Dock
         // mode, and if it is not consulted for key equivalents then the paste

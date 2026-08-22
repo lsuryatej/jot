@@ -11,23 +11,52 @@ enum MainMenu {
         target: AnyObject,
         preferencesAction: Selector,
         newNoteAction: Selector,
-        globalSearchAction: Selector
+        globalSearchAction: Selector,
+        moveNoteUpAction: Selector,
+        moveNoteDownAction: Selector
     ) -> NSMenu {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem(target: target, preferencesAction: preferencesAction))
-        mainMenu.addItem(fileMenuItem(target: target, newNoteAction: newNoteAction))
+        mainMenu.addItem(fileMenuItem(
+            target: target,
+            newNoteAction: newNoteAction,
+            moveNoteUpAction: moveNoteUpAction,
+            moveNoteDownAction: moveNoteDownAction
+        ))
         mainMenu.addItem(editMenuItem(target: target, globalSearchAction: globalSearchAction))
         mainMenu.addItem(formatMenuItem())
         return mainMenu
     }
 
-    private static func fileMenuItem(target: AnyObject, newNoteAction: Selector) -> NSMenuItem {
+    private static func fileMenuItem(
+        target: AnyObject,
+        newNoteAction: Selector,
+        moveNoteUpAction: Selector,
+        moveNoteDownAction: Selector
+    ) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "File")
 
         let newNote = NSMenuItem(title: "New Note", action: newNoteAction, keyEquivalent: "n")
         newNote.target = target
         menu.addItem(newNote)
+
+        menu.addItem(.separator())
+
+        // Arrow-key equivalents are the function-key scalars AppKit expects.
+        // The text view handles the same keystrokes directly too (see
+        // PlainTextEditor.performKeyEquivalent), since the menu is not
+        // reliably consulted outside Dock mode — both paths reach the same
+        // NotesManager call.
+        for (title, action, key) in [
+            ("Move Note Up", moveNoteUpAction, NSUpArrowFunctionKey),
+            ("Move Note Down", moveNoteDownAction, NSDownArrowFunctionKey),
+        ] {
+            let move = NSMenuItem(title: title, action: action, keyEquivalent: String(UnicodeScalar(key)!))
+            move.keyEquivalentModifierMask = [.command, .control]
+            move.target = target
+            menu.addItem(move)
+        }
 
         menu.addItem(.separator())
 

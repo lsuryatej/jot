@@ -15,6 +15,11 @@ extension Notification.Name {
     /// "Search All Notes" item; observed by ContentView, which owns the
     /// overlay's visibility state.
     static let jotRequestGlobalSearch = Notification.Name("JotRequestGlobalSearch")
+    /// Posted by the text view's Ctrl-Cmd-Up / Ctrl-Cmd-Down handling; observed
+    /// by AppDelegate, which owns the one NotesManager and can see whether the
+    /// panel is visible at all.
+    static let jotRequestMoveNoteUp = Notification.Name("JotRequestMoveNoteUp")
+    static let jotRequestMoveNoteDown = Notification.Name("JotRequestMoveNoteDown")
 }
 
 struct PreferencesView: View {

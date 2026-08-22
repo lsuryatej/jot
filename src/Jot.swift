@@ -3,7 +3,7 @@ import SwiftUI
 import Combine
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     private let settings = SettingsManager.shared
 
     /// One model shared by every container. The panel and the popover are
@@ -43,7 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             target: self,
             preferencesAction: #selector(showPreferences),
             newNoteAction: #selector(newNoteFromMenu),
-            globalSearchAction: #selector(requestGlobalSearch)
+            globalSearchAction: #selector(requestGlobalSearch),
+            moveNoteUpAction: #selector(moveNoteUp(_:)),
+            moveNoteDownAction: #selector(moveNoteDown(_:))
         )
 
         panel = FloatingPanel(rootView: contentView())
@@ -193,6 +195,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.publisher(for: .jotRequestNewNote)
             .sink { [weak self] _ in self?.newNoteFromMenu() }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .jotRequestMoveNoteUp)
+            .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: -1) }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .jotRequestMoveNoteDown)
+            .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: +1) }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Reordering
+
+    @objc func moveNoteUp(_ sender: Any?) {
+        moveCurrentNoteIfVisible(by: -1)
+    }
+
+    @objc func moveNoteDown(_ sender: Any?) {
+        moveCurrentNoteIfVisible(by: +1)
+    }
+
+    /// A move aimed at a note nobody can see would read as the shortcut doing
+    /// nothing at best, and as cards shuffling in the dark at worst.
+    private func moveCurrentNoteIfVisible(by delta: Int) {
+        guard isInterfaceVisible else { return }
+        notesManager.moveCurrentNote(by: delta)
+    }
+
+    /// Greys out the move items at the ends of the list, or whenever the panel
+    /// is hidden, instead of letting them click into nothing. Every other item
+    /// targeted here was always enabled and stays that way.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(moveNoteUp(_:)):
+            return isInterfaceVisible && notesManager.currentIndex > 0
+        case #selector(moveNoteDown(_:)):
+            return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+        default:
+            return true
+        }
     }
 
     // MARK: - Display modes

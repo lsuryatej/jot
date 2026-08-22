@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// The edge sidebar: every note as its own card, stacked and scrollable.
 ///
@@ -12,6 +13,10 @@ struct EdgeStackView: View {
     /// Set by global search to bring a card into view. Every note is already
     /// on screen here, so there's nothing to switch to, just scroll to.
     @Binding var scrollToIndex: Int?
+    /// The note a drag is carrying, by identity. Drop events resolve it back
+    /// to an index at the moment they fire, because live reordering shifts
+    /// every index after the first swap.
+    @State private var draggingNoteID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,21 +24,28 @@ struct EdgeStackView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 10) {
-                        ForEach(Array(notesManager.notes.indices), id: \.self) { index in
+                        // Keyed by note identity, not position: a card's
+                        // measured height and hover state belong to its note,
+                        // so they must travel with it through a reorder
+                        // instead of staying with the slot it used to sit in.
+                        ForEach(Array(notesManager.notes.enumerated()), id: \.element.id) { index, note in
                             NoteCard(
                                 notesManager: notesManager,
                                 settings: settings,
-                                index: index
+                                index: index,
+                                noteID: note.id,
+                                draggingNoteID: $draggingNoteID
                             )
-                            .id(index)
                         }
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
                 }
                 .onChange(of: scrollToIndex) { _, target in
-                    guard let target else { return }
-                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                    guard let target, notesManager.notes.indices.contains(target) else { return }
+                    // Rows are keyed by note identity, so that is what
+                    // scrollTo has to be handed.
+                    withAnimation { proxy.scrollTo(notesManager.notes[target].id, anchor: .top) }
                     DispatchQueue.main.async { scrollToIndex = nil }
                 }
             }
@@ -67,6 +79,10 @@ struct NoteCard: View {
     @ObservedObject var notesManager: NotesManager
     @ObservedObject var settings: SettingsManager
     let index: Int
+    /// This card's note by identity — what drag and drop resolve through,
+    /// since `index` shifts underneath a live reorder.
+    let noteID: UUID
+    @Binding var draggingNoteID: UUID?
 
     @State private var height: CGFloat = 40
     @State private var isHovered = false
@@ -103,7 +119,34 @@ struct NoteCard: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(settings.appearance.wantsLitEdge ? 0.16 : 0.06), lineWidth: 1)
         )
+        .overlay(alignment: .topLeading) { reorderGrip }
+        .onDrop(of: [.text], delegate: NoteCardDropDelegate(
+            noteID: noteID,
+            notesManager: notesManager,
+            draggingNoteID: $draggingNoteID
+        ))
         .onHover { isHovered = $0 }
+    }
+
+    /// The grip a drag starts from.
+    ///
+    /// The card's whole body is an NSTextView that claims every mouse event
+    /// for caret placement and selection, so a drag needs a corner of its own
+    /// to start from — the presentation-side twin of `handleSpecialClick` on
+    /// the other side of that view.
+    @ViewBuilder
+    private var reorderGrip: some View {
+        if isHovered {
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.secondary)
+                .padding(8)
+                .contentShape(Rectangle())
+                .onDrag {
+                    draggingNoteID = noteID
+                    return NSItemProvider(object: noteID.uuidString as NSString)
+                }
+                .help("Drag to reorder")
+        }
     }
 
     /// Cards sit on the window's own material, so they need their own surface
@@ -112,6 +155,48 @@ struct NoteCard: View {
         Color(nsColor: .controlBackgroundColor)
             .opacity(settings.appearance == .solid ? 1.0 : 0.55)
     }
+}
+
+/// Live-reorders while a carried card passes over this one: the stack parts
+/// around the drag as it goes, and dropping commits whatever position the
+/// user already sees.
+///
+/// Both ends resolve through identity at event time. A fixed index cannot be
+/// captured when the delegate is built: the first swap shifts every position,
+/// so the second swap would land on the wrong cards.
+private struct NoteCardDropDelegate: DropDelegate {
+    let noteID: UUID
+    let notesManager: NotesManager
+    @Binding var draggingNoteID: UUID?
+
+    func dropEntered(info: DropInfo) {
+        guard let carriedID = draggingNoteID, carriedID != noteID,
+              let from = notesManager.notes.firstIndex(where: { $0.id == carriedID }),
+              let to = notesManager.notes.firstIndex(where: { $0.id == noteID })
+        else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+            notesManager.moveNote(from: from, to: to)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        !info.itemProviders(for: [.text]).isEmpty
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingNoteID = nil
+        return true
+    }
+
+    // dropExited deliberately does nothing. During a live reorder the drag
+    // exits and re-enters cards constantly as they slide out from under it;
+    // clearing the carried id there would strand the very next dropEntered.
+    // A drag abandoned outside any card leaves a stale value behind, which is
+    // harmless — onDrag overwrites it before any delegate can read it again.
 }
 
 /// A checklist-capable editor that reports the height it needs, so a card can
