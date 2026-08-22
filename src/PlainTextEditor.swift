@@ -56,7 +56,7 @@ final class SwipeScrollView: NSScrollView {
 ///
 /// The text stays plain markdown on disk. Everything here is presentation and
 /// interaction: the file never holds anything you could not read in `cat`.
-final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
+final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManagerDelegate {
     /// Guards the styling pass against re-entering itself through the text
     /// storage delegate.
     private var isStyling = false
@@ -475,6 +475,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
             return true
         }
 
+        if NSEvent.modifierFlags.contains(.command), let match = linkMatch(at: point) {
+            toggleLinkExpansion(match)
+            return true
+        }
+
         let index = characterIndexForInsertion(at: point)
         let lineRange = contentRange(forLineAt: index)
         let line = (string as NSString).substring(with: lineRange)
@@ -708,6 +713,162 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         }
     }
 
+    // MARK: - Links
+
+    /// Recomputed alongside math, on every keystroke — the note's text is
+    /// small enough that scanning it fresh each time is simpler than tracking
+    /// which lines changed, matching `recomputeMathResults`.
+    private var linkMatches: [LinkMatch] = []
+
+    /// Cmd-clicked open, keyed by the URL text itself rather than its range,
+    /// since ranges shift as you type elsewhere in the note. Session-only:
+    /// like everything else in this file, it's presentation, not something
+    /// written to disk.
+    private var expandedLinks: Set<String> = []
+
+    func recomputeLinkMatches() {
+        // Overriding an NSTextView designated initializer to wire this up
+        // once broke the plain `ChecklistTextView()` initializer every
+        // production call site relies on — Swift stops synthesizing a
+        // subclass's other inherited initializers as soon as one designated
+        // initializer is overridden. Wiring it lazily here, idempotently,
+        // sidesteps that entirely.
+        if layoutManager?.delegate !== self { layoutManager?.delegate = self }
+        guard let textStorage else { linkMatches = []; return }
+        linkMatches = LinkShrink.matches(in: textStorage.string)
+    }
+
+    /// Folds every collapsed link's scheme and path out of the glyph stream
+    /// entirely, rather than just coloring them invisible: color alone would
+    /// still reserve their full width, leaving a blank gap where the hidden
+    /// text used to be instead of actually shortening the line.
+    ///
+    /// This only sets the visible styling and forces glyphs to regenerate;
+    /// which characters actually fold away is decided in
+    /// `layoutManager(_:shouldGenerateGlyphs:...)` below, at the moment
+    /// glyphs are built. Setting `notShownAttribute` directly here instead
+    /// looked like it worked — it survives right up until the next layout
+    /// pass silently regenerates those glyphs from scratch and the flag is
+    /// gone, since nothing else tells AppKit which glyphs should stay hidden
+    /// once it decides to rebuild them.
+    func applyLinkFolding() {
+        guard let layoutManager, let textStorage else { return }
+        let ns = textStorage.string as NSString
+
+        for match in linkMatches {
+            guard match.range.location + match.range.length <= ns.length else { continue }
+            let isExpanded = expandedLinks.contains(ns.substring(with: match.range))
+
+            textStorage.addAttributes(
+                [
+                    .foregroundColor: NSColor.linkColor,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .underlineColor: NSColor.linkColor,
+                ],
+                range: isExpanded ? match.range : match.displayRange
+            )
+        }
+
+        let whole = NSRange(location: 0, length: ns.length)
+        layoutManager.invalidateGlyphs(forCharacterRange: whole, changeInLength: 0, actualCharacterRange: nil)
+        layoutManager.invalidateLayout(forCharacterRange: whole, actualCharacterRange: nil)
+    }
+
+    /// Whether `characterIndex` falls inside a currently-collapsed link's
+    /// hidden zone: the scheme and path around the domain that stays
+    /// visible. Re-derived from `linkMatches`/`expandedLinks` on every call
+    /// rather than cached, since it only runs during glyph generation, not
+    /// on every keystroke.
+    private func isCharacterFolded(_ characterIndex: Int, in text: NSString) -> Bool {
+        for match in linkMatches {
+            guard match.range.location + match.range.length <= text.length else { continue }
+            guard characterIndex >= match.range.location, characterIndex < match.range.location + match.range.length else { continue }
+            if expandedLinks.contains(text.substring(with: match.range)) { return false }
+            let displayStart = match.displayRange.location
+            let displayEnd = displayStart + match.displayRange.length
+            return characterIndex < displayStart || characterIndex >= displayEnd
+        }
+        return false
+    }
+
+    /// The hook that actually makes folding stick: called every time AppKit
+    /// (re)builds glyphs for a range, so a hidden character stays hidden
+    /// across any future invalidation, not just the moment this happened to
+    /// run once.
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+        properties: UnsafePointer<NSLayoutManager.GlyphProperty>,
+        characterIndexes: UnsafePointer<Int>,
+        font: NSFont,
+        forGlyphRange glyphRange: NSRange
+    ) -> Int {
+        guard !linkMatches.isEmpty, let textStorage else { return 0 }
+        let ns = textStorage.string as NSString
+
+        var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
+        var foldedOffsets: [Int] = []
+        for i in 0..<glyphRange.length where isCharacterFolded(characterIndexes[i], in: ns) {
+            mutableProperties[i] = .null
+            foldedOffsets.append(i)
+        }
+        guard !foldedOffsets.isEmpty else { return 0 }
+
+        layoutManager.setGlyphs(
+            glyphs,
+            properties: mutableProperties,
+            characterIndexes: characterIndexes,
+            font: font,
+            forGlyphRange: glyphRange
+        )
+        // `.null` alone marks these as glyphs with nothing to draw; it's
+        // `notShownAttribute` that actually collapses their width in layout,
+        // and it can only be set once the glyph exists — which, now that
+        // `setGlyphs` above has just created it, it does.
+        for offset in foldedOffsets {
+            layoutManager.setNotShownAttribute(true, forGlyphAt: glyphRange.location + offset)
+        }
+        return glyphRange.length
+    }
+
+    /// The match under `point`, hit-testing only the part currently on
+    /// screen: the domain while collapsed, the whole URL once expanded.
+    func linkMatch(at point: NSPoint) -> LinkMatch? {
+        guard let layoutManager, let textContainer else { return nil }
+        let ns = string as NSString
+
+        for match in linkMatches {
+            guard match.range.location + match.range.length <= ns.length else { continue }
+            let isExpanded = expandedLinks.contains(ns.substring(with: match.range))
+            let hitRange = isExpanded ? match.range : match.displayRange
+
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: hitRange, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { continue }
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            rect.origin.x += textContainerInset.width
+            rect.origin.y += textContainerInset.height
+            if rect.contains(point) { return match }
+        }
+        return nil
+    }
+
+    /// Not private, matching `handleSpecialClick`: the Cmd-click gating in
+    /// `handleSpecialClick` reads live global keyboard state, which a test
+    /// can't fake, so tests call this directly to exercise the actual
+    /// expand/collapse behaviour instead.
+    func toggleLinkExpansion(_ match: LinkMatch) {
+        let ns = string as NSString
+        guard match.range.location + match.range.length <= ns.length else { return }
+        let key = ns.substring(with: match.range)
+        if expandedLinks.contains(key) {
+            expandedLinks.remove(key)
+        } else {
+            expandedLinks.insert(key)
+        }
+        applyLinkFolding()
+        needsDisplay = true
+    }
+
     // MARK: - Styling
 
     func textStorage(
@@ -722,6 +883,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         // the extent of, so restyle the whole note when that mode is on.
         applyChecklistStyling(in: stylesFirstLineAsTitle ? nil : editedRange)
         recomputeMathResults()
+        recomputeLinkMatches()
+        // Deferred like `applyListModeIfNeeded`: folding forces glyph
+        // generation, and the text storage is still inside its own
+        // beginEditing/endEditing bracket here — AppKit raises
+        // NSInternalInconsistencyException if glyph generation is forced
+        // before that bracket closes.
+        DispatchQueue.main.async { [weak self] in self?.applyLinkFolding() }
         needsDisplay = true
     }
 
@@ -895,6 +1063,8 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.string = text
         textView.applyChecklistStyling()
         textView.recomputeMathResults()
+        textView.recomputeLinkMatches()
+        textView.applyLinkFolding()
 
         scrollView.documentView = textView
         return scrollView
@@ -928,6 +1098,8 @@ struct PlainTextEditor: NSViewRepresentable {
             let length = (text as NSString).length
             textView.setSelectedRange(NSRange(location: min(caret, length), length: 0))
             textView.applyChecklistStyling()
+            textView.recomputeLinkMatches()
+            textView.applyLinkFolding()
         }
 
         // Runs after the text-diff block above, so a jump into a different

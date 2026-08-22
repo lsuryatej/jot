@@ -89,6 +89,7 @@ what you get for free with Jot versus what they charge for.
 | Screenshot to text (OCR) | Yes, offline | Yes | No | No |
 | Display modes | 5: floating, dock, menu bar, dropdown, screen edge | Menu bar only | Window | Window |
 | Search across all notes | Yes | Yes | N/A | Yes |
+| Long links collapse to their domain | Yes | Yes | N/A | N/A |
 | Sync across devices | No | iCloud (2.0+), iOS app in progress | iCloud, paid tier | iCloud, iOS/iPad apps |
 | Scripting / themes | No | Yes, JS extensions + themes | No | CLI, URL schemes, Automator |
 | Apple Notes sync | Yes, opt-in, one-way | No | No | No |
@@ -96,10 +97,10 @@ what you get for free with Jot versus what they charge for.
 | Source | Open, MIT | Closed | Core open, paid features closed | Closed |
 
 Jot doesn't beat any of these on every axis. Against Antinote specifically:
-no sync across devices, no link shrink yet, no scripting or theming, no
-AutoPaste. Antinote is also a mature, several-year-old product; Jot is new.
-What Jot gives you instead is free and open source, inline resizable images,
-five display modes instead of menu-bar-only, search across every note, and
+no sync across devices, no scripting or theming, no AutoPaste. Antinote is
+also a mature, several-year-old product; Jot is new. What Jot gives you
+instead is free and open source, inline resizable images, five display modes
+instead of menu-bar-only, search across every note, link shrink, and
 an explicit zero-telemetry stance with both network-facing features off or
 opt-in rather than bundled into iCloud.
 
@@ -163,6 +164,13 @@ note with a picture in it is still something you can read in `cat`.
 Apple's Vision framework and inserts the text it finds. Fully offline, on the
 Neural Engine, no cloud OCR service involved.
 
+**Link shrink.** A long URL collapses to just its domain, `example.com`
+instead of the full `https://www.example.com/some/very/long/path?query=1`.
+Cmd-click the domain to expand it back to the full link, Cmd-click again to
+collapse it. The file on disk always has the whole URL; only the display
+folds it away, so exporting or reading the note in `cat` shows every
+character you typed.
+
 **Search, counts, and totals.** Cmd+F opens the real macOS find bar with
 match highlighting. Cmd+Shift+F searches every note at once instead of just
 the open one, jumping straight to the matching line. A footer shows live
@@ -204,6 +212,7 @@ glass if that's what you want.
 | **Tab** / **Shift+Tab** | Nest or un-nest a checklist item |
 | Two-finger swipe | Move between notes (single-note display modes) |
 | Drag an image's edge | Resize it in place |
+| Cmd-click a shrunk link | Expand it to the full URL, click again to collapse |
 
 Cut/Copy/Paste/Select All/Undo/Redo are the standard Cmd+X/C/V/A/Z/Shift+Cmd+Z
 you'd expect anywhere on macOS.
@@ -267,6 +276,7 @@ apply at all, a normal Xcode install should just work.
 | `src/Note.swift` | The note model and its stable identity |
 | `src/GlobalSearch.swift` | Cross-note search, matching every note's text directly |
 | `src/GlobalSearchView.swift` | The Cmd+Shift+F overlay |
+| `src/LinkShrink.swift` | Finds long URLs and the domain worth keeping visible |
 | `src/Attachments.swift` | Inline image storage and markdown references |
 | `src/TextRecognition.swift` | Vision-backed screenshot to text |
 | `src/AppleNotesSync.swift` | One-way push into Apple Notes |
@@ -281,10 +291,10 @@ apply at all, a normal Xcode install should just work.
 | `install.sh` | The curl-installable install path |
 
 `NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `GlobalSearch`,
-and `Attachments` are deliberately free of SwiftUI and AppKit, so every rule
-in them is covered by a dependency-free test. `./test.sh` runs 229 checks
-total, that plus a UI-layer slice against real `NSTextView` instances, in a
-few seconds.
+`LinkShrink`, and `Attachments` are deliberately free of SwiftUI and AppKit,
+so every rule in them is covered by a dependency-free test. `./test.sh` runs
+246 checks total, that plus a UI-layer slice against real `NSTextView`
+instances, in a few seconds.
 
 `Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes
 and rebuilds the bundle every run, so a stale binary or signature can't
@@ -299,7 +309,6 @@ under `com.suryatejlalam.Jot`.
 
 ## Not done yet
 
-- No URL shortening/elision for long links yet.
 - Notes can't be reordered.
 - No sync across devices.
 - Apple Notes sync is one-way, nothing written there is read back.

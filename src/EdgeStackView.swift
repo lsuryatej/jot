@@ -157,6 +157,8 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.string = text
         textView.applyChecklistStyling()
         textView.recomputeMathResults()
+        textView.recomputeLinkMatches()
+        textView.applyLinkFolding()
 
         return textView
     }
@@ -174,6 +176,8 @@ struct NoteCardEditor: NSViewRepresentable {
             textView.string = text
             textView.applyChecklistStyling()
             textView.recomputeMathResults()
+            textView.recomputeLinkMatches()
+            textView.applyLinkFolding()
             textView.needsDisplay = true
         }
         textView.reportHeight()

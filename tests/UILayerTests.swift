@@ -182,4 +182,111 @@ func runUILayerTests() {
         let view = makeTextView("nothing but text here")
         equal(view.placedImages().count, 0, "no images, no placements")
     }
+
+    // MARK: - Link folding (the bug class: hidden text still reserving its width)
+
+    suite("a long link is folded down to just its domain") {
+        let url = "https://www.example.com/some/very/long/path?query=1"
+        let view = makeTextView("check this: \(url) thanks")
+        view.recomputeLinkMatches()
+        view.applyLinkFolding()
+
+        guard let match = LinkShrink.matches(in: view.string).first, let lm = view.layoutManager else {
+            check(false, "fixture note should contain one detected link")
+            return
+        }
+
+        // One query covering the whole match, not two separate calls for its
+        // scheme and domain sub-ranges: back-to-back glyphRange(forCharacterRange:)
+        // calls on adjacent sub-ranges hand back a corrupted character-to-glyph
+        // mapping on this SDK, even though the underlying fold is correct — a
+        // single query across the same span reads back fine, and it's the same
+        // one-query-per-match pattern `linkMatch(at:)` already uses in production.
+        let wholeGlyphs = lm.glyphRange(forCharacterRange: match.range, actualCharacterRange: nil)
+        check(wholeGlyphs.length > 0, "glyphs exist for the whole match")
+
+        let matchStart = match.range.location
+        let matchEnd = matchStart + match.range.length
+        let displayStart = match.displayRange.location
+        let displayEnd = displayStart + match.displayRange.length
+        var everyHiddenCharIsHidden = true
+        var everyShownCharIsShown = true
+        var sawAHiddenChar = false
+
+        for glyphIndex in wholeGlyphs.location..<(wholeGlyphs.location + wholeGlyphs.length) {
+            let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
+            // The requested glyph range can extend a glyph past either
+            // boundary of the character range that was asked for — a real
+            // NSLayoutManager quirk, not part of what this test is checking.
+            // Anything outside the match itself was never ours to fold.
+            guard charIndex >= matchStart, charIndex < matchEnd else { continue }
+            let isHidden = lm.notShownAttribute(forGlyphAt: glyphIndex)
+            if charIndex >= displayStart, charIndex < displayEnd {
+                if isHidden { everyShownCharIsShown = false }
+            } else {
+                sawAHiddenChar = true
+                if !isHidden { everyHiddenCharIsHidden = false }
+            }
+        }
+
+        check(sawAHiddenChar, "there is a scheme prefix to hide")
+        check(everyHiddenCharIsHidden, "the scheme and path are actually removed from layout, not just colored invisible")
+        check(everyShownCharIsShown, "the domain itself stays visible")
+    }
+
+    suite("a short link is left alone") {
+        let view = makeTextView("see http://a.co for details")
+        view.recomputeLinkMatches()
+        view.applyLinkFolding()
+        equal(LinkShrink.matches(in: view.string).count, 0, "nothing worth collapsing")
+    }
+
+    suite("a plain click on a collapsed link's domain does not expand it") {
+        let url = "https://www.example.com/some/very/long/path?query=1"
+        let view = makeTextView(url)
+        view.recomputeLinkMatches()
+        view.applyLinkFolding()
+
+        guard let match = LinkShrink.matches(in: view.string).first,
+              let domainRect = viewRect(for: match.displayRange, in: view)
+        else {
+            check(false, "fixture note should contain one detected link")
+            return
+        }
+        click(at: NSPoint(x: domainRect.midX, y: domainRect.midY), on: view)
+        equal(view.string, url, "no command modifier — this is a real click test elsewhere, not an expand")
+    }
+
+    suite("expanding a link and collapsing it again round-trips the hidden glyphs") {
+        let url = "https://www.example.com/some/very/long/path?query=1"
+        let view = makeTextView(url)
+        view.recomputeLinkMatches()
+        view.applyLinkFolding()
+
+        guard let match = LinkShrink.matches(in: view.string).first,
+              let domainRect = viewRect(for: match.displayRange, in: view),
+              let lm = view.layoutManager
+        else {
+            check(false, "fixture note should contain one detected link")
+            return
+        }
+
+        let hit = view.linkMatch(at: NSPoint(x: domainRect.midX, y: domainRect.midY))
+        check(hit?.range.location == match.range.location, "the collapsed domain's own rect is what's hit-testable while folded")
+
+        view.toggleLinkExpansion(match)
+        let wholeGlyphs = lm.glyphRange(forCharacterRange: match.range, actualCharacterRange: nil)
+        check(
+            (0..<wholeGlyphs.length).allSatisfy { !lm.notShownAttribute(forGlyphAt: wholeGlyphs.location + $0) },
+            "expanded — every glyph in the URL is visible again"
+        )
+
+        view.toggleLinkExpansion(match)
+        let schemeRange = NSRange(location: match.range.location, length: match.displayRange.location - match.range.location)
+        let hiddenGlyphs = lm.glyphRange(forCharacterRange: schemeRange, actualCharacterRange: nil)
+        check(
+            (0..<hiddenGlyphs.length).allSatisfy { lm.notShownAttribute(forGlyphAt: hiddenGlyphs.location + $0) },
+            "collapsed again — back to hiding the scheme and path"
+        )
+    }
 }

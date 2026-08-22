@@ -810,4 +810,39 @@ func runAllTests() {
         let hits = GlobalSearch.find("e", in: [longNote])
         equal(hits.count, GlobalSearch.resultLimit, "stops at the cap instead of scanning the whole thing")
     }
+
+    // MARK: - Link shrink
+
+    suite("a long URL is collapsed to its bare domain") {
+        let text = "check this: https://www.example.com/some/very/long/path?query=1 thanks"
+        let matches = LinkShrink.matches(in: text)
+        check(matches.count == 1, "one link found")
+        if let match = matches.first {
+            let ns = text as NSString
+            equal(ns.substring(with: match.range), "https://www.example.com/some/very/long/path?query=1", "the whole URL")
+            equal(ns.substring(with: match.displayRange), "example.com", "www. is stripped along with the scheme")
+        }
+    }
+
+    suite("a short link is not worth collapsing") {
+        equal(LinkShrink.matches(in: "see http://a.co for details").count, 0, "too little would be hidden")
+    }
+
+    suite("plain text with no URL yields nothing") {
+        equal(LinkShrink.matches(in: "just some notes, nothing to see here").count, 0, "no links, no matches")
+    }
+
+    suite("a host with no www. prefix is shown as-is") {
+        let text = "docs at https://developer.apple.com/documentation/appkit/nstextview"
+        let matches = LinkShrink.matches(in: text)
+        check(matches.count == 1, "one link found")
+        if let match = matches.first {
+            equal((text as NSString).substring(with: match.displayRange), "developer.apple.com", "no www. to strip, host shown whole")
+        }
+    }
+
+    suite("multiple links in one note are all found") {
+        let text = "https://www.example.com/one/two/three and https://www.another-example.org/four/five/six"
+        equal(LinkShrink.matches(in: text).count, 2, "both links found")
+    }
 }
