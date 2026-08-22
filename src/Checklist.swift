@@ -115,6 +115,46 @@ enum Checklist {
         return lines.joined(separator: "\n") + (hadTrailingNewline ? "\n" : "")
     }
 
+    // MARK: - List mode
+
+    /// A note whose first line is just the keyword behaves as a checklist:
+    /// everything below it becomes an item, and Return keeps making more.
+    ///
+    /// The match is against the whole first line, so "listen to the podcast"
+    /// is an ordinary note and only a bare "list" switches the mode on.
+    static func isListMode(_ text: String, keyword: String) -> Bool {
+        let keyword = keyword.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !keyword.isEmpty else { return false }
+
+        let firstLine = text
+            .components(separatedBy: "\n")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        return firstLine == keyword
+    }
+
+    /// Turns every line below the keyword into an item, leaving ones that
+    /// already are alone.
+    static func convertedToList(_ text: String, keyword: String) -> String {
+        guard isListMode(text, keyword: keyword) else { return text }
+
+        var lines = text.components(separatedBy: "\n")
+        for index in lines.indices.dropFirst() {
+            let line = lines[index]
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            guard item(in: line) == nil else { continue }
+            let indent = leadingWhitespace(of: line)
+            lines[index] = render(indent: indent, isChecked: false, body: String(line.dropFirst(indent.count)))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The text a fresh, empty item is made of.
+    static func emptyItem(indent: String = "") -> String {
+        render(indent: indent, isChecked: false, body: "")
+    }
+
     // MARK: - Return key
 
     /// nil means "let the text view insert an ordinary newline".

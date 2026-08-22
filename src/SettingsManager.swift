@@ -133,6 +133,7 @@ final class SettingsManager: ObservableObject {
         static let lineSpacing    = "lineSpacing"
         static let windowFrame    = "windowFrame"
         static let syncsToNotes   = "syncsToAppleNotes"
+        static let listKeyword    = "listKeyword"
     }
 
     private let defaults: UserDefaults
@@ -175,6 +176,19 @@ final class SettingsManager: ObservableObject {
     /// Line height multiple for the editor.
     @Published var lineSpacing: Double {
         didSet { defaults.set(lineSpacing, forKey: Key.lineSpacing) }
+    }
+
+    /// A bare keyword on the first line turns the note into a checklist.
+    @Published var listKeyword: String {
+        didSet {
+            let trimmed = listKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed.isEmpty ? "list" : trimmed, forKey: Key.listKeyword)
+        }
+    }
+
+    var effectiveListKeyword: String {
+        let trimmed = listKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "list" : trimmed
     }
 
     /// Push notes into an Apple Notes folder as they are saved.
@@ -236,6 +250,7 @@ final class SettingsManager: ObservableObject {
         self.lineSpacing = defaults.object(forKey: Key.lineSpacing) as? Double ?? 1.0
 
         self.syncsToAppleNotes = defaults.object(forKey: Key.syncsToNotes) as? Bool ?? false
+        self.listKeyword = defaults.string(forKey: Key.listKeyword) ?? "list"
 
         let rawEdge = defaults.string(forKey: Key.screenEdge) ?? ScreenEdge.right.rawValue
         self.screenEdge = ScreenEdge(rawValue: rawEdge) ?? .right

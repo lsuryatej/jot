@@ -74,6 +74,7 @@ struct ContentView: View {
     private var editor: some View {
         PlainTextEditor(
             lineHeightMultiple: settings.lineSpacing,
+            listKeyword: settings.effectiveListKeyword,
             topInset: settings.showsHeader ? 12 : 38,
             text: Binding(
                 get: { notesManager.currentText },

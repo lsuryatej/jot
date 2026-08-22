@@ -97,6 +97,19 @@ struct PreferencesView: View {
 
             Divider()
 
+            section("List keyword") {
+                HStack(spacing: 12) {
+                    TextField("list", text: $settings.listKeyword)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 160)
+                    Text("First line \"\(settings.effectiveListKeyword)\" makes the note a checklist")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+
             section("Timer keyword") {
                 HStack(spacing: 12) {
                     TextField("timer", text: $settings.timerKeyword)
@@ -121,7 +134,7 @@ struct PreferencesView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 480, height: 730, alignment: .topLeading)
+        .frame(width: 480, height: 810, alignment: .topLeading)
     }
 
     private func section<Content: View>(

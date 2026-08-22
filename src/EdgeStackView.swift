@@ -68,6 +68,7 @@ struct NoteCard: View {
                     set: { notesManager.setText($0, at: index) }
                 ),
                 lineHeightMultiple: settings.lineSpacing,
+                listKeyword: settings.effectiveListKeyword,
                 onHeightChange: { height = $0 }
             )
             .frame(height: height)
@@ -107,6 +108,7 @@ struct NoteCard: View {
 struct NoteCardEditor: NSViewRepresentable {
     @Binding var text: String
     var lineHeightMultiple: Double
+    var listKeyword: String
     var onHeightChange: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -136,6 +138,7 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
 
         textView.stylesFirstLineAsTitle = true
+        textView.listKeyword = listKeyword
         textView.lineHeightMultiple = lineHeightMultiple
         textView.onHeightChange = onHeightChange
         textView.textStorage?.delegate = textView
@@ -150,6 +153,7 @@ struct NoteCardEditor: NSViewRepresentable {
         context.coordinator.parent = self
         textView.onHeightChange = onHeightChange
 
+        textView.listKeyword = listKeyword
         if textView.lineHeightMultiple != lineHeightMultiple {
             textView.lineHeightMultiple = lineHeightMultiple
             textView.applyChecklistStyling()

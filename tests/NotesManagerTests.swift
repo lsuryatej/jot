@@ -320,6 +320,45 @@ func runAllTests() {
         equal(Note(text: "   ").title, "Untitled note", "blank note has a fallback title")
     }
 
+    suite("a bare keyword on the first line turns the note into a list") {
+        check(Checklist.isListMode("list", keyword: "list"), "exactly the keyword")
+        check(Checklist.isListMode("List\nmilk", keyword: "list"), "case-insensitive")
+        check(Checklist.isListMode("  list  \nmilk", keyword: "list"), "surrounding space ignored")
+        check(!Checklist.isListMode("listen to the podcast", keyword: "list"),
+              "a word that merely starts with the keyword is an ordinary note")
+        check(!Checklist.isListMode("groceries\nlist", keyword: "list"),
+              "the keyword only counts on the first line")
+        check(!Checklist.isListMode("", keyword: "list"), "empty note")
+    }
+
+    suite("switching to list mode converts what is already there") {
+        equal(
+            Checklist.convertedToList("list\nmilk\neggs", keyword: "list"),
+            "list\n- [ ] milk\n- [ ] eggs",
+            "plain lines become items"
+        )
+        equal(
+            Checklist.convertedToList("list\n- [x] milk\neggs", keyword: "list"),
+            "list\n- [x] milk\n- [ ] eggs",
+            "existing items keep their state"
+        )
+        equal(
+            Checklist.convertedToList("list\nmilk\n\neggs", keyword: "list"),
+            "list\n- [ ] milk\n\n- [ ] eggs",
+            "blank lines are left alone"
+        )
+        equal(
+            Checklist.convertedToList("list\n    nested", keyword: "list"),
+            "list\n    - [ ] nested",
+            "indentation preserved"
+        )
+        equal(
+            Checklist.convertedToList("groceries\nmilk", keyword: "list"),
+            "groceries\nmilk",
+            "a note not in list mode is untouched"
+        )
+    }
+
     // MARK: - Inline images
 
     suite("image references parse out of a line") {

@@ -64,6 +64,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         didSet { defaultParagraphStyle = paragraphStyle }
     }
 
+    /// A bare keyword on the first line puts the note in checklist mode.
+    var listKeyword: String = "list"
+
+    /// Whether the note was in list mode at the last edit, so the switch can be
+    /// noticed and the existing body converted once.
+    private var wasListMode = false
+
     /// Renders the first line larger and bolder, so a note reads as a titled
     /// card without the title being a separate field. The text stays plain.
     var stylesFirstLineAsTitle = false
@@ -199,6 +206,38 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         return super.validateUserInterfaceItem(item)
     }
 
+    // MARK: - List mode
+
+    var isListMode: Bool {
+        Checklist.isListMode(string, keyword: listKeyword)
+    }
+
+    /// Converts the body the moment the keyword appears, and only then.
+    ///
+    /// Done on the transition rather than continuously: converting on every
+    /// keystroke would turn a half-typed word into an item under the cursor.
+    private func applyListModeIfNeeded() {
+        let nowListMode = isListMode
+        defer { wasListMode = nowListMode }
+        guard nowListMode, !wasListMode else { return }
+
+        let converted = Checklist.convertedToList(string, keyword: listKeyword)
+        guard converted != string else { return }
+
+        let caret = selectedRange()
+        let whole = NSRange(location: 0, length: (string as NSString).length)
+        // Deferred: the text storage is mid-edit when this is called.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let shift = (converted as NSString).length - whole.length
+            self.replace(
+                range: NSRange(location: 0, length: (self.string as NSString).length),
+                with: converted,
+                selecting: NSRange(location: max(0, caret.location + max(0, shift)), length: 0)
+            )
+        }
+    }
+
     // MARK: - Return
 
     override func insertNewline(_ sender: Any?) {
@@ -210,6 +249,31 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
         let lineRange = contentRange(forLineAt: selection.location)
         let line = (string as NSString).substring(with: lineRange)
+
+        // In list mode a plain line becomes an item as soon as you leave it,
+        // so the whole note stays a list without any markers being typed.
+        if isListMode,
+           lineRange.location > 0,
+           Checklist.item(in: line) == nil,
+           !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            let indent = Checklist.leadingWhitespace(of: line)
+            let converted = Checklist.render(
+                indent: indent,
+                isChecked: false,
+                body: String(line.dropFirst(indent.count))
+            )
+            // One edit, so one undo step covers both halves.
+            let replacement = converted + "\n" + Checklist.emptyItem(indent: indent)
+            replace(
+                range: lineRange,
+                with: replacement,
+                selecting: NSRange(
+                    location: lineRange.location + (replacement as NSString).length,
+                    length: 0
+                )
+            )
+            return
+        }
 
         guard let outcome = Checklist.newline(inLine: line) else {
             super.insertNewline(sender)
@@ -395,27 +459,43 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
     // MARK: - Caret
 
-    /// Draws the caret at the height of the text, not the height of the line.
+    /// Draws the caret on the text's own baseline, at the text's height.
     ///
-    /// The line box is as tall as the line spacing setting makes it, and on an
-    /// image line it is as tall as the image. Letting the caret fill that made
-    /// it a full-height bar next to normal-sized text.
+    /// The line box is as tall as the line-spacing setting makes it, and on an
+    /// image line as tall as the image. Centring the caret in that box was not
+    /// enough: extra leading is not distributed evenly, so the caret floated
+    /// above the glyphs like a superscript. Anchoring to the real baseline from
+    /// the layout manager puts it where the text actually sits.
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         super.drawInsertionPoint(in: caretRect(from: rect), color: color, turnedOn: flag)
     }
 
-    override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
-        // The invalidated area has to cover wherever the caret was last drawn,
-        // or shrinking it leaves smears behind as it blinks.
-        super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
-    }
-
     private func caretRect(from rect: NSRect) -> NSRect {
+        let ascender = ceil(baseFont.ascender)
         let textHeight = ceil(baseFont.ascender - baseFont.descender)
-        guard rect.height > textHeight else { return rect }
+        guard rect.height > textHeight + 0.5 else { return rect }
+
         var caret = rect
-        caret.origin.y += (rect.height - textHeight) / 2
         caret.size.height = textHeight
+
+        guard let layoutManager,
+              let textStorage,
+              textStorage.length > 0
+        else {
+            // Empty note: nothing has been laid out, so sit on the bottom of
+            // the box, which is where the first glyph will land.
+            caret.origin.y = rect.maxY - textHeight
+            return caret
+        }
+
+        let characterIndex = min(max(0, selectedRange().location), textStorage.length - 1)
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: characterIndex)
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let baseline = fragment.minY
+            + layoutManager.location(forGlyphAt: glyphIndex).y
+            + textContainerInset.height
+
+        caret.origin.y = baseline - ascender
         return caret
     }
 
@@ -545,6 +625,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         changeInLength delta: Int
     ) {
         guard !isStyling, editedMask.contains(.editedCharacters) else { return }
+        applyListModeIfNeeded()
         // Title styling spans the first line, which an edit anywhere can change
         // the extent of, so restyle the whole note when that mode is on.
         applyChecklistStyling(in: stylesFirstLineAsTitle ? nil : editedRange)
@@ -571,6 +652,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
             ],
             range: target
         )
+
+        if Checklist.isListMode(ns as String, keyword: listKeyword), ns.length > 0 {
+            let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
+            let marker = NSIntersectionRange(firstLine, target)
+            if marker.length > 0 {
+                textStorage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: marker)
+            }
+        }
 
         if stylesFirstLineAsTitle, ns.length > 0 {
             let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
@@ -650,6 +739,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 /// which made per-line checklist toggling and swipe navigation impossible.
 struct PlainTextEditor: NSViewRepresentable {
     var lineHeightMultiple: Double = 1.0
+    var listKeyword: String = "list"
     /// Extra room at the top when the header bar is hidden, so the first line
     /// clears the traffic lights instead of tucking under them.
     var topInset: CGFloat = 12
@@ -701,6 +791,7 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
 
         textView.lineHeightMultiple = lineHeightMultiple
+        textView.listKeyword = listKeyword
         textView.textStorage?.delegate = textView
         textView.enableImageDrops()
         textView.string = text
@@ -718,6 +809,10 @@ struct PlainTextEditor: NSViewRepresentable {
 
         if textView.textContainerInset.height != topInset {
             textView.textContainerInset = NSSize(width: 20, height: topInset)
+        }
+
+        if textView.listKeyword != listKeyword {
+            textView.listKeyword = listKeyword
         }
 
         if textView.lineHeightMultiple != lineHeightMultiple {
