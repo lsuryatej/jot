@@ -7,11 +7,16 @@ import AppKit
 /// those through the responder chain from the menu, not on its own. The Find
 /// items are what give in-note search its native find bar.
 enum MainMenu {
-    static func build(target: AnyObject, preferencesAction: Selector, newNoteAction: Selector) -> NSMenu {
+    static func build(
+        target: AnyObject,
+        preferencesAction: Selector,
+        newNoteAction: Selector,
+        globalSearchAction: Selector
+    ) -> NSMenu {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem(target: target, preferencesAction: preferencesAction))
         mainMenu.addItem(fileMenuItem(target: target, newNoteAction: newNoteAction))
-        mainMenu.addItem(editMenuItem())
+        mainMenu.addItem(editMenuItem(target: target, globalSearchAction: globalSearchAction))
         mainMenu.addItem(formatMenuItem())
         return mainMenu
     }
@@ -104,7 +109,7 @@ enum MainMenu {
         return item
     }
 
-    private static func editMenuItem() -> NSMenuItem {
+    private static func editMenuItem(target: AnyObject, globalSearchAction: Selector) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Edit")
 
@@ -122,14 +127,16 @@ enum MainMenu {
         menu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
         menu.addItem(.separator())
-        menu.addItem(findMenuItem())
+        menu.addItem(findMenuItem(target: target, globalSearchAction: globalSearchAction))
 
         item.submenu = menu
         return item
     }
 
-    private static func findMenuItem() -> NSMenuItem {
-        let item = NSMenuItem()
+    private static func findMenuItem(target: AnyObject, globalSearchAction: Selector) -> NSMenuItem {
+        // Unlike a menu-bar-level item, a nested item does not inherit its
+        // submenu's title automatically — without this the row was blank.
+        let item = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
         let menu = NSMenu(title: "Find")
 
         // NSTextView reads the action off the menu item's tag.
@@ -149,6 +156,12 @@ enum MainMenu {
         menu.addItem(finderItem("Find Next", .nextMatch, "g"))
         menu.addItem(finderItem("Find Previous", .previousMatch, "g", [.command, .shift]))
         menu.addItem(finderItem("Use Selection for Find", .setSearchString, "e"))
+
+        menu.addItem(.separator())
+        let globalSearch = NSMenuItem(title: "Search All Notes…", action: globalSearchAction, keyEquivalent: "f")
+        globalSearch.keyEquivalentModifierMask = [.command, .shift]
+        globalSearch.target = target
+        menu.addItem(globalSearch)
 
         item.submenu = menu
         return item

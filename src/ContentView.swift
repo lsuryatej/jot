@@ -8,6 +8,13 @@ struct ContentView: View {
 
     @State private var selectedRange = NSRange(location: 0, length: 0)
     @State private var timeRemaining: String = ""
+    /// Set when a global search result lands in the single-note editor; reset
+    /// to nil by PlainTextEditor once it's scrolled/selected the match.
+    @State private var scrollTarget: NSRange?
+    /// Set when a result lands while docked to an edge, where every note is
+    /// already visible and there's a card to scroll to instead of a range.
+    @State private var edgeScrollIndex: Int?
+    @State private var showingGlobalSearch = false
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -16,7 +23,7 @@ struct ContentView: View {
             if settings.displayMode.isEdgeDocked {
                 // Docked to an edge there is room for every note at once, so
                 // the stack replaces swipe navigation entirely.
-                EdgeStackView(notesManager: notesManager, settings: settings)
+                EdgeStackView(notesManager: notesManager, settings: settings, scrollToIndex: $edgeScrollIndex)
             } else {
                 VStack(spacing: 0) {
                     if settings.showsHeader {
@@ -32,9 +39,32 @@ struct ContentView: View {
             if notesManager.activeTimerEnd != nil {
                 timerOverlay
             }
+
+            if showingGlobalSearch {
+                GlobalSearchView(notesManager: notesManager, isPresented: $showingGlobalSearch) { result in
+                    jumpTo(result)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .background(backdrop)
         .overlay(litEdge)
+        .onReceive(NotificationCenter.default.publisher(for: .jotRequestGlobalSearch)) { _ in
+            showingGlobalSearch.toggle()
+        }
+    }
+
+    // MARK: - Global search
+
+    private func jumpTo(_ result: GlobalSearchResult) {
+        if settings.displayMode.isEdgeDocked {
+            edgeScrollIndex = result.noteIndex
+            return
+        }
+        if notesManager.currentIndex != result.noteIndex {
+            notesManager.currentIndex = result.noteIndex
+        }
+        scrollTarget = result.matchRange
     }
 
     // MARK: - Surface
@@ -81,6 +111,7 @@ struct ContentView: View {
                 set: { notesManager.currentText = $0 }
             ),
             selectedRange: $selectedRange,
+            scrollTarget: $scrollTarget,
             onSwipe: { direction in
                 switch direction {
                 case .right: notesManager.previousNote()

@@ -11,6 +11,10 @@ extension Notification.Name {
     /// Posted by the text view's Cmd+N handling; observed by AppDelegate,
     /// which is the one place that knows how to reveal/focus correctly.
     static let jotRequestNewNote = Notification.Name("JotRequestNewNote")
+    /// Posted by the text view's Cmd+Shift+F handling and by the Find menu's
+    /// "Search All Notes" item; observed by ContentView, which owns the
+    /// overlay's visibility state.
+    static let jotRequestGlobalSearch = Notification.Name("JotRequestGlobalSearch")
 }
 
 struct PreferencesView: View {

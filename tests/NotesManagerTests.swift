@@ -768,4 +768,46 @@ func runAllTests() {
         let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
         equal(store.load().map(\.text), [""], "falls back cleanly")
     }
+
+    // MARK: - Global search
+
+    suite("global search finds matches across every note") {
+        let notes = [
+            Note(text: "Trip to Goa\nbudget = 45000"),
+            Note(text: "grocery list\neggs\nmilk"),
+            Note(text: "budget for the server upgrade\nnew_ssd = 145 usd to inr")
+        ]
+
+        let hits = GlobalSearch.find("budget", in: notes)
+        equal(hits.map(\.noteIndex), [0, 2], "matches in note 0 and note 2, not note 1")
+        equal(hits.map(\.lineNumber), [2, 1], "line number within each note")
+        equal(hits.first?.snippet, "budget = 45000", "snippet is the whole matching line, trimmed")
+
+        equal(GlobalSearch.find("BUDGET", in: notes).count, 2, "case-insensitive")
+        equal(GlobalSearch.find("", in: notes), [], "empty query returns nothing")
+        equal(GlobalSearch.find("   ", in: notes), [], "whitespace-only query returns nothing")
+        equal(GlobalSearch.find("nonexistent", in: notes), [], "no matches, no results")
+    }
+
+    suite("global search finds every occurrence within one note, not just the first") {
+        let notes = [Note(text: "cat\ndog\ncat\ncat")]
+        let hits = GlobalSearch.find("cat", in: notes)
+        equal(hits.map(\.lineNumber), [1, 3, 4], "all three lines, in order")
+    }
+
+    suite("global search match range points at the exact substring") {
+        let notes = [Note(text: "line one\nfind THIS word\nline three")]
+        let hits = GlobalSearch.find("this", in: notes)
+        check(hits.count == 1, "one match")
+        if let hit = hits.first {
+            let ns = notes[0].text as NSString
+            equal(ns.substring(with: hit.matchRange), "THIS", "range covers the actual cased text, not the lowercase query")
+        }
+    }
+
+    suite("global search result count is capped") {
+        let longNote = Note(text: Array(repeating: "e", count: GlobalSearch.resultLimit + 50).joined(separator: "\n"))
+        let hits = GlobalSearch.find("e", in: [longNote])
+        equal(hits.count, GlobalSearch.resultLimit, "stops at the cap instead of scanning the whole thing")
+    }
 }

@@ -9,22 +9,33 @@ import AppKit
 struct EdgeStackView: View {
     @ObservedObject var notesManager: NotesManager
     @ObservedObject var settings: SettingsManager
+    /// Set by global search to bring a card into view. Every note is already
+    /// on screen here, so there's nothing to switch to, just scroll to.
+    @Binding var scrollToIndex: Int?
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(Array(notesManager.notes.indices), id: \.self) { index in
-                        NoteCard(
-                            notesManager: notesManager,
-                            settings: settings,
-                            index: index
-                        )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(Array(notesManager.notes.indices), id: \.self) { index in
+                            NoteCard(
+                                notesManager: notesManager,
+                                settings: settings,
+                                index: index
+                            )
+                            .id(index)
+                        }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 10)
+                .onChange(of: scrollToIndex) { _, target in
+                    guard let target else { return }
+                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                    DispatchQueue.main.async { scrollToIndex = nil }
+                }
             }
         }
     }

@@ -39,7 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.scheduleAppleNotesSync(notes)
         }
 
-        NSApp.mainMenu = MainMenu.build(target: self, preferencesAction: #selector(showPreferences), newNoteAction: #selector(newNoteFromMenu))
+        NSApp.mainMenu = MainMenu.build(
+            target: self,
+            preferencesAction: #selector(showPreferences),
+            newNoteAction: #selector(newNoteFromMenu),
+            globalSearchAction: #selector(requestGlobalSearch)
+        )
 
         panel = FloatingPanel(rootView: contentView())
         panel.delegate = self
@@ -508,6 +513,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             showInterface()
         }
+    }
+
+    /// Cmd+Shift+F, from the menu. The text view handles the same shortcut
+    /// directly too (see PlainTextEditor.performKeyEquivalent), since the
+    /// menu isn't reliably consulted for key equivalents outside Dock mode.
+    /// Both paths post the same notification; ContentView owns the overlay.
+    @objc private func requestGlobalSearch() {
+        if !isInterfaceVisible {
+            showInterface()
+        }
+        NotificationCenter.default.post(name: .jotRequestGlobalSearch, object: nil)
     }
 
     @objc func showPreferences() {

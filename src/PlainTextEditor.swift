@@ -209,6 +209,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
             NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
             return true
         }
+        if flags == [.command, .shift], key == "f" {
+            NotificationCenter.default.post(name: .jotRequestGlobalSearch, object: nil)
+            return true
+        }
         return super.performKeyEquivalent(with: event)
     }
 
@@ -835,6 +839,10 @@ struct PlainTextEditor: NSViewRepresentable {
     var topInset: CGFloat = 12
     @Binding var text: String
     @Binding var selectedRange: NSRange
+    /// Set by global search to jump to a specific match. Consumed and reset
+    /// to nil in `updateNSView` once applied, so it fires exactly once per
+    /// selection rather than re-scrolling on every unrelated update.
+    @Binding var scrollTarget: NSRange?
     var onSwipe: (SwipeDirection) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -920,6 +928,23 @@ struct PlainTextEditor: NSViewRepresentable {
             let length = (text as NSString).length
             textView.setSelectedRange(NSRange(location: min(caret, length), length: 0))
             textView.applyChecklistStyling()
+        }
+
+        // Runs after the text-diff block above, so a jump into a different
+        // note lands against that note's already-current string rather than
+        // the one it's replacing.
+        if let target = scrollTarget {
+            let length = (textView.string as NSString).length
+            if target.location != NSNotFound, target.location <= length {
+                let safeRange = NSRange(
+                    location: target.location,
+                    length: min(target.length, length - target.location)
+                )
+                textView.scrollRangeToVisible(safeRange)
+                textView.setSelectedRange(safeRange)
+                textView.showFindIndicator(for: safeRange)
+            }
+            DispatchQueue.main.async { self.scrollTarget = nil }
         }
     }
 

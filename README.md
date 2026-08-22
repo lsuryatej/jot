@@ -88,7 +88,7 @@ what you get for free with Jot versus what they charge for.
 | Images pasted inline | Yes, resizable | No | No | No |
 | Screenshot to text (OCR) | Yes, offline | Yes | No | No |
 | Display modes | 5: floating, dock, menu bar, dropdown, screen edge | Menu bar only | Window | Window |
-| Search across all notes | No, current note only | Yes | N/A | Yes |
+| Search across all notes | Yes | Yes | N/A | Yes |
 | Sync across devices | No | iCloud (2.0+), iOS app in progress | iCloud, paid tier | iCloud, iOS/iPad apps |
 | Scripting / themes | No | Yes, JS extensions + themes | No | CLI, URL schemes, Automator |
 | Apple Notes sync | Yes, opt-in, one-way | No | No | No |
@@ -96,12 +96,12 @@ what you get for free with Jot versus what they charge for.
 | Source | Open, MIT | Closed | Core open, paid features closed | Closed |
 
 Jot doesn't beat any of these on every axis. Against Antinote specifically:
-no search across notes (Cmd+F is per-note only), no sync across devices, no
-link shrink yet, no scripting or theming, no AutoPaste. Antinote is also a
-mature, several-year-old product; Jot is new. What Jot gives you instead is
-free and open source, inline resizable images, five display modes instead
-of menu-bar-only, and an explicit zero-telemetry stance with both
-network-facing features off or opt-in rather than bundled into iCloud.
+no sync across devices, no link shrink yet, no scripting or theming, no
+AutoPaste. Antinote is also a mature, several-year-old product; Jot is new.
+What Jot gives you instead is free and open source, inline resizable images,
+five display modes instead of menu-bar-only, search across every note, and
+an explicit zero-telemetry stance with both network-facing features off or
+opt-in rather than bundled into iCloud.
 
 ## Features
 
@@ -164,10 +164,11 @@ Apple's Vision framework and inserts the text it finds. Fully offline, on the
 Neural Engine, no cloud OCR service involved.
 
 **Search, counts, and totals.** Cmd+F opens the real macOS find bar with
-match highlighting. A footer shows live word/character/line counts, and
-selecting text with two or more numbers in it shows their sum and average.
-Select `rent $1,240.50 and food $310.25` and see the total without leaving
-the note.
+match highlighting. Cmd+Shift+F searches every note at once instead of just
+the open one, jumping straight to the matching line. A footer shows live
+word/character/line counts, and selecting text with two or more numbers in
+it shows their sum and average. Select `rent $1,240.50 and food $310.25` and
+see the total without leaving the note.
 
 **Timers.** `5m timer`, `30s timer`, `2h timer`, the keyword is configurable.
 A timer belongs to the note that started it and won't restart itself after
@@ -195,6 +196,7 @@ glass if that's what you want.
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+F** | Find in the current note |
+| **Shift+Cmd+F** | Search every note, jump straight to the match |
 | **Cmd+G** / **Shift+Cmd+G** | Find next / find previous |
 | **Cmd+E** | Use the current selection as the find term |
 | **Cmd+,** | Settings |
@@ -263,6 +265,8 @@ apply at all, a normal Xcode install should just work.
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/Note.swift` | The note model and its stable identity |
+| `src/GlobalSearch.swift` | Cross-note search, matching every note's text directly |
+| `src/GlobalSearchView.swift` | The Cmd+Shift+F overlay |
 | `src/Attachments.swift` | Inline image storage and markdown references |
 | `src/TextRecognition.swift` | Vision-backed screenshot to text |
 | `src/AppleNotesSync.swift` | One-way push into Apple Notes |
@@ -276,9 +280,11 @@ apply at all, a normal Xcode install should just work.
 | `scripts/release.sh` | Builds and packages a release zip |
 | `install.sh` | The curl-installable install path |
 
-`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, and `Attachments`
-are deliberately free of SwiftUI and AppKit, so every rule in them is covered
-by a dependency-free test, 191 checks, run by `./test.sh` in a few seconds.
+`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `GlobalSearch`,
+and `Attachments` are deliberately free of SwiftUI and AppKit, so every rule
+in them is covered by a dependency-free test. `./test.sh` runs 229 checks
+total, that plus a UI-layer slice against real `NSTextView` instances, in a
+few seconds.
 
 `Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes
 and rebuilds the bundle every run, so a stale binary or signature can't
@@ -295,7 +301,6 @@ under `com.suryatejlalam.Jot`.
 
 - No URL shortening/elision for long links yet.
 - Notes can't be reordered.
-- No search across notes, only within the one you have open.
 - No sync across devices.
 - Apple Notes sync is one-way, nothing written there is read back.
 - The build targets `arm64` only.
