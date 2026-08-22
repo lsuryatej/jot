@@ -85,10 +85,24 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
       SDK mismatch at all. Confirmed both install paths pick up the automated
       release: `curl | bash` and `brew upgrade` (via a cask bump, still
       manual) both landed real 1.1.0 installs.
+- [x] **CI smoke tests for both install paths.** `smoke-test-install-sh`
+      (a second job in release.yml, gated on the release publishing) runs
+      install.sh on a fresh runner against the release that just published
+      and checks the app exists, is executable, matches the tag, is validly
+      signed, and is not quarantined. brew-smoke-test.yml runs daily (plus
+      on demand) rather than per-release, since the cask is bumped by hand
+      and is not guaranteed in sync with the latest tag right after a
+      release — it checks the same things via the real
+      `brew install lsuryatej/jot/jot` command and cleans up with
+      `brew uninstall --cask jot`. Verified for real: triggered the brew one
+      manually, watched it pass in 14s on a genuinely fresh runner.
 - [ ] The release workflow still doesn't update the Homebrew cask at
       lsuryatej/homebrew-jot automatically — version and sha256 need a manual
-      bump after each release (done by hand for 1.1.0). Worth automating with
-      a follow-up job that has push access to that repo.
+      bump after each release (done by hand for 1.1.0 and again for the
+      postflight fix). Worth automating with a follow-up job that has push
+      access to that repo — would need a PAT stored as a secret, which is
+      the user's own action to set up (GitHub Settings > Developer Settings),
+      not something to do silently.
 - [ ] No screenshot in the README yet.
 
 ## Lists

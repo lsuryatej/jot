@@ -32,6 +32,39 @@ Both install a prebuilt, checksum-verified `Jot.app` to `/Applications` (or
 `~/Applications` if that's not writable) and never ask for `sudo`. Update with
 `brew upgrade jot`, or from Jot's own menu bar icon → **Check for Updates**.
 
+Jot is ad-hoc signed, not notarized — there's no paid Apple Developer account
+behind this project. Both install paths strip the quarantine flag before you
+ever open the app (`install.sh` directly; the Homebrew cask via a
+`postflight` step), so neither should trigger a Gatekeeper "Not Opened"
+dialog. If you ever see one anyway — most likely from a copy that predates
+one of these fixes — right-click the app → Open, or System Settings →
+Privacy & Security → **Open Anyway**.
+
+**Removing a Homebrew-installed copy:** use `brew uninstall --cask jot`, not
+`rm -rf`. Deleting the app directly leaves Homebrew's own install receipt
+pointing at a copy that no longer exists, and the next `brew install` will
+report "already installed" and silently do nothing.
+
+### Continuous verification
+
+Both install paths are checked by CI, not just by hand:
+
+- **`smoke-test-install-sh`** runs on every release (as a second job in
+  [`release.yml`](.github/workflows/release.yml), on its own fresh runner):
+  installs via `install.sh` against the release that job just published, then
+  confirms the app exists, is executable, matches the tagged version, carries
+  a valid ad-hoc signature, and — the specific thing that matters — is not
+  quarantined.
+- **[`brew-smoke-test.yml`](.github/workflows/brew-smoke-test.yml)** runs
+  daily (and on demand) rather than per-release, since the Homebrew cask is
+  bumped by hand after each release and there's always a window where it's
+  briefly out of sync with the latest tag. Installs via the exact published
+  `brew install lsuryatej/jot/jot` command on a throwaway runner, checks the
+  same things, and cleans up with `brew uninstall --cask jot`.
+
+Both ran the postflight quarantine fix through a genuinely fresh machine
+before it was trusted — not just the machine it was written on.
+
 ## Why this exists
 
 Most "quick note" apps on macOS are either a $5–15 indie tool (Antinote,
