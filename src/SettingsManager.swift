@@ -66,6 +66,45 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the note's surface is rendered.
+enum Appearance: String, CaseIterable, Identifiable {
+    /// The standard popover material: translucent but muted.
+    case frosted
+    /// Heavy pass-through of whatever is behind, with a lit edge.
+    case glass
+    /// Opaque window background, for when the desktop underneath is noisy.
+    case solid
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .frosted: return "Frosted"
+        case .glass:   return "Glass"
+        case .solid:   return "Solid"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .frosted: return "Translucent, with the desktop softened behind it."
+        case .glass:   return "The desktop shows through clearly, with a lit edge."
+        case .solid:   return "Opaque. Easiest to read over a busy desktop."
+        }
+    }
+
+    /// Matches NSVisualEffectView.Material.
+    var materialRawValue: Int {
+        switch self {
+        case .frosted: return 6  // .popover
+        case .glass:   return 13 // .hudWindow
+        case .solid:   return 12 // .windowBackground
+        }
+    }
+
+    var wantsLitEdge: Bool { self == .glass }
+}
+
 /// Which side of the screen the edge-docked note lives on.
 enum ScreenEdge: String, CaseIterable, Identifiable {
     case left
@@ -88,6 +127,9 @@ final class SettingsManager: ObservableObject {
         static let showsFooter    = "showsFooter"
         static let screenEdge     = "screenEdge"
         static let edgeWidth      = "edgeWidth"
+        static let appearance     = "appearance"
+        static let showsHeader    = "showsHeader"
+        static let lineSpacing    = "lineSpacing"
     }
 
     private let defaults: UserDefaults
@@ -115,6 +157,21 @@ final class SettingsManager: ObservableObject {
 
     @Published var showsFooter: Bool {
         didSet { defaults.set(showsFooter, forKey: Key.showsFooter) }
+    }
+
+    @Published var appearance: Appearance {
+        didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
+    }
+
+    /// Glassnote's "buttons can even be hidden completely": with the header off
+    /// the window is nothing but text.
+    @Published var showsHeader: Bool {
+        didSet { defaults.set(showsHeader, forKey: Key.showsHeader) }
+    }
+
+    /// Line height multiple for the editor.
+    @Published var lineSpacing: Double {
+        didSet { defaults.set(lineSpacing, forKey: Key.lineSpacing) }
     }
 
     @Published var screenEdge: ScreenEdge {
@@ -148,6 +205,11 @@ final class SettingsManager: ObservableObject {
 
         self.timerKeyword = defaults.string(forKey: Key.timerKeyword) ?? "timer"
         self.showsFooter = defaults.object(forKey: Key.showsFooter) as? Bool ?? true
+
+        let rawAppearance = defaults.string(forKey: Key.appearance) ?? Appearance.frosted.rawValue
+        self.appearance = Appearance(rawValue: rawAppearance) ?? .frosted
+        self.showsHeader = defaults.object(forKey: Key.showsHeader) as? Bool ?? true
+        self.lineSpacing = defaults.object(forKey: Key.lineSpacing) as? Double ?? 1.0
 
         let rawEdge = defaults.string(forKey: Key.screenEdge) ?? ScreenEdge.right.rawValue
         self.screenEdge = ScreenEdge(rawValue: rawEdge) ?? .right

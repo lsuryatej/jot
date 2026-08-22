@@ -47,6 +47,39 @@ final class NotesManager: ObservableObject {
         }
     }
 
+    // MARK: - Indexed access (edge stack)
+
+    func text(at index: Int) -> String {
+        notes.indices.contains(index) ? notes[index] : ""
+    }
+
+    func setText(_ newValue: String, at index: Int) {
+        guard notes.indices.contains(index) else { return }
+        notes[index] = newValue
+        if index == currentIndex { evaluateTimer(in: newValue) }
+        scheduleSave()
+    }
+
+    /// Unconditional, unlike addNewNote: the stack shows every note at once, so
+    /// there is no ambiguity about which blank one you meant.
+    func appendNote() {
+        notes.append("")
+        currentIndex = notes.count - 1
+        flush()
+    }
+
+    func deleteNote(at index: Int) {
+        guard notes.indices.contains(index), notes.count > 1 else {
+            // Never leave the model with nothing to address.
+            if notes.indices.contains(index) { notes[index] = "" }
+            flush()
+            return
+        }
+        notes.remove(at: index)
+        currentIndex = min(currentIndex, notes.count - 1)
+        flush()
+    }
+
     // MARK: - Navigation
 
     func previousNote() {

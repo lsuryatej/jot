@@ -43,7 +43,7 @@ whatever app is in front.
 | Menu Bar | Ordinary window level, shown and hidden from the menu bar icon. |
 | Menu Bar Dropdown | Drops down under the icon and hides when you click away. |
 | Dock | Dock icon and app switcher entry, like a normal app. |
-| Screen Edge | Docked full-height to the left or right edge, revealed by resting the cursor against that edge. |
+| Screen Edge | A sidebar on the left or right edge holding every note as its own card, revealed by resting the cursor against that edge. |
 
 **Menu bar icon.** Left click toggles the panel, right click opens Show/Hide and
 Quit. The app is `LSUIElement` with no Dock icon, so this is the fallback if the
@@ -61,10 +61,20 @@ note that started it, and an expired directive does not restart itself.
 containing the caret. A line with no checkbox gains one, indentation preserved.
 
 **Screen edge.** In Screen Edge mode a thin bar sits against your chosen edge.
-Rest the cursor there for a moment and the note slides out; move away and it
+Rest the cursor there for a moment and the sidebar slides out; move away and it
 slides back. Revealing by hover deliberately does not take keyboard focus, so
 brushing the edge never redirects your typing. Clicking the bar, or using the
 shortcut, reveals it *and* hands it focus. Edge and width are configurable.
+
+The sidebar shows every note at once as a stack of cards, each sized to its
+content, rather than one note stretched down the screen. Swipe navigation is
+for the single-note modes; here you scroll. The first line of each note renders
+as its title, which is styling only — the file is still plain text. Add a note
+with the +, remove one with the × that appears on hover.
+
+**Appearance.** Frosted, Glass, or Solid. Glass lets the desktop through and
+adds a lit edge along the window. The header bar can be hidden entirely, and
+line spacing is adjustable, so the window can be nothing but text.
 
 **Search.** Cmd+F opens the native find bar with match highlighting; Cmd+G and
 Shift+Cmd+G step through matches.
@@ -108,6 +118,7 @@ are small and reconstructible, unlike the notes.
 | `src/TextStatistics.swift` | Word counts and selection sum/average |
 | `src/Checklist.swift` | Checklist parsing and rewriting |
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
+| `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/ContentView.swift` | Panel UI: header, editor, timer overlay, share |
 | `src/PlainTextEditor.swift` | `NSTextView` wrapper plus the swipe-reading scroll view |
 | `src/NotesManager.swift` | Note state, navigation, timer parsing, checklists |

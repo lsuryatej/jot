@@ -13,11 +13,19 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                headerView
-                editor
-                if settings.showsFooter {
-                    footerView
+            if settings.displayMode.isEdgeDocked {
+                // Docked to an edge there is room for every note at once, so
+                // the stack replaces swipe navigation entirely.
+                EdgeStackView(notesManager: notesManager, settings: settings)
+            } else {
+                VStack(spacing: 0) {
+                    if settings.showsHeader {
+                        headerView
+                    }
+                    editor
+                    if settings.showsFooter {
+                        footerView
+                    }
                 }
             }
 
@@ -25,13 +33,48 @@ struct ContentView: View {
                 timerOverlay
             }
         }
-        .background(VisualEffectView().ignoresSafeArea())
+        .background(backdrop)
+        .overlay(litEdge)
+    }
+
+    // MARK: - Surface
+
+    private var backdrop: some View {
+        VisualEffectView(
+            material: NSVisualEffectView.Material(rawValue: settings.appearance.materialRawValue) ?? .popover
+        )
+        .ignoresSafeArea()
+    }
+
+    /// A hairline of light along the inside of the window edge.
+    ///
+    /// Real glass catches light where it turns; without this the panel reads as
+    /// a flat translucent rectangle rather than a pane sitting above the
+    /// desktop. Drawn inside the window's own corner radius so it tracks the
+    /// system shape rather than fighting it.
+    @ViewBuilder
+    private var litEdge: some View {
+        if settings.appearance.wantsLitEdge {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(0.45), .white.opacity(0.10)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        }
     }
 
     // MARK: - Editor
 
     private var editor: some View {
         PlainTextEditor(
+            lineHeightMultiple: settings.lineSpacing,
+            topInset: settings.showsHeader ? 12 : 38,
             text: Binding(
                 get: { notesManager.currentText },
                 set: { notesManager.currentText = $0 }
@@ -166,13 +209,17 @@ struct ContentView: View {
 }
 
 struct VisualEffectView: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .popover
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.state = .active
-        view.material = .popover
         view.blendingMode = .behindWindow
+        view.material = material
         return view
     }
 
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+    }
 }

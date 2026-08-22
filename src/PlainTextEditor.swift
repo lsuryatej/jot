@@ -60,6 +60,70 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
     /// storage delegate.
     private var isStyling = false
 
+    var lineHeightMultiple: Double = 1.0 {
+        didSet { defaultParagraphStyle = paragraphStyle }
+    }
+
+    /// Renders the first line larger and bolder, so a note reads as a titled
+    /// card without the title being a separate field. The text stays plain.
+    var stylesFirstLineAsTitle = false
+
+    /// The authoritative body font.
+    ///
+    /// Never read this back from `NSTextView.font`: that property reports the
+    /// font of the *first character*, which the title styling has already made
+    /// bold and a point larger. Deriving the base font from it fed the styling
+    /// pass its own output, so every restyle promoted the whole note another
+    /// point — the text grew a little each time an item was toggled.
+    var baseFont: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular) {
+        didSet {
+            font = baseFont
+            applyChecklistStyling()
+        }
+    }
+
+    private var titleFont: NSFont {
+        .monospacedSystemFont(ofSize: baseFont.pointSize + 1, weight: .semibold)
+    }
+
+    /// Reports the height the content needs, for cards that size to their note.
+    var onHeightChange: ((CGFloat) -> Void)?
+
+    /// Without an enclosing scroll view the text container never learns how
+    /// wide it is, so lines run past the card and get clipped instead of
+    /// wrapping — and the measured height comes back short to match.
+    override func layout() {
+        super.layout()
+        guard onHeightChange != nil, let textContainer else { return }
+        let width = bounds.width - textContainerInset.width * 2
+        if abs(textContainer.size.width - width) > 0.5 {
+            textContainer.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        }
+        reportHeight()
+    }
+
+    /// Measured through TextKit 1. Touching `layoutManager` opts this view out
+    /// of TextKit 2, which is a fair trade for a reliable content height —
+    /// nothing here depends on TextKit 2 behaviour.
+    func reportHeight() {
+        guard let onHeightChange, let layoutManager, let textContainer else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        let used = layoutManager.usedRect(for: textContainer).height
+        let height = max(18, used + textContainerInset.height * 2)
+        if abs(height - lastReportedHeight) > 0.5 {
+            lastReportedHeight = height
+            DispatchQueue.main.async { onHeightChange(height) }
+        }
+    }
+
+    private var lastReportedHeight: CGFloat = -1
+
+    private var paragraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = CGFloat(lineHeightMultiple)
+        return style
+    }
+
     // MARK: - Editing helpers
 
     /// Routes every mutation through the undo-aware path, so Cmd+Z still walks
@@ -220,7 +284,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         changeInLength delta: Int
     ) {
         guard !isStyling, editedMask.contains(.editedCharacters) else { return }
-        applyChecklistStyling(in: editedRange)
+        // Title styling spans the first line, which an edit anywhere can change
+        // the extent of, so restyle the whole note when that mode is on.
+        applyChecklistStyling(in: stylesFirstLineAsTitle ? nil : editedRange)
     }
 
     /// Restyles the lines touching `range`, or the whole note when nil.
@@ -236,8 +302,26 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         let whole = NSRange(location: 0, length: ns.length)
         let target = ns.length == 0 ? whole : ns.lineRange(for: clamped(range ?? whole))
 
-        let baseFont = font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
-        textStorage.setAttributes([.font: baseFont, .foregroundColor: NSColor.labelColor], range: target)
+        textStorage.setAttributes(
+            [
+                .font: baseFont,
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraphStyle,
+            ],
+            range: target
+        )
+
+        if stylesFirstLineAsTitle, ns.length > 0 {
+            let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
+            let titleRange = NSIntersectionRange(firstLine, target)
+            if titleRange.length > 0 {
+                textStorage.addAttribute(
+                    .font,
+                    value: titleFont,
+                    range: titleRange
+                )
+            }
+        }
 
         ns.enumerateSubstrings(in: target, options: [.byLines]) { line, lineRange, _, _ in
             guard let line, let item = Checklist.item(in: line) else { return }
@@ -274,6 +358,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 /// SwiftUI's `TextEditor` exposes neither the caret position nor scroll events,
 /// which made per-line checklist toggling and swipe navigation impossible.
 struct PlainTextEditor: NSViewRepresentable {
+    var lineHeightMultiple: Double = 1.0
+    /// Extra room at the top when the header bar is hidden, so the first line
+    /// clears the traffic lights instead of tucking under them.
+    var topInset: CGFloat = 12
     @Binding var text: String
     @Binding var selectedRange: NSRange
     var onSwipe: (SwipeDirection) -> Void
@@ -304,11 +392,11 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
 
-        textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.baseFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
         textView.textColor = .labelColor
         textView.insertionPointColor = .labelColor
         textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.textContainerInset = NSSize(width: 20, height: topInset)
 
         // Native in-note search. The Find menu items drive this through the
         // responder chain, giving real match highlighting and next/previous
@@ -321,6 +409,7 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
 
+        textView.lineHeightMultiple = lineHeightMultiple
         textView.textStorage?.delegate = textView
         textView.string = text
         textView.applyChecklistStyling()
@@ -334,6 +423,15 @@ struct PlainTextEditor: NSViewRepresentable {
         scrollView.onSwipe = onSwipe
 
         guard let textView = scrollView.documentView as? ChecklistTextView else { return }
+
+        if textView.textContainerInset.height != topInset {
+            textView.textContainerInset = NSSize(width: 20, height: topInset)
+        }
+
+        if textView.lineHeightMultiple != lineHeightMultiple {
+            textView.lineHeightMultiple = lineHeightMultiple
+            textView.applyChecklistStyling()
+        }
 
         // Only touch the text view when the model genuinely diverged (note
         // switch). Assigning unconditionally would fight the user's typing and

@@ -370,7 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 470),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 660),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -414,6 +414,10 @@ final class FloatingPanel: NSPanel {
         // minimise, or zoom, and the traffic lights read as a stray window.
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             standardWindowButton(button)?.isHidden = mode.isEdgeDocked
+        }
+        // Borderless while docked: the sidebar is a surface, not a window.
+        if mode.isEdgeDocked {
+            titlebarAppearsTransparent = true
         }
 
         if mode.wantsFloatingLevel {

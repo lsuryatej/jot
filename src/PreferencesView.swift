@@ -54,6 +54,36 @@ struct PreferencesView: View {
 
             Divider()
 
+            section("Appearance") {
+                Picker("", selection: $settings.appearance) {
+                    ForEach(Appearance.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 240)
+
+                Text(settings.appearance.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Show the header bar", isOn: $settings.showsHeader)
+
+                HStack(spacing: 12) {
+                    Text("Line spacing")
+                        .font(.caption)
+                    Slider(value: $settings.lineSpacing, in: 1.0...2.2)
+                        .frame(width: 140)
+                    Text(String(format: "%.1f", settings.lineSpacing))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, alignment: .trailing)
+                }
+            }
+
+            Divider()
+
             section("Shortcut") {
                 HStack(spacing: 12) {
                     HotKeyRecorder(combo: $settings.hotKey)
@@ -85,7 +115,7 @@ struct PreferencesView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 460, height: 470, alignment: .topLeading)
+        .frame(width: 480, height: 660, alignment: .topLeading)
     }
 
     private func section<Content: View>(
