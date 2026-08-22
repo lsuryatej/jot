@@ -17,24 +17,30 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
       the mapping with it attached, the next lookup failed, and the code did
       the reasonable thing for a note that no longer exists — made a new one.
       Identifiers are now trimmed, and existing mappings are repaired on read.
-- [x] **[bug] Apple Notes sync does not carry images.** Fixed by embedding
-      each image as a base64 `<img>` in the HTML body Notes receives — the
-      documented workaround for the lack of a real attachment API over
-      AppleScript. Switched `runScript` from `osascript -e` to a temp-file
-      invocation at the same time, since a base64 payload can be large enough
-      to bump into the command-line argument length limit that `-e` is
-      subject to and a script file is not.
+- [ ] **[bug] Apple Notes sync does not carry images — reopened.** The
+      base64-`<img>`-in-body approach was implemented and unit tested, but
+      real-machine verification (2026-08-22) showed it does NOT work as
+      intended: the note shows the literal markdown text
+      `![320](Attachments/…)` as visible, spellcheck-flagged text, plus a
+      separate generic "File · 464 KB" attachment box with a plain document
+      icon — not an inline image. Two distinct problems, either of which
+      alone would explain part of this:
 
-      **Not independently verified against real Apple Notes.** The TCC
-      permission grant for Jot's own Automation access got reset while
-      testing something unrelated earlier, and re-granting it needs an
-      interactive click on a system dialog that could not be done headlessly
-      in the environment this was built in. The base64-`<img>`-in-body
-      technique is well-documented and widely used, and the logic is covered
-      by unit tests (image line → embedded tag, missing file → falls back to
-      text rather than dropping the line, mixed text+image line → not
-      embedded), but someone needs to turn sync on, add a note with an image,
-      and confirm it actually shows up as a real image in Apple Notes.
+      1. The literal markdown appearing as text means `htmlForLine`'s
+         image-only-line detection did not fire for this line, or the base64
+         encode/HTML-embed path failed and silently fell back to the escaped-
+         text branch (`imgTag(for:base:)` returns nil on any read failure).
+      2. The generic file attachment suggests that even when Notes does
+         receive a `data:` URI, it is not decoding it into a *displayed*
+         inline image the way the documented technique claims — at least not
+         reliably, or not in the current Notes version.
+
+      Needs real debugging next: confirm whether `imgTag(for:base:)` is even
+      being reached (add temporary logging, sync one note, inspect), and
+      separately test the base64-`<img>`-in-body technique in isolation
+      (a trivial AppleScript, one small image) to see what Notes actually
+      does with it before trusting that approach further. Deprioritized for
+      now per explicit instruction — "should hold for now."
 - [ ] **[bug] Swiping with the title bar hidden gives no feedback.** Nothing
       indicates which note you moved to. Worth checking what Antinote does
       here before designing it.
