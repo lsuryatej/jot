@@ -24,6 +24,18 @@ actor AppleNotesSync {
         self.mapping = Self.loadMapping(from: mappingURL)
     }
 
+    /// osascript echoes a trailing newline after the value a script returns.
+    ///
+    /// Storing that unnoticed is what made every sync duplicate the whole
+    /// library: the id went into the mapping as "x-coredata://…\n", the next
+    /// run asked Notes for `note id "x-coredata://…\n"`, Notes could not find
+    /// it, and the code did the reasonable thing for a note that no longer
+    /// exists — made a new one. Every time.
+    static func normalizeIdentifier(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     // MARK: - HTML
 
     /// Apple Notes takes HTML for a note body.
@@ -108,13 +120,22 @@ actor AppleNotesSync {
     }
 
     private func create(_ note: Note) throws -> String {
-        try runScript("""
+        let raw = try runScript("""
         tell application "Notes"
             set theNote to make new note at folder "\(Self.folderName)" ¬
                 with properties {name:\(Self.appleScriptLiteral(note.title)), body:\(Self.appleScriptLiteral(Self.htmlBody(for: note)))}
             return id of theNote
         end tell
         """)
+
+        guard let identifier = Self.normalizeIdentifier(raw) else {
+            throw NSError(
+                domain: "AppleNotesSync",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Notes did not return an identifier for the new note."]
+            )
+        }
+        return identifier
     }
 
     /// Returns false when the note no longer exists in Apple Notes.
@@ -165,7 +186,9 @@ actor AppleNotesSync {
         guard let data = try? Data(contentsOf: url),
               let mapping = try? JSONDecoder().decode([String: String].self, from: data)
         else { return [:] }
-        return mapping
+        // Existing mappings may hold the untrimmed form; repair them on read
+        // rather than making the user pay for one more duplicate round.
+        return mapping.compactMapValues { normalizeIdentifier($0) }
     }
 
     private func saveMapping() {

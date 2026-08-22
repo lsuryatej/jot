@@ -20,6 +20,11 @@ The three remaining Antinote features, agreed as the priority:
 
 ## Bugs
 
+- [x] **[bug] Apple Notes sync duplicated every note on each edit.** osascript
+      echoes a trailing newline after a returned value; the note id went into
+      the mapping with it attached, the next lookup failed, and the code did
+      the reasonable thing for a note that no longer exists — made a new one.
+      Identifiers are now trimmed, and existing mappings are repaired on read.
 - [ ] **[bug] Apple Notes sync does not carry images.** The body is sent as
       markdown, so an image line arrives as the literal `![280](…)` text.
       Notes' AppleScript interface has no clean attachment API; the likely

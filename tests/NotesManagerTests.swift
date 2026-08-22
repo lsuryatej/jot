@@ -430,6 +430,16 @@ func runAllTests() {
         equal(AppleNotesSync.appleScriptLiteral("back\\slash"), "\"back\\\\slash\"", "backslashes escaped")
     }
 
+    suite("script output is trimmed before it becomes a mapping key") {
+        // osascript echoes a trailing newline. Storing it made every sync fail
+        // its lookup and create a duplicate of the whole library.
+        equal(AppleNotesSync.normalizeIdentifier("x-coredata://abc/ICNote/p1\n"),
+              "x-coredata://abc/ICNote/p1", "trailing newline stripped")
+        equal(AppleNotesSync.normalizeIdentifier("  padded  "), "padded", "surrounding space stripped")
+        equal(AppleNotesSync.normalizeIdentifier("\n"), nil, "an empty result is not an identifier")
+        equal(AppleNotesSync.normalizeIdentifier(""), nil, "neither is nothing at all")
+    }
+
     // MARK: - Pasteboard
 
     suite("an image is detected even when a string rides along") {
