@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 
 // A dependency-free harness. The logic under test (NotesManager, NoteStore) is
 // deliberately free of SwiftUI, so it compiles into a plain executable with
@@ -464,10 +465,61 @@ func runAllTests() {
         }
     }
 
+    suite("chrome and cards separate from their own paper") {
+        // Shipped once with the chrome strip painted in the paper's own color:
+        // a cream header on cream paper, invisible. Tone has to move for
+        // every opaque surface, in both directions the paper allows.
+        for appearance in Appearance.allCases where appearance.paperColor != nil {
+            check(appearance.chromeColor != appearance.paperColor,
+                  "\(appearance.title) header strip is not the paper color")
+            check(appearance.cardColor != appearance.paperColor,
+                  "\(appearance.title) cards are not the paper color")
+        }
+    }
+
     suite("paper guide round-trips through its persisted form") {
         for guide in PaperGuide.allCases {
             equal(PaperGuide(rawValue: guide.rawValue), guide, "\(guide.title) round-trips")
         }
+    }
+
+    /// Disposable defaults, so a test run never reads or writes the user's
+    /// real preferences.
+    func makeSettings(seedSize: Double? = nil) -> SettingsManager {
+        let name = "JotTests.settings-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        if let seedSize { defaults.set(seedSize, forKey: "noteFontSize") }
+        return SettingsManager(defaults: defaults)
+    }
+
+    suite("a wild stored font size is clamped at init") {
+        equal(makeSettings(seedSize: 200).noteFontSize, 24, "too large comes down")
+        equal(makeSettings(seedSize: 2).noteFontSize, 11, "too small comes up")
+        equal(makeSettings().noteFontSize, 13, "absent keeps the default")
+
+        // The clamp has to live in init: property observers don't fire there,
+        // so a didSet clamp never guarded the values that actually enter this
+        // way — and assigning inside didSet re-fires the observer forever,
+        // which hung the app whenever the size slider moved.
+    }
+
+    suite("changing the font size publishes once per change") {
+        let settings = makeSettings()
+        var publishes = 0
+        let token = settings.objectWillChange.sink { _ in publishes += 1 }
+
+        // A regression recurses synchronously inside didSet, so the assignment
+        // runs where a hang becomes a failed check after five seconds rather
+        // than a test binary stuck for good.
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            settings.noteFontSize = 14
+            done.signal()
+        }
+        equal(done.wait(timeout: .now() + 5), .success, "the assignment returns")
+        token.cancel()
+        equal(publishes, 1, "one publish, not a recursion")
     }
 
     suite("a bare keyword on the first line turns the note into a list") {

@@ -575,12 +575,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 900),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 820),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Jot Settings"
+        // Small enough not to clip on short laptop screens; the settings
+        // scroll rather than demanding a tall window.
+        window.minSize = NSSize(width: 420, height: 360)
         window.contentViewController = NSHostingController(rootView: PreferencesView(settings: settings))
         window.isReleasedWhenClosed = false
         window.center()

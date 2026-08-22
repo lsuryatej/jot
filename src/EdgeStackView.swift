@@ -63,7 +63,7 @@ struct EdgeStackView: View {
         HStack {
             Text("\(notesManager.notes.count) note\(notesManager.notes.count == 1 ? "" : "s")")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color(nsColor: settings.appearance.ink.secondary))
 
             Spacer()
 
@@ -116,7 +116,7 @@ struct NoteCard: View {
                     notesManager.deleteNote(at: index)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(nsColor: settings.appearance.ink.secondary))
                 }
                 .buttonStyle(.plain)
                 .padding(8)
@@ -152,7 +152,7 @@ struct NoteCard: View {
     private var reorderGrip: some View {
         if isHovered {
             Image(systemName: "line.3.horizontal")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color(nsColor: settings.appearance.ink.secondary))
                 .padding(8)
                 .contentShape(Rectangle())
                 .onDrag {

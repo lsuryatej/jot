@@ -26,6 +26,14 @@ struct PreferencesView: View {
     @ObservedObject var settings: SettingsManager
 
     var body: some View {
+        // The window is resizable down to a short strip, so the form scrolls
+        // rather than clipping.
+        ScrollView {
+            settingsSections
+        }
+    }
+
+    private var settingsSections: some View {
         VStack(alignment: .leading, spacing: 22) {
             section("Display") {
                 Picker("", selection: $settings.displayMode) {
@@ -116,7 +124,7 @@ struct PreferencesView: View {
                 HStack(spacing: 12) {
                     Text("Size")
                         .font(.caption)
-                    Slider(value: $settings.noteFontSize, in: 11...24, step: 1)
+                    Slider(value: $settings.noteFontSize, in: SettingsManager.fontSizeRange, step: 1)
                         .frame(width: 140)
                     Text("\(Int(settings.noteFontSize))pt")
                         .font(.system(.caption, design: .monospaced))
@@ -202,7 +210,7 @@ struct PreferencesView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 480, height: 1060, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func section<Content: View>(

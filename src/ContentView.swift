@@ -22,6 +22,14 @@ struct ContentView: View {
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
+    /// Chrome text follows the paper's ink, not SwiftUI's semantic colors:
+    /// `.secondary` tracks the system's mode, so a light-mode user on True
+    /// Dark would read dark header text on a near-black strip — the same
+    /// trap the body ink already solves.
+    private var ink: InkTheme {
+        settings.appearance.ink
+    }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             if settings.displayMode.isEdgeDocked {
@@ -141,7 +149,7 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Text("Note \(notesManager.currentIndex + 1) of \(notesManager.notes.count)")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color(nsColor: ink.secondary))
 
             Button("Checklist") {
                 // Routed through the responder chain so the button and Cmd+L
@@ -172,14 +180,14 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Text(countsLabel)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color(nsColor: ink.secondary))
 
             Spacer()
 
             if let math = selectionMath {
                 Text(math.summary)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color(nsColor: ink.text))
                     .help("\(math.count) numbers in the selection")
             }
         }

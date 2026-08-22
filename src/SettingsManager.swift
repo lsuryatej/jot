@@ -208,11 +208,16 @@ enum Appearance: String, CaseIterable, Identifiable {
 
     /// Edge cards sit directly on the surface; on an opaque paper they read
     /// as a second sheet of similar stock rather than a system-white chip.
+    ///
+    /// Cream lifts its cards lighter than the page; White has nothing lighter
+    /// than white to go to, so its cards step down into a faint cool grey —
+    /// either way the card separates from the page by tone, not just by the
+    /// hairline around it.
     var cardColor: NSColor {
         switch self {
         case .trueDark: return NSColor(srgbRed: 0.125, green: 0.124, blue: 0.133, alpha: 1)
         case .cream:    return NSColor(srgbRed: 0.992, green: 0.976, blue: 0.937, alpha: 1)
-        case .white:    return .white
+        case .white:    return NSColor(srgbRed: 0.957, green: 0.957, blue: 0.969, alpha: 1)
         default:        return .controlBackgroundColor
         }
     }
@@ -224,8 +229,18 @@ enum Appearance: String, CaseIterable, Identifiable {
     }
 
     /// Background for chrome strips (header, footer) sitting on the surface.
+    ///
+    /// An opaque paper can't reuse its own color here — a cream strip on cream
+    /// paper is invisible, which shipped. Each opaque paper gets a
+    /// neighbouring tone instead: a lift off the near-black for True Dark, a
+    /// deeper warm shade for Cream, a cooler grey for White.
     var chromeColor: NSColor {
-        paperColor ?? .windowBackgroundColor
+        switch self {
+        case .trueDark: return NSColor(srgbRed: 0.110, green: 0.109, blue: 0.118, alpha: 1)
+        case .cream:    return NSColor(srgbRed: 0.922, green: 0.882, blue: 0.808, alpha: 1)
+        case .white:    return NSColor(srgbRed: 0.945, green: 0.945, blue: 0.961, alpha: 1)
+        default:        return .windowBackgroundColor
+        }
     }
 
     var wantsLitEdge: Bool {
@@ -363,13 +378,25 @@ final class SettingsManager: ObservableObject {
         didSet { defaults.set(noteFontName, forKey: Key.noteFontName) }
     }
 
-    /// The note's font size in points. Clamped on the way in: a wild value
-    /// from an old or hand-edited default would otherwise wreck layout.
+    /// The note's font size in points.
+    ///
+    /// The clamp lives in `init`, not here: assigning to a property from
+    /// inside its own didSet re-fires the observer, which recurses forever —
+    /// every pass re-publishes and re-writes defaults, hanging the app the
+    /// moment the size slider moves. (Verified headlessly: a scratch class
+    /// with this exact shape prints its didSet until killed.) Property
+    /// observers don't fire during init either, so a didSet clamp never
+    /// guarded the actual threat anyway — a wild value from an old or
+    /// hand-edited default entered through the init read.
     @Published var noteFontSize: Double {
-        didSet {
-            noteFontSize = min(max(noteFontSize, 11), 24)
-            defaults.set(noteFontSize, forKey: Key.noteFontSize)
-        }
+        didSet { defaults.set(noteFontSize, forKey: Key.noteFontSize) }
+    }
+
+    /// The bounds `noteFontSize` is held to.
+    static let fontSizeRange: ClosedRange<Double> = 11...24
+
+    private static func clamped(_ value: Double, to range: ClosedRange<Double>) -> Double {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 
     /// Extra tracking between characters, in points. Zero is the font's own
@@ -477,7 +504,10 @@ final class SettingsManager: ObservableObject {
         self.showsHeader = defaults.object(forKey: Key.showsHeader) as? Bool ?? true
         self.lineSpacing = defaults.object(forKey: Key.lineSpacing) as? Double ?? 1.0
         self.noteFontName = defaults.string(forKey: Key.noteFontName) ?? NoteFont.defaultName
-        self.noteFontSize = defaults.object(forKey: Key.noteFontSize) as? Double ?? 13
+        self.noteFontSize = Self.clamped(
+            defaults.object(forKey: Key.noteFontSize) as? Double ?? 13,
+            to: Self.fontSizeRange
+        )
         self.letterSpacing = defaults.object(forKey: Key.letterSpacing) as? Double ?? 0
         self.guide = PaperGuide(rawValue: defaults.string(forKey: Key.guide) ?? "") ?? .none
 
