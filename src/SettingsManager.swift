@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 /// How the app presents itself. The user scored this the highest-priority
 /// remaining feature.
@@ -130,6 +131,7 @@ final class SettingsManager: ObservableObject {
         static let appearance     = "appearance"
         static let showsHeader    = "showsHeader"
         static let lineSpacing    = "lineSpacing"
+        static let windowFrame    = "windowFrame"
     }
 
     private let defaults: UserDefaults
@@ -181,6 +183,22 @@ final class SettingsManager: ObservableObject {
     /// How wide the note is when docked to an edge.
     @Published var edgeWidth: Double {
         didSet { defaults.set(edgeWidth, forKey: Key.edgeWidth) }
+    }
+
+    /// The last size and position the note had in a windowed mode.
+    ///
+    /// Edge mode rewrites the panel frame to fill the screen height, so without
+    /// remembering this, leaving edge mode left the window stuck at full size.
+    var windowedFrame: NSRect? {
+        get {
+            guard let raw = defaults.string(forKey: Key.windowFrame) else { return nil }
+            let rect = NSRectFromString(raw)
+            return rect.width > 100 && rect.height > 100 ? rect : nil
+        }
+        set {
+            guard let newValue else { return }
+            defaults.set(NSStringFromRect(newValue), forKey: Key.windowFrame)
+        }
     }
 
     /// The keyword actually used for matching, never empty.

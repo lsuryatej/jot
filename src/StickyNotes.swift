@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let settings = SettingsManager.shared
 
     /// One model shared by every container. The panel and the popover are
@@ -31,6 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = MainMenu.build(target: self, preferencesAction: #selector(showPreferences))
 
         panel = FloatingPanel(rootView: contentView())
+        panel.delegate = self
+        if let saved = settings.windowedFrame {
+            panel.setFrame(saved, display: false)
+        }
         installStatusItem()
 
         hotKey.onFire = { [weak self] in self?.toggleVisibility() }
@@ -49,6 +53,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !mode.anchorsToStatusItem, !mode.isEdgeDocked else { return }
             self.showInterface()
         }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        rememberWindowedFrame()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        rememberWindowedFrame()
+    }
+
+    private func rememberWindowedFrame() {
+        // Only windowed modes have a size worth keeping; the docked frame is
+        // derived from the screen.
+        guard !settings.displayMode.isEdgeDocked, panel?.isVisible == true else { return }
+        settings.windowedFrame = panel.frame
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -135,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             edgeTrigger?.orderOut(nil)
             edgeTrigger = nil
+            restoreWindowedFrame()
         }
 
         guard wasVisible else { return }
@@ -221,6 +241,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             if activating { self.focusPanel() }
             self.startEdgeAutoHide()
+        }
+    }
+
+    /// Puts the note back to the size it had before it was docked.
+    ///
+    /// Docking rewrites the frame to the full height of the screen. Without
+    /// this, switching away from edge mode — or just pressing the shortcut
+    /// afterwards — left a full-height window.
+    private func restoreWindowedFrame() {
+        let target = settings.windowedFrame ?? NSRect(x: 0, y: 0, width: 400, height: 420)
+        guard panel.frame.size != target.size || panel.frame.origin != target.origin else { return }
+        panel.setFrame(target, display: false)
+        if settings.windowedFrame == nil {
+            panel.center()
         }
     }
 

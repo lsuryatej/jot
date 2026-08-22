@@ -139,6 +139,7 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.lineHeightMultiple = lineHeightMultiple
         textView.onHeightChange = onHeightChange
         textView.textStorage?.delegate = textView
+        textView.enableImageDrops()
         textView.string = text
         textView.applyChecklistStyling()
 

@@ -128,7 +128,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
     /// Routes every mutation through the undo-aware path, so Cmd+Z still walks
     /// back through checklist edits.
-    private func replace(range: NSRange, with replacement: String, selecting selection: NSRange?) {
+    func replace(range: NSRange, with replacement: String, selecting selection: NSRange?) {
         guard shouldChangeText(in: range, replacementString: replacement) else { return }
         textStorage?.replaceCharacters(in: range, with: replacement)
         didChangeText()
@@ -244,6 +244,58 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
         replace(range: lineRange, with: updated, selecting: newSelection)
         return true
+    }
+
+    // MARK: - Images in, text out
+
+    /// Accepts an image dropped anywhere in the note and replaces it with the
+    /// text Vision reads out of it.
+    func enableImageDrops() {
+        registerForDraggedTypes([.fileURL, .tiff, .png])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        TextRecognition.image(from: sender.draggingPasteboard) != nil
+            ? .copy
+            : super.draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let image = TextRecognition.image(from: sender.draggingPasteboard) else {
+            return super.performDragOperation(sender)
+        }
+
+        let point = convert(sender.draggingLocation, from: nil)
+        recognize(image, insertingAt: characterIndexForInsertion(at: point))
+        return true
+    }
+
+    /// Cmd+V with an image on the clipboard does the same thing.
+    override func paste(_ sender: Any?) {
+        if let image = TextRecognition.image(from: .general),
+           NSPasteboard.general.string(forType: .string) == nil {
+            recognize(image, insertingAt: selectedRange().location)
+            return
+        }
+        super.paste(sender)
+    }
+
+    private func recognize(_ image: NSImage, insertingAt index: Int) {
+        Task { @MainActor in
+            do {
+                let recognised = try await TextRecognition.recognizeText(in: image)
+                let insertion = recognised.hasSuffix("\n") ? recognised : recognised + "\n"
+                let target = NSRange(location: min(index, (self.string as NSString).length), length: 0)
+                self.replace(
+                    range: target,
+                    with: insertion,
+                    selecting: NSRange(location: target.location + (insertion as NSString).length, length: 0)
+                )
+            } catch {
+                NSSound.beep()
+                NSLog("StickyNotes: text recognition failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - Clicking the box
@@ -411,6 +463,7 @@ struct PlainTextEditor: NSViewRepresentable {
 
         textView.lineHeightMultiple = lineHeightMultiple
         textView.textStorage?.delegate = textView
+        textView.enableImageDrops()
         textView.string = text
         textView.applyChecklistStyling()
 
