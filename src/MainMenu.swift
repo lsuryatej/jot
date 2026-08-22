@@ -56,6 +56,16 @@ enum MainMenu {
             action: #selector(ChecklistTextView.toggleChecklist(_:)),
             keyEquivalent: "l"
         )
+        menu.addItem(.separator())
+
+        // Cmd+V keeps a pasted image; this reads it instead.
+        let extract = NSMenuItem(
+            title: "Extract Text from Image",
+            action: #selector(ChecklistTextView.extractTextFromClipboardImage(_:)),
+            keyEquivalent: "v"
+        )
+        extract.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(extract)
         item.submenu = menu
         return item
     }

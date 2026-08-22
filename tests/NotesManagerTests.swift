@@ -319,6 +319,48 @@ func runAllTests() {
         equal(Note(text: "   ").title, "Untitled note", "blank note has a fallback title")
     }
 
+    // MARK: - Inline images
+
+    suite("image references parse out of a line") {
+        let refs = Checklist.item(in: "x") == nil
+            ? Attachments.references(in: "before ![320](Attachments/a.png) after")
+            : []
+        equal(refs.count, 1, "one reference found")
+        equal(refs.first?.path, "Attachments/a.png", "path")
+        equal(refs.first?.width, 320, "width")
+    }
+
+    suite("a reference without a width means natural size") {
+        let refs = Attachments.references(in: "![](Attachments/a.png)")
+        equal(refs.first?.width, nil, "no width given")
+        equal(refs.first?.path, "Attachments/a.png", "path still parsed")
+    }
+
+    suite("lines with no image yield nothing") {
+        equal(Attachments.references(in: "just text").count, 0, "plain line")
+        equal(Attachments.references(in: "[link](http://example.com)").count, 0,
+              "an ordinary link is not an image")
+    }
+
+    suite("markdown round trips") {
+        equal(Attachments.markdown(path: "Attachments/a.png", width: 240),
+              "![240](Attachments/a.png)", "with width")
+        equal(Attachments.markdown(path: "Attachments/a.png", width: nil),
+              "![](Attachments/a.png)", "without width")
+    }
+
+    suite("resizing rewrites only the width") {
+        let line = "![320](Attachments/a.png)"
+        let resized = Attachments.settingWidth(180, on: line, at: NSRange(location: 0, length: (line as NSString).length))
+        equal(resized, "![180](Attachments/a.png)", "width replaced, path intact")
+    }
+
+    suite("resizing has a floor") {
+        let line = "![320](Attachments/a.png)"
+        let resized = Attachments.settingWidth(4, on: line, at: NSRange(location: 0, length: (line as NSString).length))
+        equal(resized, "![48](Attachments/a.png)", "cannot be dragged away to nothing")
+    }
+
     // MARK: - Storage
 
     suite("notes survive a store round trip") {

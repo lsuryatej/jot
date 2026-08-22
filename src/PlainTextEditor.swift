@@ -175,6 +175,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(toggleChecklist(_:)) { return true }
+        if item.action == #selector(extractTextFromClipboardImage(_:)) { return true }
         return super.validateUserInterfaceItem(item)
     }
 
@@ -266,18 +267,57 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         }
 
         let point = convert(sender.draggingLocation, from: nil)
-        recognize(image, insertingAt: characterIndexForInsertion(at: point))
+        let index = characterIndexForInsertion(at: point)
+        // Option-drop reads the image as text; a plain drop keeps the image.
+        if NSEvent.modifierFlags.contains(.option) {
+            recognize(image, insertingAt: index)
+        } else {
+            insertImage(image, at: index)
+        }
         return true
     }
 
-    /// Cmd+V with an image on the clipboard does the same thing.
+    /// Cmd+V inserts an image on the clipboard as an image.
+    ///
+    /// Text extraction used to live here, but pasting a screenshot to *keep* it
+    /// is the more common intent, so OCR moved to its own command.
     override func paste(_ sender: Any?) {
-        if let image = TextRecognition.image(from: .general),
-           NSPasteboard.general.string(forType: .string) == nil {
-            recognize(image, insertingAt: selectedRange().location)
+        if NSPasteboard.general.string(forType: .string) == nil,
+           let image = TextRecognition.image(from: .general) {
+            insertImage(image, at: selectedRange().location)
             return
         }
         super.paste(sender)
+    }
+
+    /// Shift-Cmd-V: read the clipboard image as text instead of inserting it.
+    @objc func extractTextFromClipboardImage(_ sender: Any?) {
+        guard let image = TextRecognition.image(from: .general) else {
+            NSSound.beep()
+            return
+        }
+        recognize(image, insertingAt: selectedRange().location)
+    }
+
+    /// Saves the image beside the notes and drops a markdown reference to it on
+    /// its own line. The note stays plain text.
+    func insertImage(_ image: NSImage, at index: Int) {
+        do {
+            let path = try Attachments.save(image)
+            let markdown = Attachments.markdown(path: path, width: Attachments.defaultWidth(for: image))
+            let ns = string as NSString
+            let location = min(index, ns.length)
+            let needsLeadingBreak = location > 0 && ns.substring(with: NSRange(location: location - 1, length: 1)) != "\n"
+            let insertion = (needsLeadingBreak ? "\n" : "") + markdown + "\n"
+            replace(
+                range: NSRange(location: location, length: 0),
+                with: insertion,
+                selecting: NSRange(location: location + (insertion as NSString).length, length: 0)
+            )
+        } catch {
+            NSSound.beep()
+            NSLog("StickyNotes: could not save pasted image: \(error.localizedDescription)")
+        }
     }
 
     private func recognize(_ image: NSImage, insertingAt index: Int) {
@@ -307,6 +347,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         }
 
         let point = convert(event.locationInWindow, from: nil)
+
+        if let placed = image(at: point) {
+            beginResize(placed, from: point)
+            return
+        }
+
         let index = characterIndexForInsertion(at: point)
         let lineRange = contentRange(forLineAt: index)
         let line = (string as NSString).substring(with: lineRange)
@@ -325,6 +371,123 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
         let updated = Checklist.toggled(block: line)
         replace(range: lineRange, with: updated, selecting: selectedRange())
+    }
+
+    // MARK: - Inline images
+
+    /// Width being previewed during a resize drag, so the text is rewritten
+    /// once on mouse-up rather than on every frame of the drag.
+    private var resizingRange: NSRange?
+    private var previewWidth: CGFloat?
+
+    private struct PlacedImage {
+        let image: NSImage
+        let markdownRange: NSRange
+        let rect: NSRect
+    }
+
+    /// Where each image reference lands on screen, derived fresh from layout.
+    private func placedImages() -> [PlacedImage] {
+        guard let layoutManager, let textContainer, let textStorage else { return [] }
+        let ns = textStorage.string as NSString
+        var placed: [PlacedImage] = []
+
+        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: [.byLines]) { line, lineRange, _, _ in
+            guard let line else { return }
+            for reference in Attachments.references(in: line) {
+                guard let image = Attachments.image(at: reference.path) else { continue }
+
+                let markdownRange = NSRange(
+                    location: lineRange.location + reference.range.location,
+                    length: reference.range.length
+                )
+                let glyphRange = layoutManager.glyphRange(forCharacterRange: markdownRange, actualCharacterRange: nil)
+                var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                rect.origin.x += self.textContainerInset.width
+                rect.origin.y += self.textContainerInset.height
+
+                let width = self.displayWidth(for: reference, image: image, markdownRange: markdownRange)
+                let height = width * (image.size.height / max(1, image.size.width))
+                placed.append(
+                    PlacedImage(
+                        image: image,
+                        markdownRange: markdownRange,
+                        rect: NSRect(x: rect.minX, y: rect.minY, width: width, height: height)
+                    )
+                )
+            }
+        }
+        return placed
+    }
+
+    private func displayWidth(for reference: ImageReference, image: NSImage, markdownRange: NSRange) -> CGFloat {
+        if let previewWidth, resizingRange == markdownRange { return previewWidth }
+        return reference.width ?? Attachments.defaultWidth(for: image)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        for placed in placedImages() where placed.rect.intersects(dirtyRect) {
+            placed.image.draw(
+                in: placed.rect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high.rawValue]
+            )
+        }
+    }
+
+    /// Returns the image under `point`, if any.
+    private func image(at point: NSPoint) -> PlacedImage? {
+        placedImages().first { $0.rect.contains(point) }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        for placed in placedImages() {
+            addCursorRect(placed.rect, cursor: .resizeLeftRight)
+        }
+    }
+
+    /// Drag an image left or right to resize it. The width lives in the text,
+    /// so the result is still something you could have typed by hand.
+    private func beginResize(_ placed: PlacedImage, from startPoint: NSPoint) {
+        let startWidth = placed.rect.width
+        resizingRange = placed.markdownRange
+        previewWidth = startWidth
+
+        window?.trackEvents(matching: [.leftMouseDragged, .leftMouseUp], timeout: .infinity, mode: .default) { event, stop in
+            guard let event else {
+                stop.pointee = true
+                return
+            }
+            let point = self.convert(event.locationInWindow, from: nil)
+
+            if event.type == .leftMouseDragged {
+                self.previewWidth = max(48, startWidth + (point.x - startPoint.x))
+                self.needsDisplay = true
+                return
+            }
+
+            stop.pointee = true
+            defer {
+                self.resizingRange = nil
+                self.previewWidth = nil
+            }
+            guard let finalWidth = self.previewWidth, abs(finalWidth - startWidth) > 1 else { return }
+
+            let ns = self.string as NSString
+            let markdown = ns.substring(with: placed.markdownRange)
+            guard let rewritten = Attachments.settingWidth(
+                finalWidth,
+                on: markdown,
+                at: NSRange(location: 0, length: (markdown as NSString).length)
+            ) else { return }
+
+            self.replace(range: placed.markdownRange, with: rewritten, selecting: nil)
+        }
     }
 
     // MARK: - Styling
@@ -376,7 +539,37 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         }
 
         ns.enumerateSubstrings(in: target, options: [.byLines]) { line, lineRange, _, _ in
-            guard let line, let item = Checklist.item(in: line) else { return }
+            guard let line else { return }
+
+            // An image line is given the height of its image, and the markdown
+            // that produced it is painted out. The characters are still there:
+            // select the line and you can edit or delete it as text.
+            let references = Attachments.references(in: line)
+            if !references.isEmpty {
+                var tallest: CGFloat = 0
+                for reference in references {
+                    guard let image = Attachments.image(at: reference.path) else { continue }
+                    let width = reference.width ?? Attachments.defaultWidth(for: image)
+                    tallest = max(tallest, width * (image.size.height / max(1, image.size.width)))
+
+                    textStorage.addAttribute(
+                        .foregroundColor,
+                        value: NSColor.clear,
+                        range: NSRange(
+                            location: lineRange.location + reference.range.location,
+                            length: reference.range.length
+                        )
+                    )
+                }
+                if tallest > 0 {
+                    let style = NSMutableParagraphStyle()
+                    style.minimumLineHeight = tallest + 6
+                    style.maximumLineHeight = tallest + 6
+                    textStorage.addAttribute(.paragraphStyle, value: style, range: lineRange)
+                }
+            }
+
+            guard let item = Checklist.item(in: line) else { return }
 
             let markerRange = NSRange(
                 location: lineRange.location + item.markerRange.location,
