@@ -103,7 +103,11 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
       access to that repo — would need a PAT stored as a secret, which is
       the user's own action to set up (GitHub Settings > Developer Settings),
       not something to do silently.
-- [ ] No screenshot in the README yet.
+- [x] **Screenshots added to the README.** Six real screenshots from actual
+      use (not staged), under `docs/screenshots/`: a hero shot of the math
+      engine evaluating a live budget, the Screen Edge sidebar, currency
+      conversion, a checklist, appearance settings, and the two privacy
+      toggles — placed next to the feature sections they demonstrate.
 
 ## Lists
 

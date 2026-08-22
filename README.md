@@ -1,6 +1,6 @@
 # Jot
 
-A fast, native, plain-text scratchpad for macOS. No Electron, no dependencies, no telemetry.
+A plain-text scratchpad for macOS. No Electron, no dependencies, no telemetry.
 
 ![platform](https://img.shields.io/badge/platform-macOS%2014%2B-black?logo=apple&logoColor=white)
 ![swift](https://img.shields.io/badge/Swift-AppKit%20%2B%20SwiftUI-orange?logo=swift&logoColor=white)
@@ -9,12 +9,13 @@ A fast, native, plain-text scratchpad for macOS. No Electron, no dependencies, n
 ![binary size](https://img.shields.io/badge/binary-~950KB-blue)
 
 Option+A summons a note from anywhere. It floats, docks to the menu bar, sits
-in a screen-edge sidebar, or lives in the Dock — plain text, with checklists,
-inline math, unit and currency conversion, images, and OCR, all built on
-nothing but Swift, AppKit, and SwiftUI. There is no Xcode project, no
-package manager, and no runtime dependency: the whole app is one `swiftc`
-invocation compiling straight to a ~950KB binary with zero non-system
-libraries linked in.
+in a screen-edge sidebar, or lives in the Dock. Plain text, with checklists,
+inline math, unit and currency conversion, images, and OCR, built on nothing
+but Swift, AppKit, and SwiftUI. No Xcode project, no package manager, no
+runtime dependency. The whole app is one `swiftc` invocation compiling
+straight to a ~950KB binary with zero non-system libraries linked in.
+
+![Jot evaluating a live budget breakdown, variables and unit conversion included](docs/screenshots/hero.jpeg)
 
 ## Install
 
@@ -32,53 +33,51 @@ Both install a prebuilt, checksum-verified `Jot.app` to `/Applications` (or
 `~/Applications` if that's not writable) and never ask for `sudo`. Update with
 `brew upgrade jot`, or from Jot's own menu bar icon → **Check for Updates**.
 
-Jot is ad-hoc signed, not notarized — there's no paid Apple Developer account
+Jot is ad-hoc signed, not notarized. There's no paid Apple Developer account
 behind this project. Both install paths strip the quarantine flag before you
-ever open the app (`install.sh` directly; the Homebrew cask via a
+ever open the app (`install.sh` directly, the Homebrew cask via a
 `postflight` step), so neither should trigger a Gatekeeper "Not Opened"
-dialog. If you ever see one anyway — most likely from a copy that predates
-one of these fixes — right-click the app → Open, or System Settings →
-Privacy & Security → **Open Anyway**.
+dialog. If you see one anyway, most likely from a copy that predates one of
+these fixes, right-click the app → Open, or go to System Settings → Privacy
+& Security → **Open Anyway**.
 
 **Removing a Homebrew-installed copy:** use `brew uninstall --cask jot`, not
 `rm -rf`. Deleting the app directly leaves Homebrew's own install receipt
-pointing at a copy that no longer exists, and the next `brew install` will
-report "already installed" and silently do nothing.
+pointing at a copy that no longer exists, and the next `brew install` reports
+"already installed" and does nothing.
 
 ### Continuous verification
 
 Both install paths are checked by CI, not just by hand:
 
-- **`smoke-test-install-sh`** runs on every release (as a second job in
-  [`release.yml`](.github/workflows/release.yml), on its own fresh runner):
-  installs via `install.sh` against the release that job just published, then
-  confirms the app exists, is executable, matches the tagged version, carries
-  a valid ad-hoc signature, and — the specific thing that matters — is not
-  quarantined.
+- **`smoke-test-install-sh`** runs on every release, as a second job in
+  [`release.yml`](.github/workflows/release.yml), on its own fresh runner.
+  Installs via `install.sh` against the release that job just published, then
+  checks the app exists, is executable, matches the tagged version, carries a
+  valid ad-hoc signature, and is not quarantined.
 - **[`brew-smoke-test.yml`](.github/workflows/brew-smoke-test.yml)** runs
-  daily (and on demand) rather than per-release, since the Homebrew cask is
-  bumped by hand after each release and there's always a window where it's
-  briefly out of sync with the latest tag. Installs via the exact published
+  daily, plus on demand, instead of per-release. The Homebrew cask is bumped
+  by hand after each release, so there's always a window where it's briefly
+  out of sync with the latest tag. Installs via the exact published
   `brew install lsuryatej/jot/jot` command on a throwaway runner, checks the
-  same things, and cleans up with `brew uninstall --cask jot`.
+  same things, cleans up with `brew uninstall --cask jot`.
 
-Both ran the postflight quarantine fix through a genuinely fresh machine
-before it was trusted — not just the machine it was written on.
+Both ran through a genuinely fresh machine before the quarantine fix was
+trusted, not just the machine it was written on.
 
 ## Why this exists
 
-Most "quick note" apps on macOS are either a $5–15 indie tool (Antinote,
-Numi, Soulver) or, at the other end, a full Electron shell burning 150MB+
-before you've typed a word. Jot is the native answer: it does the scratchpad
-things well — instant recall, math that just works, images you can drop in
-without thinking — and it does them in a binary smaller than most icon files.
+Most "quick note" apps on macOS are either a $5-15 indie tool (Antinote,
+Numi, Soulver) or a full Electron shell burning 150MB+ before you've typed a
+word. Jot does the scratchpad basics, math that works, images you can drop
+in, quick recall, in a binary smaller than most icon files.
 
 ## Features
 
 **Global hotkey.** Option+A toggles the note from anywhere, rebindable in
 Settings. Registered through Carbon's `RegisterEventHotKey`, which needs no
-Accessibility permission and consumes the keystroke — it won't also type `å`
-into whatever app is in front.
+Accessibility permission and consumes the keystroke, so it won't also type
+`å` into whatever app is in front.
 
 **Five display modes**, switchable live in Settings:
 
@@ -89,6 +88,8 @@ into whatever app is in front.
 | Menu Bar Dropdown | Drops down under the icon, hides when you click away. |
 | Dock | Dock icon and app switcher entry, like a normal app. |
 | Screen Edge | A sidebar docked to a screen edge, holding every note as its own card, revealed by resting the cursor against that edge. |
+
+![The Screen Edge sidebar, holding several notes as cards](docs/screenshots/screen-edge.jpeg)
 
 **Inline math with variables.**
 
@@ -101,51 +102,57 @@ budget * 1.2          → 6000
 ```
 
 A recursive-descent parser evaluates the whole note top to bottom on every
-keystroke — variables assigned on one line are visible to every line below
-it. A line with no operator is left as prose, even if it starts with a
-number, so "5 apples" never turns into a calculation. Results are drawn in
-the right margin and never touch the text itself.
+keystroke. Variables assigned on one line are visible to every line below it.
+A line with no operator is left as prose, even if it starts with a number, so
+"5 apples" never turns into a calculation. Results are drawn in the right
+margin and never touch the text itself.
 
 **Unit and currency conversion.** Length, mass, time, data, and temperature
 convert offline via a fixed table. Currency rates are fetched from a public,
-key-free API — **off by default** (see Privacy below); when off, conversion
-uses the last cached rate or a built-in snapshot.
+key-free API, off by default (see Privacy below). When off, conversion uses
+the last cached rate or a built-in snapshot.
+
+![Live currency conversion in the menu bar dropdown](docs/screenshots/currency-conversion.jpeg)
 
 **Checklists.** Type `list` alone on the first line and the whole note
-becomes a checklist — every line below it turns into an item, and Return
-keeps making more. Click a checkbox to toggle it, Cmd+L toggles the current
-line or a whole selection, Tab/Shift-Tab nest items, and completed items dim
-and strike through. The file on disk stays plain markdown (`- [ ]` / `- [x]`),
-so it renders as a real task list in Obsidian, Bear, or GitHub.
+becomes a checklist. Every line below it turns into an item, and Return keeps
+making more. Click a checkbox to toggle it, Cmd+L toggles the current line or
+a whole selection, Tab/Shift-Tab nest items, completed items dim and strike
+through. The file on disk stays plain markdown (`- [ ]` / `- [x]`), so it
+renders as a real task list in Obsidian, Bear, or GitHub.
 
-**Images.** Paste or drop an image and it stays an image — drawn inline,
+![A checklist, with completed items struck through](docs/screenshots/checklist.jpeg)
+
+**Images.** Paste or drop an image and it stays an image, drawn inline,
 resizable by dragging its edge. It's written to `Attachments/` beside your
 notes, referenced from the text as `![width](Attachments/<id>.png)`, so a
 note with a picture in it is still something you can read in `cat`.
 
 **Screenshot to text.** Shift-Cmd-V reads the image on your clipboard with
-Apple's Vision framework and inserts the text it finds — fully offline, on
-the Neural Engine, no cloud OCR service involved.
+Apple's Vision framework and inserts the text it finds. Fully offline, on the
+Neural Engine, no cloud OCR service involved.
 
-**Native search, counts, and totals.** Cmd+F opens the real macOS find bar
-with match highlighting. A footer shows live word/character/line counts, and
-selecting text with two or more numbers in it shows their sum and average —
-select `rent $1,240.50 and food $310.25` and see the total without leaving
+**Search, counts, and totals.** Cmd+F opens the real macOS find bar with
+match highlighting. A footer shows live word/character/line counts, and
+selecting text with two or more numbers in it shows their sum and average.
+Select `rent $1,240.50 and food $310.25` and see the total without leaving
 the note.
 
-**Timers.** `5m timer`, `30s timer`, `2h timer` — the keyword is
-configurable. A timer belongs to the note that started it and won't restart
-itself after firing.
+**Timers.** `5m timer`, `30s timer`, `2h timer`, the keyword is configurable.
+A timer belongs to the note that started it and won't restart itself after
+firing.
 
 **Optional Apple Notes sync.** Off by default. Turn it on and each note is
-pushed into a "Jot" folder in Apple Notes, one direction only — nothing
+pushed into a "Jot" folder in Apple Notes, one direction only. Nothing
 written there is ever read back, and deleting a note in Jot never deletes it
 in Notes. Images sync too, embedded as real inline images, not just their
 markdown reference.
 
-**Appearance.** Frosted, Glass, or Solid surfaces; the header and footer can
-be hidden entirely; line spacing is adjustable — down to nothing but text on
-glass, if that's what you want.
+**Appearance.** Frosted, Glass, or Solid surfaces, header and footer can be
+hidden entirely, line spacing is adjustable, down to nothing but text on
+glass if that's what you want.
+
+![Appearance settings alongside a frosted note](docs/screenshots/appearance-settings.jpeg)
 
 ## Shortcuts
 
@@ -153,7 +160,7 @@ glass, if that's what you want.
 |---|---|
 | **Option+A** (configurable) | Show or hide Jot from anywhere on macOS |
 | **Cmd+N** | New note |
-| **Cmd+W** | Close the frontmost window — hides the note, or closes Settings |
+| **Cmd+W** | Close the frontmost window, hides the note or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+F** | Find in the current note |
@@ -173,16 +180,18 @@ you'd expect anywhere on macOS.
 Jot makes **zero network requests by default.** The only two things that can
 ever leave your machine, both opt-in and both toggleable in Settings:
 
-- **Live currency rates** — off by default. On, it's one request a day to a
-  public, key-free exchange-rate API; nothing about you or your notes is in
+- **Live currency rates**, off by default. On, it's one request a day to a
+  public, key-free exchange-rate API. Nothing about you or your notes is in
   the request.
-- **Update checks** — on by default, since a stale copy silently missing bug
-  fixes is a worse outcome than one anonymous GET a day to GitHub's public
-  releases API. Turn it off in Settings if you'd rather not.
+- **Update checks**, on by default. A stale copy silently missing bug fixes
+  is a worse outcome than one anonymous GET a day to GitHub's public releases
+  API. Turn it off in Settings if you'd rather not.
 
-Nothing else — no analytics, no crash reporting, no identifiers. Apple Notes
-sync, when you turn it on, talks to Notes.app locally via AppleScript; it
-never touches the network itself.
+Nothing else. No analytics, no crash reporting, no identifiers. Apple Notes
+sync, when you turn it on, talks to Notes.app locally via AppleScript. It
+never touches the network.
+
+![Both network-facing toggles, off and on by default respectively](docs/screenshots/privacy-settings.jpeg)
 
 ## Building from source
 
@@ -193,15 +202,15 @@ cd jot
 ```
 
 ```bash
-./test.sh   # logic tests — no Xcode project, no simulator, just swiftc
+./test.sh   # logic tests, no Xcode project, no simulator, just swiftc
 ```
 
-**Xcode is required** — not just the Command Line Tools. The macOS 27 beta
-CLT ships a `swiftc` that can't read its own SDK; Xcode bundles a matched
+**Xcode is required**, not just the Command Line Tools. The macOS 27 beta CLT
+ships a `swiftc` that can't read its own SDK. Xcode bundles a matched
 toolchain and SDK pair, so `build.sh` locates one explicitly (checking
-`/Applications/Xcode-beta.app`, then `/Applications/Xcode.app`) rather than
+`/Applications/Xcode-beta.app`, then `/Applications/Xcode.app`) instead of
 trusting `xcode-select`. On a non-beta macOS this constraint likely doesn't
-apply at all — a normal Xcode install should just work.
+apply at all, a normal Xcode install should just work.
 
 ## Layout
 
@@ -238,11 +247,10 @@ apply at all — a normal Xcode install should just work.
 
 `NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, and `Attachments`
 are deliberately free of SwiftUI and AppKit, so every rule in them is covered
-by a fast, dependency-free test — 191 checks, run by `./test.sh` in under a
-few seconds.
+by a dependency-free test, 191 checks, run by `./test.sh` in a few seconds.
 
 `Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes
-and rebuilds the bundle every run, so a stale binary or signature can never
+and rebuilds the bundle every run, so a stale binary or signature can't
 survive.
 
 ## Data
@@ -256,7 +264,7 @@ under `com.suryatejlalam.Jot`.
 
 - No URL shortening/elision for long links yet.
 - Notes can't be reordered.
-- Apple Notes sync is one-way; nothing written there is read back.
+- Apple Notes sync is one-way, nothing written there is read back.
 - The build targets `arm64` only.
 
 See [BACKLOG.md](BACKLOG.md) for the fuller list, including bugs, planned

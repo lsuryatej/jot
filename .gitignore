@@ -1,4 +1,6 @@
 .DS_Store
+._*
+*.log
 /.build
 /Packages
 xcuserdata/
@@ -6,6 +8,9 @@ DerivedData/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
+.env
+.vscode/
+.idea/
 
 # Build output: the .app bundle is assembled entirely by build.sh
 /Jot.app
