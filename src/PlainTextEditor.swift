@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 
+
 enum SwipeDirection {
     case left
     case right
@@ -191,6 +192,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
         if flags == [.command, .shift], key == "v" {
             extractTextFromClipboardImage(nil)
+            return true
+        }
+        // Cmd+V is routed here too. The main menu is not displayed outside Dock
+        // mode, and if it is not consulted for key equivalents then the paste
+        // override is never reached at all.
+        if flags == [.command], key == "v" {
+            paste(nil)
             return true
         }
         if flags == [.command], key == "l" {
@@ -400,7 +408,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
             )
         } catch {
             NSSound.beep()
-            NSLog("StickyNotes: could not save pasted image: \(error.localizedDescription)")
+            let alert = NSAlert()
+            alert.messageText = "Could not save that image"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
         }
     }
 
