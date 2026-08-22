@@ -117,6 +117,116 @@ func runAllTests() {
         equal(m.notes.count, 2, "current note survives even while blank")
     }
 
+    // MARK: - Reordering
+
+    suite("moving a note reorders the list") {
+        let m = makeManager(seed: ["one", "two", "three"])
+        m.moveNote(from: 2, to: 0)
+        equal(m.texts, ["three", "one", "two"], "last note lands at the top")
+
+        let n = makeManager(seed: ["one", "two", "three"])
+        n.moveNote(from: 0, to: 3)
+        equal(n.texts, ["two", "three", "one"], "first note lands at the bottom")
+
+        let o = makeManager(seed: ["a", "b", "c", "d"])
+        o.moveNote(from: 1, to: 3)
+        equal(o.texts, ["a", "c", "b", "d"], "a note lands before whatever it was dropped onto")
+    }
+
+    suite("the two no-op slots leave everything alone") {
+        // Under the onMove convention, dropping onto yourself or just below
+        // yourself changes nothing — both must be caught before the array is
+        // touched, so no save fires and no view animates.
+        let m = makeManager(seed: ["one", "two", "three"])
+        m.moveNote(from: 1, to: 1)
+        m.moveNote(from: 1, to: 2)
+        equal(m.texts, ["one", "two", "three"], "order unchanged")
+    }
+
+    suite("out-of-range moves are refused, not crashed into") {
+        let m = makeManager(seed: ["one", "two"])
+        m.moveNote(from: -1, to: 0)
+        m.moveNote(from: 5, to: 0)
+        m.moveNote(from: 0, to: -3)
+        m.moveNote(from: 0, to: 99)
+        equal(m.texts, ["one", "two"], "every bad move left the list untouched")
+    }
+
+    suite("reordering keeps the user on the same note") {
+        // currentIndex starts on the last seeded note.
+        let m = makeManager(seed: ["one", "two", "three"])
+        let followedID = m.notes[m.currentIndex].id
+
+        m.moveNote(from: 0, to: 3)
+        equal(m.texts[m.currentIndex], "three", "notes moving past it do not drag the caret along")
+        equal(m.notes[m.currentIndex].id, followedID, "identity, not coincidence of position")
+
+        let n = makeManager(seed: ["one", "two", "three"])
+        n.moveNote(from: 2, to: 0)
+        equal(n.texts[n.currentIndex], "three", "moving the current note itself keeps it current")
+    }
+
+    suite("moving does not purge blank notes") {
+        // Purging belongs to navigation. A drag that quietly deleted the blank
+        // note two slots over would be a surprise nobody asked for.
+        let m = makeManager(seed: ["one", "", "", "four"])
+        m.moveNote(from: 3, to: 0)
+        equal(m.notes.count, 4, "count unchanged by a move")
+    }
+
+    suite("a running timer keeps running while its note moves") {
+        // Navigation deliberately clears the timer (covered above); a move is
+        // not navigation, so it must not touch the countdown either way.
+        let m = makeManager(seed: ["first", "second"])
+        m.currentText = "5m timer"
+        check(m.activeTimerEnd != nil, "timer started")
+
+        // Moving the very note the timer belongs to, without navigating.
+        m.moveNote(from: 1, to: 0)
+        check(m.activeTimerEnd != nil, "still running after its note moved up the list")
+        equal(m.texts[m.currentIndex], "5m timer", "and the user stayed on it")
+    }
+
+    suite("moveCurrentNote walks one slot at a time and clamps") {
+        // Seeded managers start on the last note.
+        let m = makeManager(seed: ["a", "b", "c"])
+        m.moveCurrentNote(by: -1)
+        equal(m.texts, ["a", "c", "b"], "up means toward index 0")
+
+        m.moveCurrentNote(by: +1)
+        equal(m.texts, ["a", "b", "c"], "back down again")
+
+        m.moveCurrentNote(by: +5)
+        equal(m.texts, ["a", "b", "c"], "already at the bottom, clamped")
+
+        m.moveCurrentNote(by: -9)
+        equal(m.texts, ["c", "a", "b"], "clamped at the top from wherever it was")
+
+        let single = makeManager()
+        single.moveCurrentNote(by: -1)
+        single.moveCurrentNote(by: +1)
+        equal(single.notes.count, 1, "a lone note has nowhere to go")
+    }
+
+    suite("a reordered list survives persistence") {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("jot-reorder-\(UUID().uuidString)")
+            .appendingPathComponent("notes.json")
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+        let m = NotesManager(store: store, saveDebounce: 0)
+        m.appendNote()
+        m.appendNote()
+        m.appendNote()
+        for (i, text) in ["one", "two", "three", "four"].enumerated() { m.setText(text, at: i) }
+
+        m.moveNote(from: 3, to: 0)
+        m.flush()
+
+        let reloaded = NoteStore(fileURL: url, allowsLegacyMigration: false).load()
+        equal(reloaded.map(\.text), ["four", "one", "two", "three"], "new order is what reaches disk")
+        equal(Set(reloaded.map(\.id)), Set(m.notes.map(\.id)), "identities are untouched by a move")
+    }
+
     suite("addNewNote refuses to stack blanks") {
         let m = makeManager()
         m.currentText = "something"

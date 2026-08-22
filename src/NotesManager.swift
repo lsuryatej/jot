@@ -113,6 +113,49 @@ final class NotesManager: ObservableObject {
         flush()
     }
 
+    // MARK: - Reordering
+
+    /// Moves one note to another position in the list.
+    ///
+    /// `to` follows the `Array.move(fromOffsets:toOffset:)` convention SwiftUI's
+    /// `onMove` uses: the destination is counted in the array *before* the note
+    /// is removed, so "drop before whatever sits at index 2" passes 2. Under
+    /// that convention `to == from` and `to == from + 1` both leave every note
+    /// where it started, which is what makes them the early-exit slots.
+    ///
+    /// The current note is tracked by identity across the move rather than by
+    /// doing arithmetic on `currentIndex`, so reordering never changes which
+    /// note the user is looking at — including when it is the one being moved.
+    /// A timer running on a moved note keeps running, and no purging happens:
+    /// moving is not navigating.
+    func moveNote(from source: Int, to destination: Int) {
+        guard source != destination, source != destination - 1 else { return }
+        guard notes.indices.contains(source),
+              notes.indices.contains(currentIndex),
+              destination >= 0, destination <= notes.count
+        else { return }
+
+        let currentID = notes[currentIndex].id
+        let note = notes.remove(at: source)
+        notes.insert(note, at: destination > source ? destination - 1 : destination)
+        // The current note cannot be absent here — moves remove nothing — so
+        // the fallback only exists to keep the compiler and future edits honest.
+        currentIndex = notes.firstIndex(where: { $0.id == currentID }) ?? min(currentIndex, notes.count - 1)
+        scheduleSave()
+    }
+
+    /// Walks the current note through the list by keyboard: negative is toward
+    /// the top, positive toward the bottom, clamped at both ends. Moving down
+    /// one slot targets `currentIndex + 2` under the onMove convention —
+    /// `+ 1` is the do-nothing slot — and `notes.count` itself is a legal
+    /// destination meaning "to the very end".
+    func moveCurrentNote(by delta: Int) {
+        let target = delta < 0
+            ? max(0, currentIndex + delta)
+            : min(notes.count, currentIndex + delta + 1)
+        moveNote(from: currentIndex, to: target)
+    }
+
     // MARK: - Timers
 
     /// Matches "90s timer", "5m timer", "2h timer" (case-insensitive).
