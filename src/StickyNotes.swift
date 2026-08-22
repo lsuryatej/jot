@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem?
     private var preferencesWindow: NSWindow?
+    private var edgeTrigger: EdgeTriggerWindow?
+    private var edgeAutoHideTimer: Timer?
     /// Guards against re-applying a mode that is already in effect. The
     /// @Published sink fires once on subscribe, which would otherwise tear the
     /// interface down and rebuild it immediately after launch.
@@ -42,8 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // everything or not on screen at all.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // A menu bar dropdown opens when you ask for it, not on launch.
-            guard !self.settings.displayMode.anchorsToStatusItem else { return }
+            // Reveal-on-demand modes open when you ask for them, not on launch.
+            let mode = self.settings.displayMode
+            guard !mode.anchorsToStatusItem, !mode.isEdgeDocked else { return }
             self.showInterface()
         }
     }
@@ -92,6 +95,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        settings.$screenEdge
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.settings.displayMode.isEdgeDocked else { return }
+                self.installEdgeTrigger()
+            }
+            .store(in: &cancellables)
+
         settings.$timerKeyword
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -119,6 +130,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.apply(mode: mode)
 
+        if mode.isEdgeDocked {
+            installEdgeTrigger()
+        } else {
+            edgeTrigger?.orderOut(nil)
+            edgeTrigger = nil
+        }
+
         guard wasVisible else { return }
 
         if policyChanged {
@@ -141,12 +159,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showInterface() {
+        if settings.displayMode.isEdgeDocked {
+            // Reached here from the hot key or the menu bar, both deliberate.
+            revealFromEdge(activating: true)
+            return
+        }
         if settings.displayMode.anchorsToStatusItem {
             anchorPanelToStatusItem()
         }
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         panel.focusEditor()
+    }
+
+    // MARK: - Screen edge
+
+    private func installEdgeTrigger() {
+        if edgeTrigger == nil {
+            edgeTrigger = EdgeTriggerWindow { [weak self] activating in
+                guard let self else { return }
+                if self.panel.isVisible {
+                    // Already out: a click on the bar should still hand it focus.
+                    if activating { self.focusPanel() }
+                    return
+                }
+                self.revealFromEdge(activating: activating)
+            }
+        }
+        edgeTrigger?.position(on: settings.screenEdge, screen: NSScreen.main)
+        // orderFrontRegardless: the strip has to appear without activating the
+        // app, or pushing the cursor at the edge would steal focus from
+        // whatever the user is actually working in.
+        edgeTrigger?.orderFrontRegardless()
+    }
+
+    /// Docks the note full-height against the chosen edge and slides it in.
+    ///
+    /// `activating` is false when the hot side triggered this. Revealing on
+    /// hover must never take the keyboard: the pointer reaching a screen edge
+    /// is usually incidental, and stealing focus there sends the user's next
+    /// keystrokes into this note instead of the app they were working in.
+    private func revealFromEdge(activating: Bool) {
+        guard let visible = (NSScreen.main?.visibleFrame) else { return }
+
+        let width = CGFloat(settings.edgeWidth)
+        let onScreenX = settings.screenEdge == .right ? visible.maxX - width : visible.minX
+        let offScreenX = settings.screenEdge == .right ? visible.maxX : visible.minX - width
+        let docked = NSRect(x: onScreenX, y: visible.minY, width: width, height: visible.height)
+
+        panel.setFrame(
+            NSRect(x: offScreenX, y: visible.minY, width: width, height: visible.height),
+            display: false
+        )
+        panel.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(docked, display: true)
+        } completionHandler: { [weak self] in
+            guard let self else { return }
+            if activating { self.focusPanel() }
+            self.startEdgeAutoHide()
+        }
+    }
+
+    private func focusPanel() {
+        panel.makeKeyAndOrderFront(nil)
+        panel.focusEditor()
+    }
+
+    /// Hides the edge note once the pointer leaves it.
+    ///
+    /// Polled rather than driven by tracking areas: the content is an
+    /// NSHostingView, and threading a tracking area through SwiftUI to get one
+    /// mouseExited is more machinery than five checks a second.
+    private func startEdgeAutoHide() {
+        edgeAutoHideTimer?.invalidate()
+        edgeAutoHideTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self, self.settings.displayMode.isEdgeDocked else { return }
+            guard self.panel.isVisible else {
+                self.stopEdgeAutoHide()
+                return
+            }
+            // While it holds the keyboard the user is typing in it, so leave it.
+            guard !self.panel.isKeyWindow else { return }
+
+            let pointer = NSEvent.mouseLocation
+            let generous = self.panel.frame.insetBy(dx: -12, dy: -12)
+            guard !generous.contains(pointer) else { return }
+
+            self.stopEdgeAutoHide()
+            self.hideInterface()
+        }
+    }
+
+    private func stopEdgeAutoHide() {
+        edgeAutoHideTimer?.invalidate()
+        edgeAutoHideTimer = nil
     }
 
     /// Positions the note directly under the menu bar icon, clamped so it never
@@ -173,6 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hideInterface() {
+        stopEdgeAutoHide()
         panel?.orderOut(nil)
     }
 
@@ -299,6 +410,12 @@ final class FloatingPanel: NSPanel {
     func apply(mode: DisplayMode) {
         hidesOnDeactivate = mode.hidesOnDeactivate
 
+        // A panel docked flush against the screen edge has nothing to close,
+        // minimise, or zoom, and the traffic lights read as a stray window.
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            standardWindowButton(button)?.isHidden = mode.isEdgeDocked
+        }
+
         if mode.wantsFloatingLevel {
             level = .floating
             isFloatingPanel = true
@@ -306,10 +423,10 @@ final class FloatingPanel: NSPanel {
             // Dropdown mode needs to take focus so you can type into it, and to
             // dismiss itself the moment focus moves elsewhere. Floating mode
             // stays out of the way of whatever you are typing in.
-            if mode.hidesOnDeactivate {
-                styleMask.remove(.nonactivatingPanel)
-            } else {
+            if mode.isEdgeDocked || !mode.hidesOnDeactivate {
                 styleMask.insert(.nonactivatingPanel)
+            } else {
+                styleMask.remove(.nonactivatingPanel)
             }
         } else {
             level = .normal

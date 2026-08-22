@@ -43,6 +43,7 @@ whatever app is in front.
 | Menu Bar | Ordinary window level, shown and hidden from the menu bar icon. |
 | Menu Bar Dropdown | Drops down under the icon and hides when you click away. |
 | Dock | Dock icon and app switcher entry, like a normal app. |
+| Screen Edge | Docked full-height to the left or right edge, revealed by resting the cursor against that edge. |
 
 **Menu bar icon.** Left click toggles the panel, right click opens Show/Hide and
 Quit. The app is `LSUIElement` with no Dock icon, so this is the fallback if the
@@ -58,6 +59,12 @@ note that started it, and an expired directive does not restart itself.
 
 **Checklists.** The Toggle Checklist button flips `[ ]` and `[x]` on the line
 containing the caret. A line with no checkbox gains one, indentation preserved.
+
+**Screen edge.** In Screen Edge mode a thin bar sits against your chosen edge.
+Rest the cursor there for a moment and the note slides out; move away and it
+slides back. Revealing by hover deliberately does not take keyboard focus, so
+brushing the edge never redirects your typing. Clicking the bar, or using the
+shortcut, reveals it *and* hands it focus. Edge and width are configurable.
 
 **Search.** Cmd+F opens the native find bar with match highlighting; Cmd+G and
 Shift+Cmd+G step through matches.
@@ -99,6 +106,8 @@ are small and reconstructible, unlike the notes.
 | `src/HotKeyController.swift` | Global shortcut registration |
 | `src/KeyCombo.swift` | Shortcut model and its display form |
 | `src/TextStatistics.swift` | Word counts and selection sum/average |
+| `src/Checklist.swift` | Checklist parsing and rewriting |
+| `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
 | `src/ContentView.swift` | Panel UI: header, editor, timer overlay, share |
 | `src/PlainTextEditor.swift` | `NSTextView` wrapper plus the swipe-reading scroll view |
 | `src/NotesManager.swift` | Note state, navigation, timer parsing, checklists |

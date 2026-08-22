@@ -12,6 +12,9 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     case dropdown
     /// Regular app with a Dock icon and a standard window.
     case dock
+    /// Docked to a screen edge, revealed by pushing the cursor into that edge
+    /// or clicking the bar that sits there.
+    case edge
 
     var id: String { rawValue }
 
@@ -21,6 +24,7 @@ enum DisplayMode: String, CaseIterable, Identifiable {
         case .menuBar:  return "Menu Bar"
         case .dropdown: return "Menu Bar Dropdown"
         case .dock:     return "Dock"
+        case .edge:     return "Screen Edge"
         }
     }
 
@@ -30,6 +34,7 @@ enum DisplayMode: String, CaseIterable, Identifiable {
         case .menuBar:  return "Behaves like a normal window. Toggle it from the menu bar."
         case .dropdown: return "Drops down from the menu bar icon and closes when you click away."
         case .dock:     return "Appears in the Dock and the app switcher like a normal app."
+        case .edge:     return "Slides out when you push the cursor into the edge of the screen."
         }
     }
 
@@ -45,12 +50,29 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     }
 
     var hidesOnDeactivate: Bool {
+        // Edge mode is deliberately excluded: it reveals without activating the
+        // app, so there is no deactivation to hide on. It auto-hides when the
+        // pointer leaves instead.
         self == .dropdown
     }
 
-    var wantsFloatingLevel: Bool {
-        self == .floating || self == .dropdown
+    /// Docked full-height against a screen edge, with a trigger strip.
+    var isEdgeDocked: Bool {
+        self == .edge
     }
+
+    var wantsFloatingLevel: Bool {
+        self == .floating || self == .dropdown || self == .edge
+    }
+}
+
+/// Which side of the screen the edge-docked note lives on.
+enum ScreenEdge: String, CaseIterable, Identifiable {
+    case left
+    case right
+
+    var id: String { rawValue }
+    var title: String { self == .left ? "Left" : "Right" }
 }
 
 /// User preferences. These are small and non-critical, so UserDefaults is the
@@ -64,6 +86,8 @@ final class SettingsManager: ObservableObject {
         static let hotKeyMods     = "hotKeyModifiers"
         static let timerKeyword   = "timerKeyword"
         static let showsFooter    = "showsFooter"
+        static let screenEdge     = "screenEdge"
+        static let edgeWidth      = "edgeWidth"
     }
 
     private let defaults: UserDefaults
@@ -93,6 +117,15 @@ final class SettingsManager: ObservableObject {
         didSet { defaults.set(showsFooter, forKey: Key.showsFooter) }
     }
 
+    @Published var screenEdge: ScreenEdge {
+        didSet { defaults.set(screenEdge.rawValue, forKey: Key.screenEdge) }
+    }
+
+    /// How wide the note is when docked to an edge.
+    @Published var edgeWidth: Double {
+        didSet { defaults.set(edgeWidth, forKey: Key.edgeWidth) }
+    }
+
     /// The keyword actually used for matching, never empty.
     var effectiveTimerKeyword: String {
         let trimmed = timerKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -115,5 +148,9 @@ final class SettingsManager: ObservableObject {
 
         self.timerKeyword = defaults.string(forKey: Key.timerKeyword) ?? "timer"
         self.showsFooter = defaults.object(forKey: Key.showsFooter) as? Bool ?? true
+
+        let rawEdge = defaults.string(forKey: Key.screenEdge) ?? ScreenEdge.right.rawValue
+        self.screenEdge = ScreenEdge(rawValue: rawEdge) ?? .right
+        self.edgeWidth = defaults.object(forKey: Key.edgeWidth) as? Double ?? 340
     }
 }

@@ -28,6 +28,28 @@ struct PreferencesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if settings.displayMode.isEdgeDocked {
+                    HStack(spacing: 12) {
+                        Picker("Edge", selection: $settings.screenEdge) {
+                            ForEach(ScreenEdge.allCases) { edge in
+                                Text(edge.title).tag(edge)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 150)
+
+                        Text("Width")
+                            .font(.caption)
+                        Slider(value: $settings.edgeWidth, in: 240...600)
+                            .frame(width: 120)
+                        Text("\(Int(settings.edgeWidth))")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 30, alignment: .trailing)
+                    }
+                    .padding(.top, 2)
+                }
             }
 
             Divider()
