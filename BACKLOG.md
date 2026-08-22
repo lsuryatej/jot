@@ -10,6 +10,36 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
       The last of the three originally-scoped Antinote features; math and
       currency/unit conversion are both done (see Done).
 
+## Compared to Antinote
+
+Researched 2026-08-22 (see README's "How it compares" table). Antinote is
+the closest competitor in shape and scope, a $5 menu-bar scratchpad with
+math, checklists, and OCR. Where Jot is behind it right now, roughly ranked:
+
+- **No search across notes.** Cmd+F only searches the note you're on.
+  Antinote indexes and searches your entire note history. This is probably
+  the single biggest functional gap.
+- **No sync across devices.** Notes live in one local file on one Mac.
+  Antinote 2.0 has optional iCloud sync, and an iOS companion app is in
+  development (announced for October 2026). Jot has neither, and nothing
+  planned.
+- **No link shrink yet.** Already tracked above, Antinote ships this today.
+- **No scripting or theming.** Antinote has JavaScript extensions and
+  custom themes. Jot's appearance is three fixed presets (Frosted/Glass/
+  Solid) with no way to extend or script it.
+- **No AutoPaste.** Antinote can auto-capture whatever's on your clipboard
+  into a note without an explicit paste. Jot requires an explicit paste.
+- **Less proven.** Antinote is a mature, several-year-old shipped product
+  with a real user base. Jot is a solo project days old. It's also ad-hoc
+  signed rather than notarized, which means new users see a Gatekeeper
+  prompt on first launch that a commercially notarized app wouldn't
+  trigger, a real trust hurdle Antinote doesn't have.
+
+Where Jot is ahead: free and open source, inline resizable images (Antinote
+has none), five display modes instead of menu-bar-only, optional one-way
+Apple Notes sync, and an explicit zero-telemetry stance with both
+network-facing features off or documented rather than bundled into iCloud.
+
 ## Bugs
 
 - [x] **[bug] Apple Notes sync duplicated every note on each edit.** osascript
@@ -42,8 +72,7 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
       does with it before trusting that approach further. Deprioritized for
       now per explicit instruction — "should hold for now."
 - [ ] **[bug] Swiping with the title bar hidden gives no feedback.** Nothing
-      indicates which note you moved to. Worth checking what Antinote does
-      here before designing it.
+      indicates which note you moved to.
 
 ## Behaviour and polish
 

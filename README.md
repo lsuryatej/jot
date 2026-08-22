@@ -67,10 +67,37 @@ trusted, not just the machine it was written on.
 
 ## Why this exists
 
-Most "quick note" apps on macOS are either a $5-15 indie tool (Antinote,
+Most "quick note" apps on macOS are either a $5-59 indie tool (Antinote,
 Numi, Soulver) or a full Electron shell burning 150MB+ before you've typed a
 word. Jot does the scratchpad basics, math that works, images you can drop
 in, quick recall, in a binary smaller than most icon files.
+
+## How it compares
+
+Prices and feature lists as of August 2026, pulled from each app's own site
+and App Store listing. All three are solid, well-made tools, this is just
+what you get for free with Jot versus what they charge for.
+
+| | **Jot** | [Antinote](https://antinote.io/) | [Numi](https://numi.app/) | [Soulver 4](https://soulver.app/) |
+|---|---|---|---|---|
+| Price | Free, open source | $5 one-time | Free, $23.59 to unlock notes + sync | $59 one-time (+$26/yr optional) |
+| Inline math with variables | Yes | Yes | Yes | Yes |
+| Unit conversion | Yes, offline | Yes | Yes | Yes |
+| Currency conversion | Yes, opt-in live rates | Yes | Yes, paid tier | Yes, live by default |
+| Checklists | Yes | Yes | No | No |
+| Images pasted inline | Yes, resizable | No | No | No |
+| Screenshot to text (OCR) | Yes, offline | Yes | No | No |
+| Display modes | 5: floating, dock, menu bar, dropdown, screen edge | Menu bar only | Window | Window |
+| Search across all notes | No, current note only | Yes | N/A | Yes |
+| Sync across devices | No | iCloud (2.0+), iOS app in progress | iCloud, paid tier | iCloud, iOS/iPad apps |
+| Scripting / themes | No | Yes, JS extensions + themes | No | CLI, URL schemes, Automator |
+| Apple Notes sync | Yes, opt-in, one-way | No | No | No |
+| Network requests | Zero by default, two opt-in toggles | iCloud only, if enabled | iCloud only, if paid | Live data on by default |
+| Source | Open, MIT | Closed | Core open, paid features closed | Closed |
+
+Jot doesn't beat any of these on every axis, see [where it falls short of
+Antinote](BACKLOG.md#compared-to-antinote) in particular. It's what you get
+for the price of downloading it.
 
 ## Features
 
