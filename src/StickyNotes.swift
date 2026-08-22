@@ -11,6 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let notesManager = NotesManager()
 
     private let hotKey = HotKeyController()
+    private let appleNotes = AppleNotesSync()
+    /// Sync is coalesced: AppleScript round trips take tens of milliseconds
+    /// each, so following every debounced save would be far too chatty.
+    private var pendingSync: DispatchWorkItem?
 
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem?
@@ -27,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         notesManager.timerKeyword = settings.effectiveTimerKeyword
+        notesManager.onPersist = { [weak self] notes in
+            self?.scheduleAppleNotesSync(notes)
+        }
 
         NSApp.mainMenu = MainMenu.build(target: self, preferencesAction: #selector(showPreferences))
 
@@ -86,6 +93,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func contentView() -> ContentView {
         ContentView(notesManager: notesManager, settings: settings)
+    }
+
+    // MARK: - Apple Notes
+
+    private func scheduleAppleNotesSync(_ notes: [Note]) {
+        guard settings.syncsToAppleNotes else { return }
+        pendingSync?.cancel()
+        let work = DispatchWorkItem {
+            Task { await self.appleNotes.sync(notes) }
+        }
+        pendingSync = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    @objc func syncToAppleNotesNow(_ sender: Any?) {
+        let notes = notesManager.notes
+        Task {
+            let result = await appleNotes.sync(notes)
+            await MainActor.run {
+                let alert = NSAlert()
+                alert.messageText = result.failed == 0
+                    ? "Synced to Apple Notes"
+                    : "Synced with problems"
+                alert.informativeText = "\(result.created) created, \(result.updated) updated"
+                    + (result.failed > 0 ? ", \(result.failed) failed. Check that StickyNotes is allowed to control Notes in System Settings › Privacy & Security › Automation." : ".")
+                alert.runModal()
+            }
+        }
     }
 
     // MARK: - Settings
@@ -404,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 660),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 730),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

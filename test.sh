@@ -30,6 +30,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     -target arm64-apple-macos14.0 \
     src/Note.swift \
     src/Attachments.swift \
+    src/AppleNotesSync.swift \
     src/NoteStore.swift \
     src/NotesManager.swift \
     src/TextStatistics.swift \

@@ -132,6 +132,7 @@ final class SettingsManager: ObservableObject {
         static let showsHeader    = "showsHeader"
         static let lineSpacing    = "lineSpacing"
         static let windowFrame    = "windowFrame"
+        static let syncsToNotes   = "syncsToAppleNotes"
     }
 
     private let defaults: UserDefaults
@@ -174,6 +175,11 @@ final class SettingsManager: ObservableObject {
     /// Line height multiple for the editor.
     @Published var lineSpacing: Double {
         didSet { defaults.set(lineSpacing, forKey: Key.lineSpacing) }
+    }
+
+    /// Push notes into an Apple Notes folder as they are saved.
+    @Published var syncsToAppleNotes: Bool {
+        didSet { defaults.set(syncsToAppleNotes, forKey: Key.syncsToNotes) }
     }
 
     @Published var screenEdge: ScreenEdge {
@@ -228,6 +234,8 @@ final class SettingsManager: ObservableObject {
         self.appearance = Appearance(rawValue: rawAppearance) ?? .frosted
         self.showsHeader = defaults.object(forKey: Key.showsHeader) as? Bool ?? true
         self.lineSpacing = defaults.object(forKey: Key.lineSpacing) as? Double ?? 1.0
+
+        self.syncsToAppleNotes = defaults.object(forKey: Key.syncsToNotes) as? Bool ?? false
 
         let rawEdge = defaults.string(forKey: Key.screenEdge) ?? ScreenEdge.right.rawValue
         self.screenEdge = ScreenEdge(rawValue: rawEdge) ?? .right

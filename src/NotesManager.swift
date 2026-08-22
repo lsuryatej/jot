@@ -224,10 +224,14 @@ final class NotesManager: ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.store.save(self.notes)
+            self.onPersist?(self.notes)
         }
         pendingSave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + saveDebounce, execute: work)
     }
+
+    /// Called after every write, so external sync can follow the same rhythm.
+    var onPersist: (([Note]) -> Void)?
 
     /// Writes immediately, cancelling any debounced save. Called on navigation
     /// and on app termination.
@@ -235,6 +239,7 @@ final class NotesManager: ObservableObject {
         pendingSave?.cancel()
         pendingSave = nil
         store.save(notes)
+        onPersist?(notes)
     }
 
     /// Purge and write. Called when the app is quitting.

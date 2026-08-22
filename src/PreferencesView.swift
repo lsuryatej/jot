@@ -112,10 +112,16 @@ struct PreferencesView: View {
 
             Toggle("Show word count and selection totals", isOn: $settings.showsFooter)
 
+            Toggle("Sync notes to an Apple Notes folder", isOn: $settings.syncsToAppleNotes)
+            Text("Pushes each note into a \"StickyNotes\" folder in Apple Notes. One direction only — edits made there are not read back. macOS will ask for permission the first time.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 480, height: 660, alignment: .topLeading)
+        .frame(width: 480, height: 730, alignment: .topLeading)
     }
 
     private func section<Content: View>(

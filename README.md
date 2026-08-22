@@ -83,6 +83,22 @@ Shift+Cmd+G step through matches.
 Select text containing two or more numbers and it also shows their sum and
 average, so "rent $1,240.50 and food $310.25" totals without leaving the note.
 
+**Images.** Paste or drop an image and it stays an image, drawn inline and
+resizable by dragging it. The file is written beside your notes and the text
+holds a markdown reference to it, so a note with a picture in it is still
+plain text.
+
+**Screenshot to text.** Shift-Cmd-V reads the image on your clipboard with
+Apple's Vision framework and inserts what it says, offline. Holding Option
+while dropping an image does the same.
+
+**Apple Notes sync.** Optional, off by default. Turn it on in Settings and each
+note is pushed into a "StickyNotes" folder in Apple Notes, keyed to a stable
+id so edits update the same note rather than piling up duplicates. One
+direction only: changes made in Apple Notes are not read back, and notes
+deleted here are left alone there. macOS asks for Automation permission the
+first time.
+
 **Share.** The share button opens the standard macOS share sheet for the current
 note (Notes, Mail, Messages, and so on).
 
@@ -90,6 +106,9 @@ note (Notes, Mail, Messages, and so on).
 mode, the shortcut, the timer keyword, and whether the footer is shown.
 
 ## Storage
+
+Images live in `Attachments/` beside the notes, referenced from the text as
+`![width](Attachments/<id>.png)`.
 
 Notes are a JSON array at
 `~/Library/Application Support/StickyNotes/notes.json`, written atomically and
@@ -119,6 +138,10 @@ are small and reconstructible, unlike the notes.
 | `src/Checklist.swift` | Checklist parsing and rewriting |
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
+| `src/Note.swift` | The note model and its stable identity |
+| `src/Attachments.swift` | Inline image storage and markdown references |
+| `src/TextRecognition.swift` | Vision-backed screenshot to text |
+| `src/AppleNotesSync.swift` | One-way push into Apple Notes |
 | `src/ContentView.swift` | Panel UI: header, editor, timer overlay, share |
 | `src/PlainTextEditor.swift` | `NSTextView` wrapper plus the swipe-reading scroll view |
 | `src/NotesManager.swift` | Note state, navigation, timer parsing, checklists |
@@ -137,7 +160,7 @@ rebuilds it every run so a stale binary or signature cannot survive.
 
 - Checklist markers are fixed at `[ ]` and `[x]`; only the timer keyword is
   configurable.
-- The note window has one size per mode; it is resizable but the size is not
-  remembered between launches.
-- Notes cannot be reordered, titled, or deleted except by emptying them.
+- Notes cannot be reordered.
+- Apple Notes sync is one-way; nothing is read back.
+- No inline maths or unit conversion yet, and no URL shortening.
 - The build targets `arm64` only.

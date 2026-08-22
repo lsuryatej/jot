@@ -361,6 +361,35 @@ func runAllTests() {
         equal(resized, "![48](Attachments/a.png)", "cannot be dragged away to nothing")
     }
 
+    // MARK: - Apple Notes sync
+
+    suite("HTML escaping") {
+        equal(AppleNotesSync.escape("a < b & c > d"), "a &lt; b &amp; c &gt; d", "angle brackets and ampersand")
+        equal(AppleNotesSync.escape("say \"hi\""), "say &quot;hi&quot;", "quotes")
+        // Ampersand has to be escaped first or the others get double-escaped.
+        equal(AppleNotesSync.escape("&lt;"), "&amp;lt;", "an escape sequence in the source survives intact")
+    }
+
+    suite("note body becomes one div per line") {
+        equal(AppleNotesSync.htmlBody(for: Note(text: "one\ntwo")),
+              "<div>one</div><div>two</div>", "each line wrapped")
+        equal(AppleNotesSync.htmlBody(for: Note(text: "a\n\nb")),
+              "<div>a</div><div><br></div><div>b</div>", "blank lines survive as breaks")
+    }
+
+    suite("checklist markup survives the trip") {
+        equal(AppleNotesSync.htmlBody(for: Note(text: "- [x] done")),
+              "<div>- [x] done</div>", "brackets are not HTML and must not be mangled")
+    }
+
+    suite("AppleScript string literals are escaped") {
+        equal(AppleNotesSync.appleScriptLiteral("plain"), "\"plain\"", "wrapped in quotes")
+        equal(AppleNotesSync.appleScriptLiteral("say \"hi\""), "\"say \\\"hi\\\"\"", "embedded quotes escaped")
+        // A stray backslash would otherwise start an escape sequence in the
+        // generated script and break the whole sync.
+        equal(AppleNotesSync.appleScriptLiteral("back\\slash"), "\"back\\\\slash\"", "backslashes escaped")
+    }
+
     // MARK: - Storage
 
     suite("notes survive a store round trip") {
