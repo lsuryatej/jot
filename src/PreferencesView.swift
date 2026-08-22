@@ -125,6 +125,20 @@ struct PreferencesView: View {
 
             Toggle("Show word count and selection totals", isOn: $settings.showsFooter)
 
+            Toggle("Fetch live currency exchange rates", isOn: $settings.fetchesLiveCurrencyRates)
+            Text("Off by default: the only network request this app can make. On, it checks a public rate API once a day; off, conversions use the last cached rate.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Automatically check for app updates", isOn: $settings.checksForUpdates)
+            Text("Checks GitHub once a day for a newer release. No note content or identifying information is sent.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
             Toggle("Sync notes to an Apple Notes folder", isOn: $settings.syncsToAppleNotes)
             Text("Pushes each note into a \"StickyNotes\" folder in Apple Notes. One direction only — edits made there are not read back. macOS will ask for permission the first time.")
                 .font(.caption)
@@ -134,7 +148,7 @@ struct PreferencesView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 480, height: 810, alignment: .topLeading)
+        .frame(width: 480, height: 900, alignment: .topLeading)
     }
 
     private func section<Content: View>(

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let settings = SettingsManager.shared
 
@@ -30,7 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        CurrencyRates.bootstrap()
+        CurrencyRates.bootstrap(fetchesLive: settings.fetchesLiveCurrencyRates)
+        UpdateChecker.check(enabled: settings.checksForUpdates)
         notesManager.timerKeyword = settings.effectiveTimerKeyword
         notesManager.onPersist = { [weak self] notes in
             self?.scheduleAppleNotesSync(notes)
@@ -90,7 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         // A copy left running across midnight should not be stuck on
         // yesterday's exchange rates until the next relaunch.
-        CurrencyRates.refreshIfNeeded()
+        CurrencyRates.refreshIfNeeded(fetchesLive: settings.fetchesLiveCurrencyRates)
+        UpdateChecker.check(enabled: settings.checksForUpdates)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -161,6 +164,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in
                 guard let self, self.settings.displayMode.isEdgeDocked else { return }
                 self.installEdgeTrigger()
+            }
+            .store(in: &cancellables)
+
+        settings.$fetchesLiveCurrencyRates
+            .receive(on: RunLoop.main)
+            .sink { fetchesLive in
+                // Turning it on should fetch right away, not wait for
+                // tomorrow's scheduled check.
+                CurrencyRates.refreshIfNeeded(fetchesLive: fetchesLive)
             }
             .store(in: &cancellables)
 
@@ -417,6 +429,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(.separator())
 
+        if let version = UpdateChecker.shared.availableVersion {
+            let update = NSMenuItem(
+                title: "Update Available (v\(version))…",
+                action: #selector(performUpdate),
+                keyEquivalent: ""
+            )
+            update.target = self
+            menu.addItem(update)
+        } else {
+            let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow), keyEquivalent: "")
+            check.target = self
+            menu.addItem(check)
+        }
+
+        menu.addItem(.separator())
+
         let quit = NSMenuItem(title: "Quit StickyNotes", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -436,6 +464,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.terminate(nil)
     }
 
+    @objc private func performUpdate() {
+        UpdateChecker.shared.performUpdate()
+    }
+
+    @objc private func checkForUpdatesNow() {
+        Task {
+            await UpdateChecker.shared.forceCheck()
+            if UpdateChecker.shared.availableVersion == nil {
+                let alert = NSAlert()
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+                alert.messageText = "You're up to date"
+                alert.informativeText = "StickyNotes \(version) is the latest version."
+                alert.runModal()
+            }
+        }
+    }
+
     // MARK: - Preferences
 
     @objc func showPreferences() {
@@ -446,7 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 810),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 900),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

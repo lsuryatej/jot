@@ -7,8 +7,12 @@ import AppKit
 // blank 900x450 window that had to be hidden on launch. Owning NSApplication
 // directly removes the cause instead of papering over it, and is what lets the
 // activation policy change at runtime for Dock mode.
-
-let application = NSApplication.shared
-let delegate = AppDelegate()
-application.delegate = delegate
-application.run()
+//
+// Process startup runs on the main thread, so `assumeIsolated` documents that
+// fact to the compiler rather than making this `async` for no reason.
+MainActor.assumeIsolated {
+    let application = NSApplication.shared
+    let delegate = AppDelegate()
+    application.delegate = delegate
+    application.run()
+}

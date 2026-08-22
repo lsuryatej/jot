@@ -43,16 +43,21 @@ enum CurrencyRates {
         unitsPerUSD.compactMapValues { $0 > 0 ? 1.0 / $0 : nil }
     }
 
-    /// Loads whatever is cached on disk, then refreshes in the background if
-    /// the cache is missing or stale. Call once at launch.
-    static func bootstrap() {
+    /// Loads whatever is already cached on disk — this is never a network
+    /// call — then refreshes in the background only if live rates are turned
+    /// on. Call once at launch, and again whenever the setting changes.
+    static func bootstrap(fetchesLive: Bool) {
         loadFromDisk()
-        refreshIfNeeded()
+        if fetchesLive { refreshIfNeeded() }
     }
 
     /// Also checked when the app becomes active, so a copy left running
     /// across midnight picks up the next day's rates without a relaunch.
-    static func refreshIfNeeded() {
+    /// A no-op unless the setting is on: this is the one function in the app
+    /// that can put a byte on the network, so the check happens here, at the
+    /// single choke point, rather than being trusted to every call site.
+    static func refreshIfNeeded(fetchesLive: Bool = true) {
+        guard fetchesLive else { return }
         if let lastFetched, Date().timeIntervalSince(lastFetched) < refreshInterval { return }
         Task.detached(priority: .utility) {
             for source in sources where await fetch(from: source) { break }

@@ -134,6 +134,8 @@ final class SettingsManager: ObservableObject {
         static let windowFrame    = "windowFrame"
         static let syncsToNotes   = "syncsToAppleNotes"
         static let listKeyword    = "listKeyword"
+        static let fetchesLiveRates = "fetchesLiveCurrencyRates"
+        static let checksForUpdates = "checksForUpdates"
     }
 
     private let defaults: UserDefaults
@@ -189,6 +191,22 @@ final class SettingsManager: ObservableObject {
     var effectiveListKeyword: String {
         let trimmed = listKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "list" : trimmed
+    }
+
+    /// The only network call this app makes by default is none at all.
+    /// Off means every currency conversion uses the last cached rate (or the
+    /// built-in snapshot, on a fresh install) and nothing is ever fetched.
+    @Published var fetchesLiveCurrencyRates: Bool {
+        didSet { defaults.set(fetchesLiveCurrencyRates, forKey: Key.fetchesLiveRates) }
+    }
+
+    /// A single GET to GitHub's public releases API, at most once a day.
+    /// No note content, no identifiers, nothing but "is there a newer tag"
+    /// leaves the machine. On by default, unlike currency rates: a stale app
+    /// silently missing your fixes is the failure mode this exists to avoid,
+    /// and the request carries nothing to protect.
+    @Published var checksForUpdates: Bool {
+        didSet { defaults.set(checksForUpdates, forKey: Key.checksForUpdates) }
     }
 
     /// Push notes into an Apple Notes folder as they are saved.
@@ -251,6 +269,8 @@ final class SettingsManager: ObservableObject {
 
         self.syncsToAppleNotes = defaults.object(forKey: Key.syncsToNotes) as? Bool ?? false
         self.listKeyword = defaults.string(forKey: Key.listKeyword) ?? "list"
+        self.fetchesLiveCurrencyRates = defaults.object(forKey: Key.fetchesLiveRates) as? Bool ?? false
+        self.checksForUpdates = defaults.object(forKey: Key.checksForUpdates) as? Bool ?? true
 
         let rawEdge = defaults.string(forKey: Key.screenEdge) ?? ScreenEdge.right.rawValue
         self.screenEdge = ScreenEdge(rawValue: rawEdge) ?? .right
