@@ -1,0 +1,51 @@
+name: Homebrew smoke test
+
+# Checks that `brew install lsuryatej/jot/jot` actually works, on a schedule
+# rather than tied to a release — the cask at lsuryatej/homebrew-jot is
+# bumped by hand after each release (see the reminder in release.yml), so
+# there is a window after every release where the tap is stale. This catches
+# that drift, and catches regressions in the cask formula itself
+# (e.g. the postflight quarantine-strip silently breaking), independent of
+# whether a release just happened.
+#
+# Also runnable on demand (workflow_dispatch) for a manual check after
+# bumping the cask by hand.
+on:
+  schedule:
+    - cron: '0 15 * * *'   # daily, 15:00 UTC
+  workflow_dispatch:
+
+jobs:
+  brew-install:
+    runs-on: macos-14
+    steps:
+      - name: Install via the real published command
+        run: brew install lsuryatej/jot/jot
+
+      - name: Verify the installed app
+        run: |
+          APP="/Applications/Jot.app"
+          test -d "$APP" || { echo "::error::$APP missing after brew install"; exit 1; }
+          test -x "$APP/Contents/MacOS/Jot" || { echo "::error::executable missing"; exit 1; }
+
+          # The exact bug this whole workflow exists to catch: the cask's
+          # postflight strips quarantine after install, so this must never
+          # be present, or every real install would hit a Gatekeeper dialog.
+          if xattr -l "$APP" 2>/dev/null | grep -q com.apple.quarantine; then
+            echo "::error::app is quarantined after brew install — the postflight xattr strip in the cask did not run or did not work"
+            exit 1
+          fi
+
+          codesign -dv "$APP" 2>&1 | grep -q "Signature=adhoc" || { echo "::error::unexpected code signature"; exit 1; }
+
+          echo "brew install lsuryatej/jot/jot works: unquarantined, correctly signed."
+
+      # brew uninstall --cask, not rm -rf: the wrong removal command leaves
+      # Homebrew's own receipt pointing at a copy that no longer exists,
+      # which silently breaks the *next* `brew install` (found via real
+      # testing, 2026-08-22 — see BACKLOG.md). This runner is thrown away
+      # after the job regardless, but using the right command here doubles
+      # as a standing example of the correct one.
+      - name: Clean up
+        if: always()
+        run: brew uninstall --cask jot || true

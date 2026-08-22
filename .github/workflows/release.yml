@@ -1,16 +1,14 @@
 name: Release
 
-# Triggered by pushing a tag like v1.2.3. Builds Jot.app and attaches it,
-# zipped, to a GitHub release for that tag.
+# Triggered by pushing a tag like v1.2.3. Builds Jot.app, attaches it zipped
+# to a GitHub release for that tag, then smoke-tests the install.sh path
+# against that exact release on a second, independent runner — the same way
+# a real user would install it, checked automatically on every release
+# rather than relying on someone remembering to do it by hand.
 #
-# UNTESTED: this was written without the ability to run a macOS GitHub
-# Actions runner from the environment that authored it. GitHub-hosted macOS
-# runners ship stable Xcode/macOS, not the macOS 27 beta this project's
-# local toolchain workaround exists for, so build.sh's second lookup path
-# (/Applications/Xcode.app) should be the one that fires here — but "should"
-# is not "verified". Push a tag and watch the run before relying on this for
-# a real release; scripts/release.sh (run by hand) is the path that has
-# actually been exercised end to end.
+# Verified end to end on a real GitHub-hosted macOS runner (v1.1.0,
+# 2026-08-22): stable Xcode/macOS on the runner never hits the macOS 27 beta
+# SDK mismatch build.sh's local toolchain lookup exists to work around.
 on:
   push:
     tags:
@@ -22,6 +20,8 @@ permissions:
 jobs:
   build-and-release:
     runs-on: macos-14
+    outputs:
+      version: ${{ steps.package.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,23 +32,60 @@ jobs:
         run: ./build.sh
 
       - name: Package
+        id: package
         run: |
           VERSION="$(plutil -extract CFBundleShortVersionString raw resources/Info.plist)"
           mkdir -p dist
           ditto -c -k --sequesterRsrc --keepParent Jot.app "dist/Jot-$VERSION.zip"
           shasum -a 256 "dist/Jot-$VERSION.zip" > "dist/Jot-$VERSION.zip.sha256"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            "dist/Jot-$VERSION.zip" \
-            "dist/Jot-$VERSION.zip.sha256" \
-            --title "Jot $VERSION" \
+            "dist/Jot-${{ steps.package.outputs.version }}.zip" \
+            "dist/Jot-${{ steps.package.outputs.version }}.zip.sha256" \
+            --title "Jot ${{ steps.package.outputs.version }}" \
             --generate-notes
 
       - name: Reminder
         run: |
           echo "::notice::Release published. The Homebrew cask at lsuryatej/homebrew-jot still needs its version and sha256 bumped by hand (or via a follow-up automation) — this workflow does not touch that repo."
+
+  smoke-test-install-sh:
+    needs: build-and-release
+    runs-on: macos-14
+    steps:
+      - name: Run install.sh exactly as a real user would
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh" | bash
+
+      - name: Verify the installed app
+        run: |
+          VERSION="${{ needs.build-and-release.outputs.version }}"
+          APP="/Applications/Jot.app"
+
+          test -d "$APP" || { echo "::error::$APP does not exist after install.sh"; exit 1; }
+          test -x "$APP/Contents/MacOS/Jot" || { echo "::error::executable missing or not executable"; exit 1; }
+
+          INSTALLED_VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
+          [ "$INSTALLED_VERSION" = "$VERSION" ] || {
+            echo "::error::installed version ($INSTALLED_VERSION) does not match the release ($VERSION)"
+            exit 1
+          }
+
+          # Confirms the ad-hoc signature is intact and, separately, that
+          # install.sh's quarantine strip actually took — a runner is a fresh
+          # machine every time, so a leftover quarantine flag here would mean
+          # a real Gatekeeper prompt for every first-time user, the same
+          # class of bug the brew-path postflight fix (see
+          # brew-smoke-test.yml) exists for on the Homebrew side.
+          codesign -dv "$APP" 2>&1 | grep -q "Signature=adhoc" || { echo "::error::unexpected code signature"; exit 1; }
+          if xattr -l "$APP" 2>/dev/null | grep -q com.apple.quarantine; then
+            echo "::error::app is quarantined after install.sh — first launch would show a Gatekeeper prompt"
+            exit 1
+          fi
+
+          echo "install.sh installed Jot $VERSION correctly, unsigned-but-unquarantined, as intended."
