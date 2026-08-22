@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import Vision
 import AppKit
+import UniformTypeIdentifiers
 
 /// Screenshot-to-text.
 ///
@@ -18,6 +19,22 @@ enum TextRecognition {
             case .nothingFound: return "No text was found in that image."
             }
         }
+    }
+
+    /// Whether the pasteboard is carrying an image at all.
+    ///
+    /// Checked before the string contents, not after: copying an image very
+    /// often puts a filename or source URL on the pasteboard alongside it, and
+    /// an earlier version bailed out to plain-text paste whenever any string
+    /// was present. That made pasting an image silently do nothing useful.
+    static func containsImage(_ pasteboard: NSPasteboard) -> Bool {
+        if pasteboard.availableType(from: [.tiff, .png, .pdf]) != nil { return true }
+
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingContentsConformToTypes: [UTType.image.identifier]
+        ]
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]
+        return !(urls ?? []).isEmpty
     }
 
     /// Pulls an image out of a drag or a paste, whether it arrived as raw image

@@ -24,6 +24,13 @@ struct NoteStore {
     }
 
     static func defaultFileURL() -> URL {
+        // An override so a test run can never be pointed at real notes. Notes
+        // were lost during development by seeding fixtures straight into the
+        // live file; a scratch path costs nothing and removes the whole class
+        // of mistake.
+        if let override = ProcessInfo.processInfo.environment["STICKYNOTES_NOTES_FILE"] {
+            return URL(fileURLWithPath: override)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base
             .appendingPathComponent("StickyNotes", isDirectory: true)
@@ -74,8 +81,15 @@ struct NoteStore {
     }
 
     var backupFileURL: URL {
-        fileURL.deletingLastPathComponent().appendingPathComponent("notes.backup.json")
+        backupDirectoryURL.appendingPathComponent("notes.backup.json")
     }
+
+    var backupDirectoryURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("Backups", isDirectory: true)
+    }
+
+    /// How many dated copies to keep beside the newest one.
+    static let backupsKept = 10
 
     /// Keeps the last known-good contents beside the live file.
     ///
@@ -85,10 +99,43 @@ struct NoteStore {
     /// bug doing the same thing silently.
     private func writeBackup(_ data: Data, of notes: [Note]) {
         // Never let a backup of nothing overwrite a backup of something.
-        let meaningful = notes.contains { !$0.isBlank }
-        guard meaningful else { return }
+        guard notes.contains(where: { !$0.isBlank }) else { return }
+
+        try? FileManager.default.createDirectory(at: backupDirectoryURL, withIntermediateDirectories: true)
         try? data.write(to: backupFileURL, options: .atomic)
+
+        // A single backup is only one mistake deep: overwrite the live file
+        // twice and the good copy is gone too. Dated copies mean a bad state
+        // has to survive ten launches before it costs anything.
+        let stamp = Self.timestampFormatter.string(from: Date())
+        let dated = backupDirectoryURL.appendingPathComponent("notes-\(stamp).json")
+        if !FileManager.default.fileExists(atPath: dated.path) {
+            try? data.write(to: dated, options: .atomic)
+        }
+        pruneBackups()
     }
+
+    private func pruneBackups() {
+        let fileManager = FileManager.default
+        guard let all = try? fileManager.contentsOfDirectory(
+            at: backupDirectoryURL,
+            includingPropertiesForKeys: nil
+        ) else { return }
+
+        let dated = all
+            .filter { $0.lastPathComponent.hasPrefix("notes-") }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+
+        for stale in dated.dropFirst(Self.backupsKept) {
+            try? fileManager.removeItem(at: stale)
+        }
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter
+    }()
 
     /// One-time import of notes written by the pre-1.0 `UserDefaults` build.
     /// Returns nil when there is nothing to migrate.

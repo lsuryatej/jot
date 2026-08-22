@@ -173,6 +173,26 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         replace(range: lineRange, with: updated, selecting: newSelection)
     }
 
+    /// Handles this app's own shortcuts directly.
+    ///
+    /// The main menu is not displayed outside Dock mode, and relying on it to
+    /// dispatch key equivalents there is a bet not worth making. Handling them
+    /// here means Cmd+L and Shift-Cmd-V behave the same in every display mode.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let key = event.charactersIgnoringModifiers?.lowercased()
+
+        if flags == [.command, .shift], key == "v" {
+            extractTextFromClipboardImage(nil)
+            return true
+        }
+        if flags == [.command], key == "l" {
+            toggleChecklist(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(toggleChecklist(_:)) { return true }
         if item.action == #selector(extractTextFromClipboardImage(_:)) { return true }
@@ -282,7 +302,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
     /// Text extraction used to live here, but pasting a screenshot to *keep* it
     /// is the more common intent, so OCR moved to its own command.
     override func paste(_ sender: Any?) {
-        if NSPasteboard.general.string(forType: .string) == nil,
+        if TextRecognition.containsImage(.general),
            let image = TextRecognition.image(from: .general) {
             insertImage(image, at: selectedRange().location)
             return
@@ -371,6 +391,32 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
 
         let updated = Checklist.toggled(block: line)
         replace(range: lineRange, with: updated, selecting: selectedRange())
+    }
+
+    // MARK: - Caret
+
+    /// Draws the caret at the height of the text, not the height of the line.
+    ///
+    /// The line box is as tall as the line spacing setting makes it, and on an
+    /// image line it is as tall as the image. Letting the caret fill that made
+    /// it a full-height bar next to normal-sized text.
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        super.drawInsertionPoint(in: caretRect(from: rect), color: color, turnedOn: flag)
+    }
+
+    override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
+        // The invalidated area has to cover wherever the caret was last drawn,
+        // or shrinking it leaves smears behind as it blinks.
+        super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
+    }
+
+    private func caretRect(from rect: NSRect) -> NSRect {
+        let textHeight = ceil(baseFont.ascender - baseFont.descender)
+        guard rect.height > textHeight else { return rect }
+        var caret = rect
+        caret.origin.y += (rect.height - textHeight) / 2
+        caret.size.height = textHeight
+        return caret
     }
 
     // MARK: - Inline images

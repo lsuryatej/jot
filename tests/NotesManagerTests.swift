@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 // A dependency-free harness. The logic under test (NotesManager, NoteStore) is
 // deliberately free of SwiftUI, so it compiles into a plain executable with
@@ -388,6 +389,35 @@ func runAllTests() {
         // A stray backslash would otherwise start an escape sequence in the
         // generated script and break the whole sync.
         equal(AppleNotesSync.appleScriptLiteral("back\\slash"), "\"back\\\\slash\"", "backslashes escaped")
+    }
+
+    // MARK: - Pasteboard
+
+    suite("an image is detected even when a string rides along") {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("StickyNotesTest-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+
+        let image = NSImage(size: NSSize(width: 32, height: 32))
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 32, height: 32).fill()
+        image.unlockFocus()
+
+        // Copying an image very often puts its filename or source URL on the
+        // pasteboard too. Bailing out to plain-text paste whenever any string
+        // was present is what stopped images pasting at all.
+        pasteboard.writeObjects([image])
+        pasteboard.setString("screenshot.png", forType: .string)
+
+        check(TextRecognition.containsImage(pasteboard), "image wins over the incidental string")
+        check(TextRecognition.image(from: pasteboard) != nil, "and the image can be read back")
+    }
+
+    suite("plain text is not mistaken for an image") {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("StickyNotesTest-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setString("just some copied words", forType: .string)
+        check(!TextRecognition.containsImage(pasteboard), "text pastes as text")
     }
 
     // MARK: - Storage
