@@ -17,10 +17,10 @@ enum MainMenu {
 
     private static func appMenuItem(target: AnyObject, preferencesAction: Selector) -> NSMenuItem {
         let item = NSMenuItem()
-        let menu = NSMenu(title: "StickyNotes")
+        let menu = NSMenu(title: "Jot")
 
         menu.addItem(
-            withTitle: "About StickyNotes",
+            withTitle: "About Jot",
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
@@ -40,12 +40,12 @@ enum MainMenu {
 
         menu.addItem(.separator())
         menu.addItem(
-            withTitle: "Hide StickyNotes",
+            withTitle: "Hide Jot",
             action: #selector(NSApplication.hide(_:)),
             keyEquivalent: "h"
         )
         menu.addItem(
-            withTitle: "Quit StickyNotes",
+            withTitle: "Quit Jot",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )

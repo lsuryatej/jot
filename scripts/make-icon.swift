@@ -57,7 +57,7 @@ func drawIcon(size: CGFloat) -> NSImage {
 }
 
 let iconset = URL(fileURLWithPath: NSTemporaryDirectory())
-    .appendingPathComponent("StickyNotes-\(UUID().uuidString).iconset")
+    .appendingPathComponent("Jot-\(UUID().uuidString).iconset")
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 
 // The sizes iconutil expects, each in 1x and 2x.

@@ -28,13 +28,42 @@ struct NoteStore {
         // were lost during development by seeding fixtures straight into the
         // live file; a scratch path costs nothing and removes the whole class
         // of mistake.
-        if let override = ProcessInfo.processInfo.environment["STICKYNOTES_NOTES_FILE"] {
+        if let override = ProcessInfo.processInfo.environment["JOT_NOTES_FILE"] {
             return URL(fileURLWithPath: override)
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base
-            .appendingPathComponent("StickyNotes", isDirectory: true)
+            .appendingPathComponent("Jot", isDirectory: true)
             .appendingPathComponent("notes.json", isDirectory: false)
+    }
+
+    /// One-time move of the whole storage directory from the app's previous
+    /// name. Renaming the app is not supposed to mean losing your notes — a
+    /// bundle ID or display-name change is invisible to the person using it,
+    /// so the data on disk moves with it. Notes, backups, attachments, the
+    /// Apple Notes sync mapping, and the currency cache all move together in
+    /// one atomic directory rename rather than being copied file by file.
+    ///
+    /// `base` is overridable so this is testable without touching the real
+    /// Application Support directory.
+    @discardableResult
+    static func migrateStorageDirectoryIfNeeded(
+        in base: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    ) -> Bool {
+        let newDir = base.appendingPathComponent("Jot", isDirectory: true)
+        let oldDir = base.appendingPathComponent("StickyNotes", isDirectory: true)
+
+        guard !FileManager.default.fileExists(atPath: newDir.path),
+              FileManager.default.fileExists(atPath: oldDir.path)
+        else { return false }
+
+        do {
+            try FileManager.default.moveItem(at: oldDir, to: newDir)
+            return true
+        } catch {
+            NSLog("Jot: could not migrate storage directory from StickyNotes to Jot: \(error.localizedDescription)")
+            return false
+        }
     }
 
     /// Loads notes, migrating from the legacy `UserDefaults` domain on first run.
@@ -76,7 +105,7 @@ struct NoteStore {
             let data = try JSONEncoder().encode(notes)
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            NSLog("StickyNotes: failed to save notes to \(fileURL.path): \(error)")
+            NSLog("Jot: failed to save notes to \(fileURL.path): \(error)")
         }
     }
 
@@ -147,7 +176,7 @@ struct NoteStore {
         let salvaged = legacy.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !salvaged.isEmpty else { return nil }
 
-        NSLog("StickyNotes: migrated \(salvaged.count) note(s) from \(Self.legacyDomain)")
+        NSLog("Jot: migrated \(salvaged.count) note(s) from \(Self.legacyDomain)")
         return salvaged.map { Note(text: $0) }
     }
 }

@@ -127,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     ? "Synced to Apple Notes"
                     : "Synced with problems"
                 alert.informativeText = "\(result.created) created, \(result.updated) updated"
-                    + (result.failed > 0 ? ", \(result.failed) failed. Check that StickyNotes is allowed to control Notes in System Settings › Privacy & Security › Automation." : ".")
+                    + (result.failed > 0 ? ", \(result.failed) failed. Check that Jot is allowed to control Notes in System Settings › Privacy & Security › Automation." : ".")
                 alert.runModal()
             }
         }
@@ -148,11 +148,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Release the shortcut while the recorder listens, or the currently
         // registered combo can never be pressed to re-record it.
-        NotificationCenter.default.publisher(for: .stickyNotesBeginHotKeyRecording)
+        NotificationCenter.default.publisher(for: .jotBeginHotKeyRecording)
             .sink { [weak self] _ in self?.hotKey.unregister() }
             .store(in: &cancellables)
 
-        NotificationCenter.default.publisher(for: .stickyNotesEndHotKeyRecording)
+        NotificationCenter.default.publisher(for: .jotEndHotKeyRecording)
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.hotKey.register(self.settings.hotKey)
@@ -292,9 +292,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().setFrame(docked, display: true)
         } completionHandler: { [weak self] in
-            guard let self else { return }
-            if activating { self.focusPanel() }
-            self.startEdgeAutoHide()
+            // NSAnimationContext's completion handler always fires on the
+            // main thread, but its type is not statically @MainActor.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if activating { self.focusPanel() }
+                self.startEdgeAutoHide()
+            }
         }
     }
 
@@ -324,21 +328,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// mouseExited is more machinery than five checks a second.
     private func startEdgeAutoHide() {
         edgeAutoHideTimer?.invalidate()
+        // Timer's closure type is not statically known to run on the main
+        // actor even though `scheduledTimer` always fires on the run loop
+        // that scheduled it — main, here. `assumeIsolated` states that fact
+        // to the compiler rather than hopping queues for no reason.
         edgeAutoHideTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            guard let self, self.settings.displayMode.isEdgeDocked else { return }
-            guard self.panel.isVisible else {
+            MainActor.assumeIsolated {
+                guard let self, self.settings.displayMode.isEdgeDocked else { return }
+                guard self.panel.isVisible else {
+                    self.stopEdgeAutoHide()
+                    return
+                }
+                // While it holds the keyboard the user is typing in it, so leave it.
+                guard !self.panel.isKeyWindow else { return }
+
+                let pointer = NSEvent.mouseLocation
+                let generous = self.panel.frame.insetBy(dx: -12, dy: -12)
+                guard !generous.contains(pointer) else { return }
+
                 self.stopEdgeAutoHide()
-                return
+                self.hideInterface()
             }
-            // While it holds the keyboard the user is typing in it, so leave it.
-            guard !self.panel.isKeyWindow else { return }
-
-            let pointer = NSEvent.mouseLocation
-            let generous = self.panel.frame.insetBy(dx: -12, dy: -12)
-            guard !generous.contains(pointer) else { return }
-
-            self.stopEdgeAutoHide()
-            self.hideInterface()
         }
     }
 
@@ -386,7 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(
             systemSymbolName: "note.text",
-            accessibilityDescription: "StickyNotes"
+            accessibilityDescription: "Jot"
         )
         item.button?.target = self
         item.button?.action = #selector(statusItemClicked)
@@ -414,7 +424,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
 
         let toggle = NSMenuItem(
-            title: isInterfaceVisible ? "Hide StickyNotes" : "Show StickyNotes",
+            title: isInterfaceVisible ? "Hide Jot" : "Show Jot",
             action: #selector(toggleFromMenu),
             keyEquivalent: ""
         )
@@ -445,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit StickyNotes", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Jot", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
 
@@ -475,7 +485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 let alert = NSAlert()
                 let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
                 alert.messageText = "You're up to date"
-                alert.informativeText = "StickyNotes \(version) is the latest version."
+                alert.informativeText = "Jot \(version) is the latest version."
                 alert.runModal()
             }
         }
@@ -496,7 +506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "StickyNotes Settings"
+        window.title = "Jot Settings"
         window.contentViewController = NSHostingController(rootView: PreferencesView(settings: settings))
         window.isReleasedWhenClosed = false
         window.center()

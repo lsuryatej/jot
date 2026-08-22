@@ -56,7 +56,7 @@ final class HotKeyController {
         unregister()
 
         guard combo.isValid else {
-            NSLog("StickyNotes: refusing to register \(combo.displayString) with no modifiers")
+            NSLog("Jot: refusing to register \(combo.displayString) with no modifiers")
             return false
         }
 
@@ -71,7 +71,7 @@ final class HotKeyController {
         )
 
         guard status == noErr else {
-            NSLog("StickyNotes: could not register \(combo.displayString) (OSStatus \(status)); another app may own it")
+            NSLog("Jot: could not register \(combo.displayString) (OSStatus \(status)); another app may own it")
             hotKeyRef = nil
             registeredCombo = nil
             return false

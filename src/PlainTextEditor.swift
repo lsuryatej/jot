@@ -428,7 +428,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
                 )
             } catch {
                 NSSound.beep()
-                NSLog("StickyNotes: text recognition failed: \(error.localizedDescription)")
+                NSLog("Jot: text recognition failed: \(error.localizedDescription)")
             }
         }
     }

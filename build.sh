@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-APP="StickyNotes.app"
-BUNDLE_ID="com.suryatejlalam.StickyNotes"
+APP="Jot.app"
+BUNDLE_ID="com.suryatejlalam.Jot"
 
 # The macOS 27 beta Command Line Tools ship a swiftc (6.2.3) that cannot read the
 # installed SDK (built with 6.2 effective-5.10) — any `import SwiftUI` hangs and
@@ -41,7 +41,7 @@ cp resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
     -target arm64-apple-macos14.0 \
     -O \
     src/*.swift \
-    -o "$APP/Contents/MacOS/StickyNotes"
+    -o "$APP/Contents/MacOS/Jot"
 
 # Ad-hoc sign (required on Apple Silicon) and clear the quarantine flag.
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"

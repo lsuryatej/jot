@@ -81,9 +81,13 @@ enum CurrencyRates {
             let cached = try JSONDecoder().decode(CachedRates.self, from: data)
             var table = invert(cached.usd)
             table["usd"] = 1.0
+            // Rebound as a `let` before crossing the await below: a captured
+            // `var` read on the other side of a suspension point is what
+            // Swift 6 flags, even though nothing here actually races.
+            let fetchedTable = table
 
             await MainActor.run {
-                rates = table
+                rates = fetchedTable
                 lastFetched = Date()
             }
 
@@ -94,7 +98,7 @@ enum CurrencyRates {
             try data.write(to: cacheURL, options: .atomic)
             return true
         } catch {
-            NSLog("StickyNotes: currency rate fetch failed (\(url.host ?? "?")): \(error.localizedDescription)")
+            NSLog("Jot: currency rate fetch failed (\(url.host ?? "?")): \(error.localizedDescription)")
             return false
         }
     }

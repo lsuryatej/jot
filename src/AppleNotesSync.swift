@@ -11,10 +11,10 @@ import Foundation
 /// someone's Notes library on the strength of a mapping file is not a risk
 /// worth taking automatically.
 actor AppleNotesSync {
-    static let folderName = "StickyNotes"
+    static let folderName = "Jot"
 
     private let mappingURL: URL
-    /// StickyNotes note id -> Apple Notes note id.
+    /// Jot note id -> Apple Notes note id.
     private var mapping: [String: String]
 
     init(mappingURL: URL = NoteStore.defaultFileURL()
@@ -80,7 +80,7 @@ actor AppleNotesSync {
         do {
             try ensureFolder()
         } catch {
-            NSLog("StickyNotes: could not reach Apple Notes: \(error.localizedDescription)")
+            NSLog("Jot: could not reach Apple Notes: \(error.localizedDescription)")
             result.failed = notes.count
             return result
         }
@@ -101,7 +101,7 @@ actor AppleNotesSync {
                 }
             } catch {
                 result.failed += 1
-                NSLog("StickyNotes: sync failed for \(note.title): \(error.localizedDescription)")
+                NSLog("Jot: sync failed for \(note.title): \(error.localizedDescription)")
             }
         }
 

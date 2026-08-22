@@ -120,6 +120,24 @@ enum ScreenEdge: String, CaseIterable, Identifiable {
 final class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
 
+    /// Renaming the app changed the bundle ID this app's `UserDefaults.standard`
+    /// resolves to, which is a completely separate on-disk domain — so without
+    /// this, every setting silently resets to its default the first time
+    /// someone launches the renamed build. Copied once, guarded by a sentinel
+    /// in the *new* domain so it never re-runs and never clobbers a choice
+    /// made after the migration already happened.
+    private static func migrateFromPreviousBundleIDIfNeeded(into defaults: UserDefaults) {
+        let sentinel = "migratedSettingsFromStickyNotesBundle"
+        guard defaults.object(forKey: sentinel) == nil else { return }
+        defaults.set(true, forKey: sentinel)
+
+        guard let previous = UserDefaults(suiteName: "com.suryatejlalam.StickyNotes") else { return }
+        for key in Key.all {
+            guard defaults.object(forKey: key) == nil, let value = previous.object(forKey: key) else { continue }
+            defaults.set(value, forKey: key)
+        }
+    }
+
     private enum Key {
         static let displayMode    = "displayMode"
         static let hotKeyCode     = "hotKeyCode"
@@ -136,6 +154,16 @@ final class SettingsManager: ObservableObject {
         static let listKeyword    = "listKeyword"
         static let fetchesLiveRates = "fetchesLiveCurrencyRates"
         static let checksForUpdates = "checksForUpdates"
+
+        /// Every key this type persists, for the one-time migration below.
+        /// Kept as a literal list rather than reflection: `UserDefaults`
+        /// domains accumulate unrelated system-set keys over time, and only
+        /// the app's own keys should ever cross a bundle-ID migration.
+        static let all: Set<String> = [
+            displayMode, hotKeyCode, hotKeyMods, timerKeyword, showsFooter,
+            screenEdge, edgeWidth, appearance, showsHeader, lineSpacing,
+            windowFrame, syncsToNotes, listKeyword, fetchesLiveRates, checksForUpdates,
+        ]
     }
 
     private let defaults: UserDefaults
@@ -247,6 +275,7 @@ final class SettingsManager: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        Self.migrateFromPreviousBundleIDIfNeeded(into: defaults)
 
         let rawMode = defaults.string(forKey: Key.displayMode) ?? DisplayMode.floating.rawValue
         self.displayMode = DisplayMode(rawValue: rawMode) ?? .floating

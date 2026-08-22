@@ -16,7 +16,7 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var availableVersion: String?
 
     /// Update if the project moves to a different owner or repo name.
-    private static let repository = "lsuryatej/sticky-notes"
+    private static let repository = "lsuryatej/jot"
     private static let releasesAPI = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     static let releasesPage = URL(string: "https://github.com/\(repository)/releases/latest")!
 
@@ -45,14 +45,14 @@ final class UpdateChecker: ObservableObject {
         struct Release: Decodable { let tag_name: String }
         do {
             var request = URLRequest(url: Self.releasesAPI)
-            request.setValue("StickyNotes", forHTTPHeaderField: "User-Agent")
+            request.setValue("Jot", forHTTPHeaderField: "User-Agent")
             let (data, _) = try await URLSession.shared.data(for: request)
             let release = try JSONDecoder().decode(Release.self, from: data)
             let latest = release.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "v"))
             let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
             availableVersion = Self.isNewer(latest, than: current) ? latest : nil
         } catch {
-            NSLog("StickyNotes: update check failed: \(error.localizedDescription)")
+            NSLog("Jot: update check failed: \(error.localizedDescription)")
         }
     }
 
@@ -81,10 +81,10 @@ final class UpdateChecker: ObservableObject {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: brew)
-        process.arguments = ["upgrade", "--cask", "stickynotes"]
+        process.arguments = ["upgrade", "--cask", "jot"]
         process.terminationHandler = { _ in
             DispatchQueue.main.async {
-                NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/StickyNotes.app"))
+                NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Jot.app"))
                 NSApp.terminate(nil)
             }
         }

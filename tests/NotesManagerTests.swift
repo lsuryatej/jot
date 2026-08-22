@@ -616,6 +616,49 @@ func runAllTests() {
         equal(results, [10, 20, 30, 30], "each variable available to every later line")
     }
 
+    suite("renaming the app moves the whole storage directory") {
+        let base = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("jot-rename-\(UUID().uuidString)")
+        let oldDir = base.appendingPathComponent("StickyNotes", isDirectory: true)
+        try? FileManager.default.createDirectory(at: oldDir.appendingPathComponent("Attachments"), withIntermediateDirectories: true)
+        try? Data("[{\"id\":\"11111111-1111-1111-1111-111111111111\",\"text\":\"kept\"}]".utf8)
+            .write(to: oldDir.appendingPathComponent("notes.json"))
+        try? "fake-image".data(using: .utf8)?.write(to: oldDir.appendingPathComponent("Attachments/a.png"))
+
+        let moved = NoteStore.migrateStorageDirectoryIfNeeded(in: base)
+        check(moved, "migration reports that it moved something")
+
+        let newDir = base.appendingPathComponent("Jot", isDirectory: true)
+        check(!FileManager.default.fileExists(atPath: oldDir.path), "old directory is gone, not copied-and-left-behind")
+        check(FileManager.default.fileExists(atPath: newDir.appendingPathComponent("notes.json").path), "notes moved")
+        check(FileManager.default.fileExists(atPath: newDir.appendingPathComponent("Attachments/a.png").path), "attachments moved with it")
+
+        let ranAgain = NoteStore.migrateStorageDirectoryIfNeeded(in: base)
+        check(!ranAgain, "does not run twice, and does not touch an already-migrated directory")
+    }
+
+    suite("no old directory means nothing to migrate") {
+        let base = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("jot-nomigrate-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        check(!NoteStore.migrateStorageDirectoryIfNeeded(in: base), "a fresh install has nothing to move")
+    }
+
+    suite("an existing Jot directory is never overwritten by a stale StickyNotes one") {
+        let base = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("jot-nooverwrite-\(UUID().uuidString)")
+        let oldDir = base.appendingPathComponent("StickyNotes", isDirectory: true)
+        let newDir = base.appendingPathComponent("Jot", isDirectory: true)
+        try? FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: newDir, withIntermediateDirectories: true)
+        try? Data("[\"old\"]".utf8).write(to: oldDir.appendingPathComponent("notes.json"))
+        try? Data("[\"current\"]".utf8).write(to: newDir.appendingPathComponent("notes.json"))
+
+        check(!NoteStore.migrateStorageDirectoryIfNeeded(in: base), "refuses to run when the destination already exists")
+        let survived = try? String(contentsOf: newDir.appendingPathComponent("notes.json"), encoding: .utf8)
+        equal(survived, "[\"current\"]", "the real directory's content is untouched")
+    }
+
     // MARK: - Storage
 
     suite("notes survive a store round trip") {

@@ -6,8 +6,8 @@ extension Notification.Name {
     /// The registered hot key intercepts keystrokes system-wide, so it has to be
     /// released while the recorder is listening or the current shortcut can
     /// never be pressed to re-record it.
-    static let stickyNotesBeginHotKeyRecording = Notification.Name("StickyNotesBeginHotKeyRecording")
-    static let stickyNotesEndHotKeyRecording = Notification.Name("StickyNotesEndHotKeyRecording")
+    static let jotBeginHotKeyRecording = Notification.Name("JotBeginHotKeyRecording")
+    static let jotEndHotKeyRecording = Notification.Name("JotEndHotKeyRecording")
 }
 
 struct PreferencesView: View {
@@ -140,7 +140,7 @@ struct PreferencesView: View {
             Divider()
 
             Toggle("Sync notes to an Apple Notes folder", isOn: $settings.syncsToAppleNotes)
-            Text("Pushes each note into a \"StickyNotes\" folder in Apple Notes. One direction only — edits made there are not read back. macOS will ask for permission the first time.")
+            Text("Pushes each note into a \"Jot\" folder in Apple Notes. One direction only — edits made there are not read back. macOS will ask for permission the first time.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -199,7 +199,7 @@ struct HotKeyRecorder: View {
 
     private func startRecording() {
         isRecording = true
-        NotificationCenter.default.post(name: .stickyNotesBeginHotKeyRecording, object: nil)
+        NotificationCenter.default.post(name: .jotBeginHotKeyRecording, object: nil)
 
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
             if event.keyCode == UInt16(kVK_Escape) {
@@ -227,6 +227,6 @@ struct HotKeyRecorder: View {
         monitor = nil
         guard isRecording else { return }
         isRecording = false
-        NotificationCenter.default.post(name: .stickyNotesEndHotKeyRecording, object: nil)
+        NotificationCenter.default.post(name: .jotEndHotKeyRecording, object: nil)
     }
 }
