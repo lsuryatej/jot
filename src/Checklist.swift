@@ -89,12 +89,18 @@ enum Checklist {
         let parsed = lines.map { item(in: $0) }
 
         // Blank lines are skipped, so toggling a selection that spans paragraph
-        // breaks does not litter it with empty checkboxes.
+        // breaks does not litter it with empty checkboxes. Heading lines skip
+        // too: they carry their own structure and never grow a checkbox.
         var targets = lines.indices.filter {
-            parsed[$0] != nil || !lines[$0].trimmingCharacters(in: .whitespaces).isEmpty
+            if Heading.parse(lines[$0]) != nil { return false }
+            return parsed[$0] != nil || !lines[$0].trimmingCharacters(in: .whitespaces).isEmpty
         }
         // Unless everything is blank, in which case the user is starting a list.
-        if targets.isEmpty { targets = Array(lines.indices) }
+        if targets.isEmpty {
+            // A selection of nothing but headings is not asking to become one.
+            guard !lines.contains(where: { Heading.parse($0) != nil }) else { return block }
+            targets = Array(lines.indices)
+        }
 
         let everythingIsAnItem = targets.allSatisfy { parsed[$0] != nil }
 
@@ -136,10 +142,12 @@ enum Checklist {
 
     /// One line made list-shaped: a plain, non-blank line becomes an unchecked
     /// item at its own indent. Lines that are already items and blank lines
-    /// come back alone — blanks stay paragraph breaks.
+    /// come back alone — blanks stay paragraph breaks. Headings stay headings:
+    /// `- [ ] # Foo` would demote structure into item text.
     static func itemized(line: String) -> String {
         guard !line.trimmingCharacters(in: .whitespaces).isEmpty,
-              item(in: line) == nil
+              item(in: line) == nil,
+              Heading.parse(line) == nil
         else { return line }
         let indent = leadingWhitespace(of: line)
         return render(indent: indent, isChecked: false, body: String(line.dropFirst(indent.count)))

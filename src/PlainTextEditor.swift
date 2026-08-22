@@ -882,11 +882,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     }
 
     /// Whether `characterIndex` falls inside a currently-collapsed link's
-    /// hidden zone: the scheme and path around the domain that stays
-    /// visible. Re-derived from `linkMatches`/`expandedLinks` on every call
-    /// rather than cached, since it only runs during glyph generation, not
-    /// on every keystroke.
+    /// hidden zone (the scheme and path around the domain that stays
+    /// visible) or inside a heading's folded marker. Both re-derive from
+    /// state kept fresh by the styling pass, since this runs during glyph
+    /// generation, not on every keystroke.
     private func isCharacterFolded(_ characterIndex: Int, in text: NSString) -> Bool {
+        for range in headingMarkers where NSLocationInRange(characterIndex, range) {
+            return true
+        }
         for match in linkMatches {
             guard match.range.location + match.range.length <= text.length else { continue }
             guard characterIndex >= match.range.location, characterIndex < match.range.location + match.range.length else { continue }
@@ -910,7 +913,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         font: NSFont,
         forGlyphRange glyphRange: NSRange
     ) -> Int {
-        guard !linkMatches.isEmpty, let textStorage else { return 0 }
+        guard !linkMatches.isEmpty || !headingMarkers.isEmpty, let textStorage else { return 0 }
         let ns = textStorage.string as NSString
 
         var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
@@ -1034,18 +1037,41 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
         if stylesFirstLineAsTitle, ns.length > 0 {
             let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
-            let titleRange = NSIntersectionRange(firstLine, target)
-            if titleRange.length > 0 {
-                textStorage.addAttribute(
-                    .font,
-                    value: titleFont,
-                    range: titleRange
-                )
+            let firstLineText = ns.substring(with: firstLine)
+            // An explicit first-line heading beats the automatic title: it
+            // sizes itself by its own level below, and piling the title
+            // treatment on top would flatten the distinction the user just
+            // wrote. The heading text still serves as the title everywhere
+            // one is shown (see `Note.title`).
+            if Heading.parse(firstLineText) == nil {
+                let titleRange = NSIntersectionRange(firstLine, target)
+                if titleRange.length > 0 {
+                    textStorage.addAttribute(
+                        .font,
+                        value: titleFont,
+                        range: titleRange
+                    )
+                }
             }
         }
 
         ns.enumerateSubstrings(in: target, options: [.byLines]) { line, lineRange, _, _ in
             guard let line else { return }
+
+            if let heading = Heading.parse(line) {
+                var style = NSMutableParagraphStyle()
+                style.lineHeightMultiple = CGFloat(self.lineHeightMultiple)
+                // Room above a heading so it reads as its own section; the
+                // very first line keeps its inset instead of pushing down.
+                if lineRange.location > 0 {
+                    style.paragraphSpacingBefore = [CGFloat(18), 12, 8][heading.level - 1]
+                }
+                textStorage.addAttributes(
+                    [.font: self.headingFont(heading), .paragraphStyle: style],
+                    range: lineRange
+                )
+                return
+            }
 
             // An image line is given the height of its image, and the markdown
             // that produced it is painted out. The characters are still there:
@@ -1101,6 +1127,24 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 range: NSRange(location: bodyStart, length: bodyLength)
             )
         }
+
+        // Fresh positions for the folding pass: glyph generation asks about
+        // arbitrary characters and has to fold against where the markers sit
+        // *now*, not where they sat before this edit.
+        headingMarkers = Heading.markerRanges(in: ns)
+    }
+
+    /// Where the current note's heading markers are, in string coordinates.
+    /// Recomputed by every styling pass; read by glyph generation.
+    private(set) var headingMarkers: [NSRange] = []
+
+    /// Headings step up from the note's own font, so a typewriter note gets
+    /// bold typewriter headings rather than a system-font intruder.
+    private func headingFont(_ heading: Heading) -> NSFont {
+        let lift: CGFloat = [6.0, 3.5, 1.5][heading.level - 1]
+        let manager = NSFontManager.shared
+        let sized = manager.convert(baseFont, toSize: baseFont.pointSize + lift)
+        return heading.level == 3 ? sized : manager.convert(sized, toHaveTrait: .boldFontMask)
     }
 }
 

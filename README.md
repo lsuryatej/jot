@@ -156,6 +156,13 @@ real task list in Obsidian, Bear, or GitHub.
 
 ![A checklist, with completed items struck through](docs/screenshots/checklist.jpeg)
 
+**Headings.** Start a line with `#`, `##`, or `###` and it renders as one,
+sized by its level. Same trade as the checklists: the hashes stay in the
+file, so a note with headings is still plain markdown everywhere else. A
+heading's hashes are folded out of view on screen, and when the first line
+is a heading, its text becomes the note's title instead of getting a
+one-size-fits-all title treatment.
+
 **Images.** Paste or drop an image and it stays an image, drawn inline,
 resizable by dragging its edge. It's written to `Attachments/` beside your
 notes, referenced from the text as `![width](Attachments/<id>.png)`, so a
@@ -288,6 +295,7 @@ apply at all, a normal Xcode install should just work.
 | `src/UpdateChecker.swift` | Opt-out GitHub release check |
 | `src/TextStatistics.swift` | Word counts and selection sum/average |
 | `src/Checklist.swift` | Checklist parsing, rewriting, and list mode |
+| `src/Headings.swift` | Heading line parsing and marker ranges |
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/Note.swift` | The note model and its stable identity |
@@ -310,7 +318,7 @@ apply at all, a normal Xcode install should just work.
 `NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `GlobalSearch`,
 `LinkShrink`, and `Attachments` are deliberately free of SwiftUI and AppKit,
 so every rule in them is covered by a dependency-free test. `./test.sh` runs
-294 checks total, that plus a UI-layer slice against real `NSTextView`
+338 checks total, that plus a UI-layer slice against real `NSTextView`
 instances, in a few seconds.
 
 `Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes

@@ -533,6 +533,72 @@ func runAllTests() {
         check(!Checklist.isListMode("", keyword: "list"), "empty note")
     }
 
+    // MARK: - Headings
+
+    suite("heading parsing takes one to three hashes and a space") {
+        equal(Heading.parse("# Title"), Heading(level: 1, markerLength: 2), "level one")
+        equal(Heading.parse("## Title"), Heading(level: 2, markerLength: 3), "level two")
+        equal(Heading.parse("### Title"), Heading(level: 3, markerLength: 4), "level three")
+        check(Heading.parse("#### Title") == nil, "four hashes has no level here")
+        check(Heading.parse("#hashtag") == nil, "no space is ordinary text")
+        check(Heading.parse("#") == nil, "a lone hash is ordinary text")
+        check(Heading.parse("###") == nil, "hashes with no space are ordinary text")
+        check(Heading.parse(" # Title") == nil, "leading whitespace disqualifies")
+        check(Heading.parse("#NoSpace") == nil, "glued text disqualifies")
+        check(Heading.parse("plain words") == nil, "prose is not a heading")
+        check(Heading.parse("- [ ] # inside an item") == nil,
+              "a hash mid-line means nothing to the heading parser")
+    }
+
+    suite("heading markers map into whole-string coordinates") {
+        let ns = "# Top\nbody\n## Section" as NSString
+        equal(
+            Heading.markerRanges(in: ns),
+            [NSRange(location: 0, length: 2), NSRange(location: 11, length: 3)],
+            "both markers found at their lines"
+        )
+        equal(Heading.markerRanges(in: "no headings here" as NSString), [], "none in plain prose")
+    }
+
+    suite("headings never become list items") {
+        equal(
+            Checklist.convertedToList("list\n# Heading\nmilk", keyword: "list"),
+            "list\n# Heading\n- [ ] milk",
+            "conversion leaves them standing"
+        )
+        equal(
+            Checklist.pastedAsListItems("eggs\n## From the web", into: "list\n- [ ] milk", keyword: "list"),
+            "- [ ] eggs\n## From the web",
+            "paste-splitting leaves them standing"
+        )
+        equal(Checklist.itemized(line: "# Heading"), "# Heading", "itemized passes a heading through")
+
+        equal(
+            Checklist.toggled(block: "# Roadmap\nship v2"),
+            "# Roadmap\n- [ ] ship v2",
+            "toggling a mixed selection skips the heading"
+        )
+        equal(
+            Checklist.toggled(block: "# Roadmap\n## Later"),
+            "# Roadmap\n## Later",
+            "toggling a selection of only headings changes nothing"
+        )
+    }
+
+    suite("a heading's text is the note's title") {
+        equal(Note(text: "## Roadmap\nbody").title, "Roadmap", "hashes stripped from the title")
+        // Not a heading by the parser's rule, so it titles literally — same
+        // as any other punctuation-only first line.
+        equal(Note(text: "#\nbody").title, "#", "a lone hash titles as itself")
+        equal(Note(text: "plain first line").title, "plain first line", "ordinary notes unchanged")
+    }
+
+    suite("the list keyword still wins the first line over everything") {
+        // The whole-line-exact match means markup never collides with it.
+        check(!Checklist.isListMode("# list", keyword: "list"), "'# list' is a heading named list, not checklist mode")
+        check(Checklist.isListMode("LIST", keyword: "list"), "bare keyword still triggers")
+    }
+
     suite("switching to list mode converts what is already there") {
         equal(
             Checklist.convertedToList("list\nmilk\neggs", keyword: "list"),

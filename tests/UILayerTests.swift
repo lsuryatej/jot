@@ -289,4 +289,96 @@ func runUILayerTests() {
             "collapsed again — back to hiding the scheme and path"
         )
     }
+
+    // MARK: - Headings
+
+    suite("a heading line styles at its own level") {
+        let view = makeTextView("## Roadmap\nplain body line")
+        view.applyChecklistStyling()
+
+        guard let storage = view.textStorage else {
+            check(false, "text storage exists")
+            return
+        }
+        let headingFont = storage.attribute(.font, at: 3, effectiveRange: nil) as? NSFont
+        let bodyFont = storage.attribute(.font, at: 12, effectiveRange: nil) as? NSFont
+
+        // Bigger than the body and heavier than regular: a heading, not a
+        // title-sized clone of the first line.
+        check(
+            (headingFont?.pointSize ?? 0) > view.baseFont.pointSize + 2,
+            "heading is larger than the body"
+        )
+        check(headingFont?.fontDescriptor.symbolicTraits.contains(.bold) == true,
+              "heading is bold")
+        equal(bodyFont?.pointSize, view.baseFont.pointSize, "the body line keeps the base font")
+    }
+
+    suite("an explicit first-line heading beats the automatic title") {
+        // Option B: the user asked for a heading; piling the title treatment
+        // on top would flatten the level they chose.
+        let heading = makeTextView("# Roadmap")
+        heading.stylesFirstLineAsTitle = true
+        heading.applyChecklistStyling()
+        let plain = makeTextView("Roadmap")
+        plain.stylesFirstLineAsTitle = true
+        plain.applyChecklistStyling()
+
+        guard let headingStorage = heading.textStorage, let plainStorage = plain.textStorage else {
+            check(false, "text storage exists")
+            return
+        }
+        let headingFont = headingStorage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        let titleFont = plainStorage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+
+        check(headingFont != titleFont, "the heading does not carry the title font")
+        check(
+            (headingFont?.pointSize ?? 0) > (titleFont?.pointSize ?? 0),
+            "it sizes by its own level instead"
+        )
+    }
+
+    suite("a heading's hashes are folded out of the glyph stream") {
+        let view = makeTextView("## Roadmap")
+        view.applyChecklistStyling()
+
+        guard let lm = view.layoutManager, let container = view.textContainer else {
+            check(false, "layout machinery exists")
+            return
+        }
+        lm.ensureLayout(for: container)
+
+        // "## " is three characters; every one of them should generate a
+        // glyph that occupies no layout space.
+        var hidden = 0
+        var visible = 0
+        for glyphIndex in 0..<lm.numberOfGlyphs {
+            if lm.notShownAttribute(forGlyphAt: glyphIndex) {
+                hidden += 1
+            } else {
+                visible += 1
+            }
+        }
+        equal(hidden, 3, "the whole marker is hidden")
+        equal(visible, "Roadmap".count, "the heading text stays visible")
+
+        // And the file still has every character: folding is display-only.
+        equal(view.string, "## Roadmap", "the text itself is untouched")
+    }
+
+    suite("a heading inside a list note keeps its shape when the list converts") {
+        // Conversion itself is pinned in the logic tests; this is the view
+        // half: the surviving heading line still styles as a heading.
+        let view = makeTextView(Checklist.convertedToList("list\n# Heading\nmilk", keyword: "list"))
+        view.listKeyword = "list"
+        view.applyChecklistStyling()
+
+        equal(view.string, "list\n# Heading\n- [ ] milk", "conversion skips the heading line")
+        guard let storage = view.textStorage else {
+            check(false, "text storage exists")
+            return
+        }
+        let font = storage.attribute(.font, at: 8, effectiveRange: nil) as? NSFont
+        check((font?.pointSize ?? 0) > view.baseFont.pointSize + 2, "and still styles as a heading")
+    }
 }
