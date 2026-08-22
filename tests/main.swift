@@ -4,6 +4,7 @@ import Foundation
 // and the suites live next door in NotesManagerTests.swift.
 
 runAllTests()
+runUILayerTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

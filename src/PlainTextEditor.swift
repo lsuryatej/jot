@@ -446,30 +446,44 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         }
 
         let point = convert(event.locationInWindow, from: nil)
+        guard handleSpecialClick(at: point) else {
+            super.mouseDown(with: event)
+            return
+        }
+    }
 
+    /// The actual hit-test-and-act logic, isolated from window-coordinate
+    /// conversion so it is directly testable: `point` must already be in this
+    /// view's own coordinate space. Returns true when the click was claimed
+    /// (a checkbox toggled, or an image resize began) and false when the
+    /// caller should fall through to normal caret placement.
+    ///
+    /// Kept separate from `mouseDown` itself for a second reason beyond
+    /// testability: constructing a real `NSWindow` to drive `mouseDown`
+    /// through `convert(_:from:)` hangs indefinitely in a plain command-line
+    /// process with no window server session, which this project's
+    /// swiftc-only test binary is. Testing this method directly sidesteps
+    /// that entirely, rather than fighting it.
+    @discardableResult
+    func handleSpecialClick(at point: NSPoint) -> Bool {
         if let placed = image(at: point) {
             beginResize(placed, from: point)
-            return
+            return true
         }
 
         let index = characterIndexForInsertion(at: point)
         let lineRange = contentRange(forLineAt: index)
         let line = (string as NSString).substring(with: lineRange)
 
-        guard let item = Checklist.item(in: line) else {
-            super.mouseDown(with: event)
-            return
-        }
+        guard let item = Checklist.item(in: line) else { return false }
 
         let markerStart = lineRange.location + item.markerRange.location
         let markerEnd = markerStart + item.markerRange.length
-        guard index >= markerStart, index <= markerEnd else {
-            super.mouseDown(with: event)
-            return
-        }
+        guard index >= markerStart, index <= markerEnd else { return false }
 
         let updated = Checklist.toggled(block: line)
         replace(range: lineRange, with: updated, selecting: selectedRange())
+        return true
     }
 
     // MARK: - Caret
@@ -485,7 +499,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
         super.drawInsertionPoint(in: caretRect(from: rect), color: color, turnedOn: flag)
     }
 
-    private func caretRect(from rect: NSRect) -> NSRect {
+    func caretRect(from rect: NSRect) -> NSRect {
         let ascender = ceil(baseFont.ascender)
         let textHeight = ceil(baseFont.ascender - baseFont.descender)
         guard rect.height > textHeight + 0.5 else { return rect }
@@ -521,14 +535,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate {
     private var resizingRange: NSRange?
     private var previewWidth: CGFloat?
 
-    private struct PlacedImage {
+    struct PlacedImage {
         let image: NSImage
         let markdownRange: NSRange
         let rect: NSRect
     }
 
     /// Where each image reference lands on screen, derived fresh from layout.
-    private func placedImages() -> [PlacedImage] {
+    func placedImages() -> [PlacedImage] {
         guard let layoutManager, let textContainer, let textStorage else { return [] }
         let ns = textStorage.string as NSString
         var placed: [PlacedImage] = []

@@ -81,9 +81,24 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
 
 ## Engineering
 
-- [ ] **Automated UI-layer test coverage.** Every test today is pure logic. The
-      AppKit layer — paste dispatch, caret placement, swipe, rendering — has
-      none, and every bug found by hand so far has lived there.
+- [x] **Automated UI-layer test coverage — first slice.** 18 new checks
+      against real ChecklistTextView instances: Cmd+L/Cmd+N/Shift-Cmd-V
+      dispatch via performKeyEquivalent, checkbox click precision (including
+      that clicking body text does NOT toggle, which an earlier version got
+      wrong), caret geometry, and image placement. Verified by mutation —
+      reintroducing the caret bug and the click-anywhere-on-the-line bug both
+      fail the new tests.
+
+      Getting there required a real fix, not just test code: constructing a
+      real NSWindow hangs indefinitely in this project's plain swiftc test
+      binary (no window server session), which is what mouseDown's internal
+      convert(_:from:) needs to behave correctly. Extracted the actual
+      hit-test-and-act logic into handleSpecialClick(at:), which takes an
+      already-view-space point and needs no window at all — better factored
+      production code, not just a testing workaround.
+
+      Not yet covered: swipe gesture handling, drag-to-resize, and rendering
+      itself (draw(_:)) — geometry and dispatch are covered, pixels are not.
 
 ## Ideas
 
