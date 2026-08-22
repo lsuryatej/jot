@@ -54,13 +54,19 @@ a schedule. Items marked **[bug]** are defects in shipped behaviour.
 - [ ] Font customisation.
 - [ ] Colour tints for the glass appearance.
 - [ ] Configurable from macOS's hot-corner settings.
-- [ ] The GitHub Actions release workflow (.github/workflows/release.yml)
-      publishes a GitHub release automatically on a version tag, but does not
-      update the Homebrew cask at lsuryatej/homebrew-jot — its version and
-      sha256 still need a manual bump (or a follow-up automation) after each
-      release. Also genuinely untested on a real macOS Actions runner;
-      scripts/release.sh (run by hand) is the path that has actually been
-      exercised end to end.
+- [x] **Verified the release workflow for real.** Pushed v1.1.0, watched
+      .github/workflows/release.yml run on an actual GitHub-hosted macOS
+      runner: build, package, and publish all succeeded in 28 seconds. The
+      concern going in was real — GitHub's runners ship stable Xcode, not the
+      macOS 27 beta this project's local toolchain workaround exists for —
+      and it turned out fine, because a standard runner never hits that beta
+      SDK mismatch at all. Confirmed both install paths pick up the automated
+      release: `curl | bash` and `brew upgrade` (via a cask bump, still
+      manual) both landed real 1.1.0 installs.
+- [ ] The release workflow still doesn't update the Homebrew cask at
+      lsuryatej/homebrew-jot automatically — version and sha256 need a manual
+      bump after each release (done by hand for 1.1.0). Worth automating with
+      a follow-up job that has push access to that repo.
 - [ ] No screenshot in the README yet.
 
 ## Lists
