@@ -91,14 +91,20 @@ enum Checklist {
         // Blank lines are skipped, so toggling a selection that spans paragraph
         // breaks does not litter it with empty checkboxes. Heading lines skip
         // too: they carry their own structure and never grow a checkbox.
+        // Ordered-list lines (`1.` `a.` `iv.`) skip for the same reason —
+        // wrapping them as `- [ ] 1. eggs` would nest one list inside another.
+        func isStructural(_ line: String) -> Bool {
+            Heading.parse(line) != nil || OrderedList.item(in: line) != nil
+        }
         var targets = lines.indices.filter {
-            if Heading.parse(lines[$0]) != nil { return false }
+            if isStructural(lines[$0]) { return false }
             return parsed[$0] != nil || !lines[$0].trimmingCharacters(in: .whitespaces).isEmpty
         }
         // Unless everything is blank, in which case the user is starting a list.
         if targets.isEmpty {
-            // A selection of nothing but headings is not asking to become one.
-            guard !lines.contains(where: { Heading.parse($0) != nil }) else { return block }
+            // A selection of nothing but headings or ordered items is not
+            // asking to become checkboxes.
+            guard !lines.contains(where: isStructural) else { return block }
             targets = Array(lines.indices)
         }
 
@@ -143,11 +149,13 @@ enum Checklist {
     /// One line made list-shaped: a plain, non-blank line becomes an unchecked
     /// item at its own indent. Lines that are already items and blank lines
     /// come back alone — blanks stay paragraph breaks. Headings stay headings:
-    /// `- [ ] # Foo` would demote structure into item text.
+    /// `- [ ] # Foo` would demote structure into item text. Ordered-list
+    /// lines stay ordered for the same reason: `1.` already carries structure.
     static func itemized(line: String) -> String {
         guard !line.trimmingCharacters(in: .whitespaces).isEmpty,
               item(in: line) == nil,
-              Heading.parse(line) == nil
+              Heading.parse(line) == nil,
+              OrderedList.item(in: line) == nil
         else { return line }
         let indent = leadingWhitespace(of: line)
         return render(indent: indent, isChecked: false, body: String(line.dropFirst(indent.count)))

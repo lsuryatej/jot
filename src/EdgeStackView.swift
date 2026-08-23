@@ -35,11 +35,11 @@ struct EdgeStackView: View {
                                 index: index,
                                 noteID: note.id,
                                 baseFont: NoteFont.resolved(
-                                    settings.noteFontName,
+                                    settings.effectiveNoteFontName,
                                     // Cards stay compact previews: the chosen
                                     // family, but never larger than the old
                                     // fixed 12pt body no matter the size setting.
-                                    size: min(12, settings.noteFontSize)
+                                    size: min(12, settings.effectiveFontSize)
                                 ),
                                 draggingNoteID: $draggingNoteID
                             )
@@ -62,8 +62,8 @@ struct EdgeStackView: View {
     private var header: some View {
         HStack {
             Text("\(notesManager.notes.count) note\(notesManager.notes.count == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundStyle(Color(nsColor: settings.appearance.ink.secondary))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(Color(nsColor: settings.effectiveInk.secondary))
 
             Spacer()
 
@@ -95,6 +95,9 @@ struct NoteCard: View {
     @State private var height: CGFloat = 40
     @State private var isHovered = false
 
+    /// Whether this card is the one a drag is carrying right now.
+    private var isCarried: Bool { draggingNoteID == noteID }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             NoteCardEditor(
@@ -102,10 +105,10 @@ struct NoteCard: View {
                     get: { notesManager.text(at: index) },
                     set: { notesManager.setText($0, at: index) }
                 ),
-                lineHeightMultiple: settings.lineSpacing,
-                baseFont: baseFont,
+                lineHeightMultiple: settings.effectiveLineSpacing,
+                baseFont: settings.effectiveEditorFont,
                 listKeyword: settings.effectiveListKeyword,
-                ink: settings.appearance.ink,
+                ink: settings.effectiveInk,
                 onHeightChange: { height = $0 }
             )
             .frame(height: height)
@@ -116,11 +119,14 @@ struct NoteCard: View {
                     notesManager.deleteNote(at: index)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Color(nsColor: settings.appearance.ink.secondary))
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color(nsColor: settings.effectiveInk.secondary).opacity(0.9))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(8)
+                .padding(7)
                 .help("Delete this note")
+                .transition(.opacity)
             }
         }
         .background(cardBackground)
@@ -128,18 +134,26 @@ struct NoteCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    Color(nsColor: settings.appearance.hairlineColor)
-                        .opacity(settings.appearance.wantsLitEdge ? 0.16 : 0.10),
+                    Color(nsColor: settings.effectiveHairlineColor)
+                        .opacity(settings.effectiveWantsLitEdge ? 0.16 : (isHovered ? 0.16 : 0.10)),
                     lineWidth: 1
                 )
         )
         .overlay(alignment: .topLeading) { reorderGrip }
+        // A hovered card lifts a little off the stack; a carried one dims so
+        // the eye keeps track of what is being moved while the others part.
+        .shadow(color: .black.opacity(isHovered && !isCarried ? 0.10 : 0), radius: 7, y: 2)
+        .scaleEffect(isCarried ? 0.985 : 1)
+        .opacity(isCarried ? 0.45 : 1)
         .onDrop(of: [.text], delegate: NoteCardDropDelegate(
             noteID: noteID,
             notesManager: notesManager,
             draggingNoteID: $draggingNoteID
         ))
-        .onHover { isHovered = $0 }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
+        }
+        .animation(.easeOut(duration: 0.15), value: isCarried)
     }
 
     /// The grip a drag starts from.
@@ -152,22 +166,24 @@ struct NoteCard: View {
     private var reorderGrip: some View {
         if isHovered {
             Image(systemName: "line.3.horizontal")
-                .foregroundStyle(Color(nsColor: settings.appearance.ink.secondary))
-                .padding(8)
+                .font(.system(size: 13))
+                .foregroundStyle(Color(nsColor: settings.effectiveInk.secondary).opacity(0.9))
+                .padding(7)
                 .contentShape(Rectangle())
                 .onDrag {
-                    draggingNoteID = noteID
+                    withAnimation(.easeOut(duration: 0.15)) { draggingNoteID = noteID }
                     return NSItemProvider(object: noteID.uuidString as NSString)
                 }
                 .help("Drag to reorder")
+                .transition(.opacity)
         }
     }
 
     /// Cards sit on the window's own material, so they need their own surface
     /// to read as separate pieces of paper rather than panels of the same glass.
     private var cardBackground: some View {
-        Color(nsColor: settings.appearance.cardColor)
-            .opacity(settings.appearance.wantsOpaqueCards ? 1.0 : 0.55)
+        Color(nsColor: settings.effectiveCardColor)
+            .opacity(settings.effectiveWantsOpaqueCards ? 1.0 : 0.55)
     }
 }
 

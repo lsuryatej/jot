@@ -4,6 +4,11 @@ import Foundation
 // and the suites live next door in NotesManagerTests.swift.
 
 runAllTests()
+runGlassTintTests()
+runOrderedListTests()
+runThemeNoteTests()
+runCelebrationTests()
+runInteractionTests()
 runUILayerTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")

@@ -11,7 +11,7 @@ import Foundation
 // exact layer, which until now had zero automated coverage. Pure-logic tests
 // elsewhere could not have caught any of them.
 
-private func makeTextView(_ text: String = "") -> ChecklistTextView {
+func makeTextView(_ text: String = "") -> ChecklistTextView {
     // Deliberately never attached to a real NSWindow: constructing one hangs
     // indefinitely in a plain command-line process with no window server
     // session, which this swiftc-only test binary is. handleSpecialClick(at:)

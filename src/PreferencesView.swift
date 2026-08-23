@@ -88,6 +88,24 @@ struct PreferencesView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if settings.themeOverride != nil {
+                    Text("A theme note is controlling the look. These picks take over again when that note stops being one.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if GlassTint.applies(to: settings.appearance) {
+                    HStack(spacing: 12) {
+                        Text("Tint")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(GlassTint.allCases) { tint in
+                            tintSwatch(tint)
+                        }
+                    }
+                }
+
                 Picker("Guides", selection: $settings.guide) {
                     ForEach(PaperGuide.allCases) { guide in
                         Text(guide.title).tag(guide)
@@ -185,6 +203,31 @@ struct PreferencesView: View {
 
             Divider()
 
+            section("Timer celebration") {
+                Picker("Confetti", selection: $settings.celebrationStyle) {
+                    ForEach(CelebrationStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 220)
+
+                Text(settings.celebrationStyle.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Picker("Sound", selection: $settings.timerSound) {
+                    ForEach(CelebrationSound.allCases) { sound in
+                        Text(sound.title).tag(sound)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 220)
+            }
+
+            Divider()
+
             Toggle("Show word count and selection totals", isOn: $settings.showsFooter)
 
             Toggle("Fetch live currency exchange rates", isOn: $settings.fetchesLiveCurrencyRates)
@@ -222,6 +265,34 @@ struct PreferencesView: View {
                 .font(.headline)
             content()
         }
+    }
+
+    /// One circular swatch in the tint row. The fill is the wash at four
+    /// times its on-paper opacity so it reads at swatch size. "None" stays
+    /// empty with a dashed ring — a filled grey disc would read as its own
+    /// colour choice rather than the absence of one.
+    private func tintSwatch(_ tint: GlassTint) -> some View {
+        let isSelected = settings.glassTint == tint
+        let ringStyle = StrokeStyle(
+            lineWidth: isSelected ? 2 : 1,
+            dash: tint == .none && !isSelected ? [2, 2] : []
+        )
+        return Button {
+            settings.glassTint = tint
+        } label: {
+            Circle()
+                .fill(tint.overlayColor.map { Color(nsColor: $0).opacity(tint.overlayOpacity * 4) } ?? .clear)
+                .overlay(
+                    Circle().strokeBorder(
+                        isSelected ? Color.accentColor : Color.secondary.opacity(0.4),
+                        style: ringStyle
+                    )
+                )
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.plain)
+        .help(tint.title)
+        .accessibilityLabel(tint.title)
     }
 }
 

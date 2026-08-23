@@ -43,11 +43,20 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/NotesManager.swift \
     src/TextStatistics.swift \
     src/Checklist.swift \
+    src/OrderedList.swift \
     src/KeyCombo.swift \
     src/SettingsManager.swift \
+    src/GlassTint.swift \
+    src/ThemeNote.swift \
+    src/Celebration.swift \
     src/PlainTextEditor.swift \
     src/PreferencesView.swift \
     tests/NotesManagerTests.swift \
+    tests/GlassTintTests.swift \
+    tests/ThemeNoteTests.swift \
+    tests/CelebrationTests.swift \
+    tests/InteractionTests.swift \
+    tests/OrderedListTests.swift \
     tests/UILayerTests.swift \
     tests/main.swift \
     -o "$OUT"

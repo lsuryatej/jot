@@ -8,6 +8,53 @@ enum SwipeDirection {
     case right
 }
 
+/// The swipe-recognition state machine behind `SwipeScrollView`, extracted so
+/// the rules are testable without synthesising scroll events against a real
+/// scroll view (which needs a window server).
+///
+/// A gesture accumulates horizontal deltas until they cross the threshold,
+/// fires exactly once, then goes quiet until the fingers lift or a new gesture
+/// begins. Vertical-dominant deltas are not swipes at all.
+struct SwipeAccumulator {
+    static let threshold: CGFloat = 55
+
+    enum Outcome: Equatable {
+        /// Crossed the threshold this event: navigate, and consume the event.
+        case fire(SwipeDirection)
+        /// Still accumulating: consume the event either way — a horizontal
+        /// gesture must never scroll the text view sideways.
+        case absorb
+        /// Vertical intent belongs to the text view's own scrolling.
+        case passThrough
+    }
+
+    private var accumulatedX: CGFloat = 0
+    private var didFire = false
+
+    mutating func receive(deltaX: CGFloat, deltaY: CGFloat) -> Outcome {
+        guard abs(deltaX) > abs(deltaY) else { return .passThrough }
+
+        accumulatedX += deltaX
+        if !didFire, abs(accumulatedX) >= Self.threshold {
+            didFire = true
+            // Natural scrolling: fingers moving right (positive dx) means
+            // "go back", matching the direction pages move under your fingers.
+            return .fire(accumulatedX > 0 ? .right : .left)
+        }
+        return .absorb
+    }
+
+    mutating func begin() {
+        accumulatedX = 0
+        didFire = false
+    }
+
+    /// Fingers lifted or cancelled: the next gesture starts from zero.
+    mutating func end() {
+        begin()
+    }
+}
+
 /// Scroll view that turns a horizontal two-finger swipe into a note-navigation
 /// event instead of a horizontal scroll.
 ///
@@ -17,39 +64,26 @@ enum SwipeDirection {
 final class SwipeScrollView: NSScrollView {
     var onSwipe: ((SwipeDirection) -> Void)?
 
-    private static let threshold: CGFloat = 55
-    private var accumulatedX: CGFloat = 0
-    private var didFireForGesture = false
+    private var accumulator = SwipeAccumulator()
 
     override func scrollWheel(with event: NSEvent) {
         if event.phase.contains(.began) {
-            accumulatedX = 0
-            didFireForGesture = false
+            accumulator.begin()
         }
 
-        let dx = event.scrollingDeltaX
-        let dy = event.scrollingDeltaY
-
-        // Vertical intent belongs to the text view.
-        guard abs(dx) > abs(dy) else {
+        switch accumulator.receive(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
+        case .fire(let direction):
+            onSwipe?(direction)
+        case .absorb:
+            break  // consumed: never scroll the text view sideways
+        case .passThrough:
             super.scrollWheel(with: event)
             return
         }
 
-        accumulatedX += dx
-        if !didFireForGesture && abs(accumulatedX) >= Self.threshold {
-            didFireForGesture = true
-            // Natural scrolling: fingers moving right (positive dx) means
-            // "go back", matching the direction pages move under your fingers.
-            onSwipe?(accumulatedX > 0 ? .right : .left)
-        }
-
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
-            accumulatedX = 0
-            didFireForGesture = false
+            accumulator.end()
         }
-
-        // Consumed: never scroll the text view sideways.
     }
 }
 
@@ -61,6 +95,33 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// Guards the styling pass against re-entering itself through the text
     /// storage delegate.
     private var isStyling = false
+
+    // MARK: - Pure geometry (extracted for the headless tests)
+
+    /// The smallest an image may be dragged down to: below this the resize
+    /// handles would be smaller than the cursor itself.
+    static let minimumImageWidth: CGFloat = 48
+
+    /// The width an in-progress image resize should preview, given where the
+    /// drag started and where it is now. One-sided on purpose — images may
+    /// grow without limit but never shrink past the minimum.
+    static func resizedWidth(from startX: CGFloat, to x: CGFloat, starting startWidth: CGFloat) -> CGFloat {
+        max(minimumImageWidth, startWidth + (x - startX))
+    }
+
+    /// Where an inline math result sits horizontally: just past the end of
+    /// its line, but never further right than the container's edge. Bounded
+    /// both ways so short and long lines land in the same visible margin.
+    static func mathResultX(textEnd: CGFloat, resultWidth: CGFloat, containerRight: CGFloat) -> CGFloat {
+        min(max(textEnd + 16, containerRight - resultWidth - 14), containerRight - resultWidth - 4)
+    }
+
+    /// The vertical distance between guide dots or grid lines: the font's own
+    /// line box scaled by the spacing setting, with a floor so a tiny font
+    /// never packs the pattern into noise.
+    static func guideVerticalPitch(lineHeight: CGFloat, spacingMultiple: Double) -> CGFloat {
+        max(18, lineHeight * CGFloat(spacingMultiple))
+    }
 
     var lineHeightMultiple: Double = 1.0 {
         didSet { defaultParagraphStyle = paragraphStyle }
@@ -307,6 +368,30 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
         let lineRange = contentRange(forLineAt: selection.location)
         let line = (string as NSString).substring(with: lineRange)
+
+        // An ordered-list line (`1.` `a.` `iv.`) continues its own sequence
+        // ahead of checklist-mode conversion, so typing `1.` inside a list
+        // note keeps its shape instead of being wrapped as `- [ ] 1. …`.
+        // Mid-line carets fall through to an ordinary newline: splitting an
+        // item in half is not the moment to invent renumbering.
+        if selection.location == lineRange.location + lineRange.length,
+           let outcome = OrderedList.newline(inLine: line) {
+            switch outcome {
+            case .exitList(let replacement):
+                replace(
+                    range: lineRange,
+                    with: replacement,
+                    selecting: NSRange(location: lineRange.location + (replacement as NSString).length, length: 0)
+                )
+            case .continueList(let insertion):
+                replace(
+                    range: selection,
+                    with: insertion,
+                    selecting: NSRange(location: selection.location + (insertion as NSString).length, length: 0)
+                )
+            }
+            return
+        }
 
         // In list mode a plain line becomes an item as soon as you leave it,
         // so the whole note stays a list without any markers being typed.
@@ -604,7 +689,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let color = ink.guide.withAlphaComponent(0.16)
         // The standard line box: ascent, descent, leading.
         let lineHeight = baseFont.ascender - baseFont.descender + baseFont.leading
-        let verticalPitch = max(18, lineHeight * CGFloat(lineHeightMultiple))
+        let verticalPitch = Self.guideVerticalPitch(lineHeight: lineHeight, spacingMultiple: lineHeightMultiple)
         let horizontalPitch: CGFloat = 22
 
         // The text view is only as tall as its content; cover the visible
@@ -738,7 +823,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let point = self.convert(event.locationInWindow, from: nil)
 
             if event.type == .leftMouseDragged {
-                self.previewWidth = max(48, startWidth + (point.x - startPoint.x))
+                self.previewWidth = Self.resizedWidth(from: startPoint.x, to: point.x, starting: startWidth)
                 self.needsDisplay = true
                 return
             }
@@ -814,7 +899,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             // window edge where they were clipped.
             let textEnd = lineRect.minX + layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).width
             let rightEdge = textContainer.size.width + textContainerInset.width
-            let x = min(max(textEnd + 16, rightEdge - size.width - 14), rightEdge - size.width - 4)
+            let x = Self.mathResultX(textEnd: textEnd, resultWidth: size.width, containerRight: rightEdge)
             let drawRect = NSRect(x: x, y: lineRect.minY + (lineRect.height - size.height) / 2, width: size.width, height: size.height)
             (text as NSString).draw(in: drawRect, withAttributes: attributes)
         }
@@ -1069,6 +1154,25 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 textStorage.addAttributes(
                     [.font: self.headingFont(heading), .paragraphStyle: style],
                     range: lineRange
+                )
+                return
+            }
+
+            // Ordered-list markers are painted the way checkbox markers are —
+            // visible in the file, styled on screen — but bold rather than
+            // pale, since the number IS the content here and there is no
+            // checked state to reserve the accent for.
+            if let ordered = OrderedList.item(in: line) {
+                let markerRange = NSRange(
+                    location: lineRange.location + ordered.markerRange.location,
+                    length: ordered.markerRange.length
+                )
+                textStorage.addAttributes(
+                    [
+                        .foregroundColor: self.ink.secondary,
+                        .font: NSFontManager.shared.convert(self.baseFont, toHaveTrait: .boldFontMask),
+                    ],
+                    range: markerRange
                 )
                 return
             }

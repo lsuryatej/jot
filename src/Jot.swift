@@ -203,6 +203,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NotificationCenter.default.publisher(for: .jotRequestMoveNoteDown)
             .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: +1) }
             .store(in: &cancellables)
+
+        // Theme notes: the appearance is derived from the note stack itself,
+        // so every edit re-derives it. Debounced because each keystroke in a
+        // theme note republishes the notes array; applying at typing speed
+        // re-resolves fonts and colours mid-word for no visible benefit.
+        notesManager.$notes
+            .map { ThemeNote.active(in: $0) }
+            .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] theme in self?.settings.themeOverride = theme }
+            .store(in: &cancellables)
     }
 
     // MARK: - Reordering

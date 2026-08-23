@@ -307,6 +307,7 @@ final class SettingsManager: ObservableObject {
         static let screenEdge     = "screenEdge"
         static let edgeWidth      = "edgeWidth"
         static let appearance     = "appearance"
+        static let appearanceTint = "appearanceTint"
         static let showsHeader    = "showsHeader"
         static let lineSpacing    = "lineSpacing"
         static let windowFrame    = "windowFrame"
@@ -318,6 +319,8 @@ final class SettingsManager: ObservableObject {
         static let noteFontSize   = "noteFontSize"
         static let letterSpacing  = "letterSpacing"
         static let guide          = "paperGuide"
+        static let celebrationStyle = "celebrationStyle"
+        static let timerSound     = "timerSound"
 
         /// Every key this type persists, for the one-time migration below.
         /// Kept as a literal list rather than reflection: `UserDefaults`
@@ -325,9 +328,10 @@ final class SettingsManager: ObservableObject {
         /// the app's own keys should ever cross a bundle-ID migration.
         static let all: Set<String> = [
             displayMode, hotKeyCode, hotKeyMods, timerKeyword, showsFooter,
-            screenEdge, edgeWidth, appearance, showsHeader, lineSpacing,
+            screenEdge, edgeWidth, appearance, appearanceTint, showsHeader, lineSpacing,
             windowFrame, syncsToNotes, listKeyword, fetchesLiveRates, checksForUpdates,
             noteFontName, noteFontSize, letterSpacing, guide,
+            celebrationStyle, timerSound,
         ]
     }
 
@@ -362,6 +366,13 @@ final class SettingsManager: ObservableObject {
         didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
     }
 
+    /// A colour wash over the translucent papers (see `GlassTint`). Opaque
+    /// papers ignore it; the picker hides the row rather than storing a value
+    /// that does nothing.
+    @Published var glassTint: GlassTint {
+        didSet { defaults.set(glassTint.rawValue, forKey: Key.appearanceTint) }
+    }
+
     /// Glassnote's "buttons can even be hidden completely": with the header off
     /// the window is nothing but text.
     @Published var showsHeader: Bool {
@@ -394,6 +405,12 @@ final class SettingsManager: ObservableObject {
 
     /// The bounds `noteFontSize` is held to.
     static let fontSizeRange: ClosedRange<Double> = 11...24
+
+    /// Font sizes arriving from anywhere (theme notes included) pass through
+    /// the same clamp the slider does.
+    static func clampedFontSize(_ value: Double) -> Double {
+        clamped(value, to: fontSizeRange)
+    }
 
     private static func clamped(_ value: Double, to range: ClosedRange<Double>) -> Double {
         min(max(value, range.lowerBound), range.upperBound)
@@ -459,6 +476,17 @@ final class SettingsManager: ObservableObject {
         didSet { defaults.set(edgeWidth, forKey: Key.edgeWidth) }
     }
 
+    /// What happens when a timer finishes. Confetti plus a sound by default:
+    /// the old behaviour was a single Glass ping, which undersold the moment.
+    @Published var celebrationStyle: CelebrationStyle {
+        didSet { defaults.set(celebrationStyle.rawValue, forKey: Key.celebrationStyle) }
+    }
+
+    /// The sound played alongside (or instead of) the confetti.
+    @Published var timerSound: CelebrationSound {
+        didSet { defaults.set(timerSound.rawValue, forKey: Key.timerSound) }
+    }
+
     /// The last size and position the note had in a windowed mode.
     ///
     /// Edge mode rewrites the panel frame to fill the screen height, so without
@@ -501,6 +529,7 @@ final class SettingsManager: ObservableObject {
 
         let rawAppearance = defaults.string(forKey: Key.appearance) ?? Appearance.frosted.rawValue
         self.appearance = Appearance(rawValue: rawAppearance) ?? .frosted
+        self.glassTint = GlassTint(rawValue: defaults.string(forKey: Key.appearanceTint) ?? "") ?? .none
         self.showsHeader = defaults.object(forKey: Key.showsHeader) as? Bool ?? true
         self.lineSpacing = defaults.object(forKey: Key.lineSpacing) as? Double ?? 1.0
         self.noteFontName = defaults.string(forKey: Key.noteFontName) ?? NoteFont.defaultName
@@ -519,5 +548,124 @@ final class SettingsManager: ObservableObject {
         let rawEdge = defaults.string(forKey: Key.screenEdge) ?? ScreenEdge.right.rawValue
         self.screenEdge = ScreenEdge(rawValue: rawEdge) ?? .right
         self.edgeWidth = defaults.object(forKey: Key.edgeWidth) as? Double ?? 340
+
+        self.celebrationStyle =
+            CelebrationStyle(rawValue: defaults.string(forKey: Key.celebrationStyle) ?? "") ?? .cannons
+        self.timerSound =
+            CelebrationSound(rawValue: defaults.string(forKey: Key.timerSound) ?? "") ?? .hero
+    }
+
+    // MARK: - Theme notes
+
+    /// The appearance a `theme` note is imposing right now, or nil. Set at
+    /// runtime from the note stack and never persisted — the theme lives only
+    /// as long as its text does, which is the whole point of editing it live.
+    @Published var themeOverride: ThemeNote.Theme?
+
+    /// The paper actually on screen: a theme note's hex when one is active,
+    /// otherwise the picked appearance's paper (nil meaning translucent).
+    var effectivePaperColor: NSColor? {
+        themeOverride?.paperHex ?? appearance.paperColor
+    }
+
+    var effectiveMaterialRawValue: Int {
+        appearance.materialRawValue
+    }
+
+    var effectiveInk: InkTheme {
+        guard let override = themeOverride else { return appearance.ink }
+        if let paper = override.paperHex {
+            return override.inkHex.map { Self.ink(fromText: $0) } ?? ThemeNote.derivedInk(for: paper)
+        }
+        // A tint or accent-only theme leaves the system ink alone unless the
+        // user explicitly asked for different text.
+        if let text = override.inkHex {
+            return Self.ink(fromText: text)
+        }
+        return appearance.ink
+    }
+
+    /// Builds an InkTheme around one explicit text colour; the companions are
+    /// neutral greys of it, since we cannot know what surface sits beneath.
+    private static func ink(fromText text: NSColor) -> InkTheme {
+        func greyed(_ t: CGFloat) -> NSColor {
+            let s = text.usingColorSpace(.sRGB)!
+            let light = ThemeNote.luminance(of: text) > 0.5
+            return NSColor(
+                srgbRed: light ? s.redComponent * t : s.redComponent * t + (1 - t),
+                green: light ? s.greenComponent * t : s.greenComponent * t + (1 - t),
+                blue: light ? s.blueComponent * t : s.blueComponent * t + (1 - t),
+                alpha: 1
+            )
+        }
+        return InkTheme(
+            text: text,
+            secondary: greyed(0.55),
+            accent: .controlAccentColor,
+            link: NSColor(srgbRed: 0.100, green: 0.360, blue: 0.720, alpha: 1),
+            guide: greyed(0.75)
+        )
+    }
+
+    var effectiveChromeColor: NSColor {
+        if let paper = themeOverride?.paperHex {
+            return ThemeNote.derivedChromeColor(for: paper)
+        }
+        return appearance.chromeColor
+    }
+
+    var effectiveCardColor: NSColor {
+        if let paper = themeOverride?.paperHex {
+            return ThemeNote.derivedCardColor(for: paper)
+        }
+        return appearance.cardColor
+    }
+
+    var effectiveHairlineColor: NSColor {
+        if themeOverride?.paperHex != nil {
+            return ThemeNote.luminance(of: effectivePaperColor!) > 0.5 ? NSColor.black : NSColor.white
+        }
+        return appearance.hairlineColor
+    }
+
+    var effectiveWantsLitEdge: Bool {
+        themeOverride?.paperHex == nil && appearance.wantsLitEdge
+    }
+
+    var effectiveWantsOpaqueCards: Bool {
+        effectivePaperColor != nil || appearance == .solid
+    }
+
+    var effectiveTint: GlassTint {
+        themeOverride?.tint ?? glassTint
+    }
+
+    // Typography: a theme note may carry its own font, size, spacing, and
+    // tracking; anything it omits falls through to the picked values.
+
+    var effectiveEditorFont: NSFont {
+        NoteFont.resolved(effectiveNoteFontName, size: CGFloat(effectiveFontSize))
+    }
+
+    /// The stored font name, which may be curated or arbitrary — resolution
+    /// happens in `NoteFont`.
+    var effectiveNoteFontName: String {
+        themeOverride?.fontName ?? noteFontName
+    }
+
+    var effectiveFontSize: Double {
+        themeOverride?.fontSize ?? noteFontSize
+    }
+
+    var effectiveLineSpacing: Double {
+        themeOverride?.lineSpacing ?? lineSpacing
+    }
+
+    var effectiveLetterSpacing: Double {
+        themeOverride?.letterSpacing ?? letterSpacing
+    }
+
+    var effectiveGuide: PaperGuide {
+        themeOverride?.guide ?? guide
     }
 }

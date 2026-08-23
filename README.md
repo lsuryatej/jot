@@ -10,10 +10,11 @@ A plain-text scratchpad for macOS. No Electron, no dependencies, no telemetry.
 
 Option+A summons a note from anywhere. It floats, docks to the menu bar, sits
 in a screen-edge sidebar, or lives in the Dock. Plain text, with checklists,
-inline math, unit and currency conversion, images, and OCR, built on nothing
-but Swift, AppKit, and SwiftUI. No Xcode project, no package manager, no
-runtime dependency. The whole app is one `swiftc` invocation compiling
-straight to a ~950KB binary with zero non-system libraries linked in.
+ordered lists, themes, inline math, unit and currency conversion, images,
+and OCR, built on nothing but Swift, AppKit, and SwiftUI. No Xcode project,
+no package manager, no runtime dependency. The whole app is one `swiftc`
+invocation compiling straight to a ~950KB binary with zero non-system
+libraries linked in.
 
 ![Jot evaluating a live budget breakdown, variables and unit conversion included](docs/screenshots/hero.jpeg)
 
@@ -91,7 +92,7 @@ what you get for free with Jot versus what they charge for.
 | Search across all notes | Yes | Yes | N/A | Yes |
 | Long links collapse to their domain | Yes | Yes | N/A | N/A |
 | Sync across devices | No | iCloud (2.0+), iOS app in progress | iCloud, paid tier | iCloud, iOS/iPad apps |
-| Scripting / themes | No | Yes, JS extensions + themes | No | CLI, URL schemes, Automator |
+| Scripting / themes | Themes (notes); no scripting | Yes, JS extensions + themes | No | CLI, URL schemes, Automator |
 | Apple Notes sync | Yes, opt-in, one-way | No | No | No |
 | Network requests | Zero by default, two opt-in toggles | iCloud only, if enabled | iCloud only, if paid | Live data on by default |
 | Source | Open, MIT | Closed | Core open, paid features closed | Closed |
@@ -156,6 +157,31 @@ real task list in Obsidian, Bear, or GitHub.
 
 ![A checklist, with completed items struck through](docs/screenshots/checklist.jpeg)
 
+**Ordered lists.** Type `1.` or `a.` or `iv.` at the start of a line,
+anywhere in any note, and it's a list item. Return continues it — `2.`, then
+`3.`, or `b.`, or `iii.` — case preserved, and Return on an empty item ends
+the list instead of stacking markers. Markers render bold beside their text.
+The file keeps exactly what you typed; nothing is renumbered behind your
+back.
+
+**Themes.** Type `theme` alone on a note's first line and that note becomes
+a theme for the whole app, live as you type:
+
+```
+theme
+paper: #223038
+ink: #e8e4d8
+size: 14
+guides: dots
+```
+
+One `key: value` pair per line; anything unrecognised is ignored rather than
+rejected, so prose can sit among the settings as commentary. Give the paper
+a hex and the rest of the palette derives from it, or use a translucent
+surface with a named tint (`tint: amber`). The theme exists only while its
+note does: edit it like any other text, delete it and the app falls back to
+your Settings. Nothing separate is saved anywhere.
+
 **Headings.** Start a line with `#`, `##`, or `###` and it renders as one,
 sized by its level. Same trade as the checklists: the hashes stay in the
 file, so a note with headings is still plain markdown everywhere else. A
@@ -194,7 +220,9 @@ on the note you were reading.
 
 **Timers.** `5m timer`, `30s timer`, `2h timer`, the keyword is configurable.
 A timer belongs to the note that started it and won't restart itself after
-firing.
+firing. When one fires you get a proper sound and, if you want it, confetti:
+cannons from the bottom corners, rain from above, or a single burst, your
+pick in Settings. The celebration never takes focus from what you're typing.
 
 **Optional Apple Notes sync.** Off by default. Turn it on and each note is
 pushed into a "Jot" folder in Apple Notes, one direction only. Nothing
@@ -208,11 +236,13 @@ spacing control. Curated rather than a full font panel: everything offered
 ships with macOS, so the zero-dependency stance holds.
 
 **Paper types.** Six surfaces: Frosted, Glass, Solid, True Dark, Cream, and
-White. The opaque papers bring their own ink colors rather than following
-the system's light or dark mode, so True Dark stays readable in daylight.
-Optional writing guides underneath the text, dot grid or square grid, drawn
-to follow your font and line spacing. Header and footer can still be hidden
-entirely, down to nothing but text on paper.
+White. The translucent ones take an optional colour tint (graphite, amber,
+rose, moss, indigo), previewed on their picker entries; the opaque papers
+bring their own ink colors rather than following the system's light or dark
+mode, so True Dark stays readable in daylight. Optional writing guides
+underneath the text, dot grid or square grid, drawn to follow your font and
+line spacing. Header and footer can still be hidden entirely, down to
+nothing but text on paper.
 
 ![Appearance settings alongside a frosted note](docs/screenshots/appearance-settings.jpeg)
 
@@ -295,7 +325,12 @@ apply at all, a normal Xcode install should just work.
 | `src/UpdateChecker.swift` | Opt-out GitHub release check |
 | `src/TextStatistics.swift` | Word counts and selection sum/average |
 | `src/Checklist.swift` | Checklist parsing, rewriting, and list mode |
+| `src/OrderedList.swift` | Numbered/lettered/roman list parsing and continuation |
 | `src/Headings.swift` | Heading line parsing and marker ranges |
+| `src/ThemeNote.swift` | Theme-as-note parsing and derived palettes |
+| `src/GlassTint.swift` | Tint choices for the translucent papers |
+| `src/Celebration.swift` | Timer celebration configuration: styles and sounds |
+| `src/CelebrationWindow.swift` | The confetti window itself |
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/Note.swift` | The note model and its stable identity |
@@ -315,11 +350,13 @@ apply at all, a normal Xcode install should just work.
 | `scripts/release.sh` | Builds and packages a release zip |
 | `install.sh` | The curl-installable install path |
 
-`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `GlobalSearch`,
-`LinkShrink`, and `Attachments` are deliberately free of SwiftUI and AppKit,
-so every rule in them is covered by a dependency-free test. `./test.sh` runs
-338 checks total, that plus a UI-layer slice against real `NSTextView`
-instances, in a few seconds.
+`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `OrderedList`,
+`GlobalSearch`, `LinkShrink`, and `Attachments` are deliberately free of
+SwiftUI and AppKit, so every rule in them is covered by a dependency-free
+test. The theme parser, glass tints, and celebration configuration touch
+only colours and sounds, which behave headless, so they're tested too.
+`./test.sh` runs 545 checks total, that plus a UI-layer slice against real
+`NSTextView` instances, in a few seconds.
 
 `Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes
 and rebuilds the bundle every run, so a stale binary or signature can't

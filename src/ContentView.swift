@@ -27,7 +27,7 @@ struct ContentView: View {
     /// Dark would read dark header text on a near-black strip — the same
     /// trap the body ink already solves.
     private var ink: InkTheme {
-        settings.appearance.ink
+        settings.effectiveInk
     }
 
     var body: some View {
@@ -85,16 +85,28 @@ struct ContentView: View {
 
     private var backdrop: some View {
         Group {
-            if let paper = settings.appearance.paperColor {
+            if let paper = settings.effectivePaperColor {
                 // An opaque paper replaces the blur entirely.
                 Rectangle().fill(Color(nsColor: paper))
             } else {
                 VisualEffectView(
-                    material: NSVisualEffectView.Material(rawValue: settings.appearance.materialRawValue) ?? .popover
+                    material: NSVisualEffectView.Material(rawValue: settings.effectiveMaterialRawValue) ?? .popover
                 )
+                    // A tint is a wash over the material, not a replacement
+                    // for it — the desktop still comes through underneath.
+                    .overlay(tintWash.ignoresSafeArea())
             }
         }
         .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var tintWash: some View {
+        if let tint = settings.effectiveTint.overlayColor {
+            Rectangle()
+                .fill(Color(nsColor: tint))
+                .opacity(settings.glassTint.overlayOpacity)
+        }
     }
 
     /// A hairline of light along the inside of the window edge.
@@ -105,7 +117,7 @@ struct ContentView: View {
     /// system shape rather than fighting it.
     @ViewBuilder
     private var litEdge: some View {
-        if settings.appearance.wantsLitEdge {
+        if settings.effectiveWantsLitEdge {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(
                     LinearGradient(
@@ -124,11 +136,11 @@ struct ContentView: View {
 
     private var editor: some View {
         PlainTextEditor(
-            lineHeightMultiple: settings.lineSpacing,
-            baseFont: settings.editorFont,
-            letterSpacing: settings.letterSpacing,
-            ink: settings.appearance.ink,
-            guide: settings.guide,
+            lineHeightMultiple: settings.effectiveLineSpacing,
+            baseFont: settings.effectiveEditorFont,
+            letterSpacing: settings.effectiveLetterSpacing,
+            ink: settings.effectiveInk,
+            guide: settings.effectiveGuide,
             listKeyword: settings.effectiveListKeyword,
             topInset: settings.showsHeader ? 12 : 38,
             text: Binding(
@@ -170,7 +182,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(nsColor: settings.appearance.chromeColor).opacity(0.8))
+        .background(Color(nsColor: settings.effectiveChromeColor).opacity(0.8))
     }
 
     // MARK: - Footer
@@ -193,7 +205,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background(Color(nsColor: settings.appearance.chromeColor).opacity(0.6))
+        .background(Color(nsColor: settings.effectiveChromeColor).opacity(0.6))
     }
 
     private var countsLabel: String {
@@ -230,7 +242,12 @@ struct ContentView: View {
 
         guard remaining > 0 else {
             timeRemaining = "00:00"
-            NSSound(named: "Glass")?.play()
+            // The timer's whole payoff: a sound and, if the user wants it,
+            // a burst of confetti over everything else on screen.
+            CelebrationWindowController.fire(
+                style: settings.celebrationStyle,
+                sound: settings.timerSound
+            )
             notesManager.timerDidFire()
             return
         }
@@ -259,7 +276,7 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color(nsColor: settings.appearance.hairlineColor).opacity(settings.appearance.wantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
                 .frame(maxWidth: .infinity)
                 .padding(.top, 44)
                 .allowsHitTesting(false)
