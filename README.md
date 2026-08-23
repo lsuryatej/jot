@@ -86,7 +86,7 @@ what you get for free with Jot versus what they charge for.
 | Unit conversion | Yes, offline | Yes | Yes | Yes |
 | Currency conversion | Yes, opt-in live rates | Yes | Yes, paid tier | Yes, live by default |
 | Checklists | Yes | Yes | No | No |
-| Images pasted inline | Yes, resizable | No | No | No |
+| Images pasted inline | Yes, resizing WIP | No | No | No |
 | Screenshot to text (OCR) | Yes, offline | Yes | No | No |
 | Display modes | 5: floating, dock, menu bar, dropdown, screen edge | Menu bar only | Window | Window |
 | Search across all notes | Yes | Yes | N/A | Yes |
@@ -100,7 +100,7 @@ what you get for free with Jot versus what they charge for.
 Jot doesn't beat any of these on every axis. Against Antinote specifically:
 no sync across devices, no scripting or theming, no AutoPaste. Antinote is
 also a mature, several-year-old product; Jot is new. What Jot gives you
-instead is free and open source, inline resizable images, five display modes
+instead is free and open source, inline images, five display modes
 instead of menu-bar-only, search across every note, link shrink, and
 an explicit zero-telemetry stance with both network-facing features off or
 opt-in rather than bundled into iCloud.
@@ -189,10 +189,11 @@ heading's hashes are folded out of view on screen, and when the first line
 is a heading, its text becomes the note's title instead of getting a
 one-size-fits-all title treatment.
 
-**Images.** Paste or drop an image and it stays an image, drawn inline,
-resizable by dragging its edge. It's written to `Attachments/` beside your
-notes, referenced from the text as `![width](Attachments/<id>.png)`, so a
-note with a picture in it is still something you can read in `cat`.
+**Images.** Paste or drop an image and it stays an image, drawn inline. It's
+written to `Attachments/` beside your notes, referenced from the text as
+`![width](Attachments/<id>.png)`, so a note with a picture in it is still
+something you can read in `cat`. Drag-to-resize exists but is unreliable
+right now and being worked on, see [BACKLOG.md](BACKLOG.md).
 
 **Screenshot to text.** Shift-Cmd-V reads the image on your clipboard with
 Apple's Vision framework and inserts the text it finds. Fully offline, on the
@@ -227,8 +228,9 @@ pick in Settings. The celebration never takes focus from what you're typing.
 **Optional Apple Notes sync.** Off by default. Turn it on and each note is
 pushed into a "Jot" folder in Apple Notes, one direction only. Nothing
 written there is ever read back, and deleting a note in Jot never deletes it
-in Notes. Images sync too, embedded as real inline images, not just their
-markdown reference.
+in Notes. Image sync is still being worked on — a picture in a note
+currently arrives in Notes as a separate file attachment rather than
+appearing inline, see [BACKLOG.md](BACKLOG.md).
 
 **Typography.** Eight curated system fonts, SF Mono through American
 Typewriter, plus size and letter-spacing sliders beside the existing line
