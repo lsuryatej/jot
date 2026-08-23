@@ -16,7 +16,7 @@ no package manager, no runtime dependency. The whole app is one `swiftc`
 invocation compiling straight to a ~950KB binary with zero non-system
 libraries linked in.
 
-![Jot evaluating a live budget breakdown, variables and unit conversion included](docs/screenshots/hero.jpeg)
+![Jot evaluating a pizza dough recipe on Cream paper, variables and running totals included](docs/screenshots/hero.png)
 
 ## Install
 
@@ -122,7 +122,7 @@ Accessibility permission and consumes the keystroke, so it won't also type
 | Dock | Dock icon and app switcher entry, like a normal app. |
 | Screen Edge | A sidebar docked to a screen edge, holding every note as its own card, revealed by resting the cursor against that edge. |
 
-![The Screen Edge sidebar, holding several notes as cards](docs/screenshots/screen-edge.jpeg)
+![The Screen Edge sidebar, holding a checklist, a math note, and a currency conversion as separate cards](docs/screenshots/screen-edge.png)
 
 **Inline math with variables.**
 
@@ -145,7 +145,7 @@ convert offline via a fixed table. Currency rates are fetched from a public,
 key-free API, off by default (see Privacy below). When off, conversion uses
 the last cached rate or a built-in snapshot.
 
-![Live currency conversion in the menu bar dropdown](docs/screenshots/currency-conversion.jpeg)
+![Live currency conversion, result drawn in the right margin](docs/screenshots/currency-conversion.png)
 
 **Checklists.** Type `list` alone on the first line and the whole note
 becomes a checklist. Every line below it turns into an item, and Return keeps
@@ -155,7 +155,7 @@ selection, Tab/Shift-Tab nest items, completed items dim and strike through.
 The file on disk stays plain markdown (`- [ ]` / `- [x]`), so it renders as a
 real task list in Obsidian, Bear, or GitHub.
 
-![A checklist, with completed items struck through](docs/screenshots/checklist.jpeg)
+![A checklist on translucent paper, completed items struck through](docs/screenshots/checklist.png)
 
 **Ordered lists.** Type `1.` or `a.` or `iv.` at the start of a line,
 anywhere in any note, and it's a list item. Return continues it — `2.`, then
@@ -163,6 +163,8 @@ anywhere in any note, and it's a list item. Return continues it — `2.`, then
 the list instead of stacking markers. Markers render bold beside their text.
 The file keeps exactly what you typed; nothing is renumbered behind your
 back.
+
+![Numbered, lettered, and roman-numeral lists in the same note](docs/screenshots/ordered-lists.png)
 
 **Themes.** Type `theme` alone on a note's first line and that note becomes
 a theme for the whole app, live as you type:
@@ -189,6 +191,8 @@ heading's hashes are folded out of view on screen, and when the first line
 is a heading, its text becomes the note's title instead of getting a
 one-size-fits-all title treatment.
 
+![Three heading levels above a body line, hashes folded out of view](docs/screenshots/headings.png)
+
 **Images.** Paste or drop an image and it stays an image, drawn inline. It's
 written to `Attachments/` beside your notes, referenced from the text as
 `![width](Attachments/<id>.png)`, so a note with a picture in it is still
@@ -213,6 +217,8 @@ word/character/line counts, and selecting text with two or more numbers in
 it shows their sum and average. Select `rent $1,240.50 and food $310.25` and
 see the total without leaving the note.
 
+![The footer's live word/character/line count, on True Dark with a dot-grid guide](docs/screenshots/counts-footer.png)
+
 **Reorder notes.** Hover a card in the Screen Edge sidebar and drag it by the
 grip in its corner; the stack parts around the drag and the order you leave
 it in is the saved order. Away from the edge, Ctrl-Cmd-Up and Ctrl-Cmd-Down
@@ -224,6 +230,8 @@ A timer belongs to the note that started it and won't restart itself after
 firing. When one fires you get a proper sound and, if you want it, confetti:
 cannons from the bottom corners, rain from above, or a single burst, your
 pick in Settings. The celebration never takes focus from what you're typing.
+
+![A confetti burst celebrating a finished timer](docs/screenshots/timer.png)
 
 **Optional Apple Notes sync.** Off by default. Turn it on and each note is
 pushed into a "Jot" folder in Apple Notes, one direction only. Nothing
@@ -246,7 +254,9 @@ underneath the text, dot grid or square grid, drawn to follow your font and
 line spacing. Header and footer can still be hidden entirely, down to
 nothing but text on paper.
 
-![Appearance settings alongside a frosted note](docs/screenshots/appearance-settings.jpeg)
+![A note under a purple glass tint, one of five colour washes over the translucent papers](docs/screenshots/glass-tint.png)
+
+![Display, Appearance, and Typography settings in one panel](docs/screenshots/appearance-settings.png)
 
 ## Shortcuts
 
@@ -267,7 +277,7 @@ nothing but text on paper.
 | **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** | Move the current note up or down the list |
 | Drag a card's grip (hover, Screen Edge mode) | Reorder notes in the sidebar |
 | Two-finger swipe | Move between notes (single-note display modes); with the header hidden, a brief badge names the note you landed on |
-| Drag an image's edge | Resize it in place |
+| Drag an image's edge | Resize it in place (currently unreliable, see [BACKLOG.md](BACKLOG.md)) |
 | Cmd-click a shrunk link | Expand it to the full URL, click again to collapse |
 
 Cut/Copy/Paste/Select All/Undo/Redo are the standard Cmd+X/C/V/A/Z/Shift+Cmd+Z
@@ -289,7 +299,7 @@ Nothing else. No analytics, no crash reporting, no identifiers. Apple Notes
 sync, when you turn it on, talks to Notes.app locally via AppleScript. It
 never touches the network.
 
-![Both network-facing toggles, off and on by default respectively](docs/screenshots/privacy-settings.jpeg)
+![Timer celebration picker, both network-facing toggles, and the Apple Notes sync toggle](docs/screenshots/privacy-settings.png)
 
 ## Building from source
 
