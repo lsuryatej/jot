@@ -270,6 +270,91 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         replace(range: lineRange, with: updated, selecting: newSelection)
     }
 
+    /// Wraps the selection in `==...==`, or strips an existing pair back off
+    /// a selection that already carries one. Phrase-sized rather than
+    /// line-sized like `toggleChecklist`, since a highlight is usually a few
+    /// words, not a whole line.
+    ///
+    /// With nothing selected, drops an empty `====` pair and lands the caret
+    /// between the two marker pairs, ready to type straight into it.
+    @objc func toggleHighlight(_ sender: Any?) {
+        let selection = selectedRange()
+        let ns = string as NSString
+
+        // "Already highlighted" is decided by whether the selection sits
+        // inside a real, parsed highlight — not by whether the selected
+        // *text itself* looks like `==...==`. A fresh wrap below deliberately
+        // leaves the selection over just the content, markers excluded, so
+        // a second toggle (a real second click, using whatever selection
+        // the first one left behind) would never see the markers in a plain
+        // string comparison and would just wrap again, nesting deeper each
+        // time — this bug, caught in real use. Matching against the whole
+        // note's actual highlight spans instead handles that shape (and a
+        // bare caret sitting anywhere inside one, no selection needed) the
+        // same way.
+        if let existing = Highlight.matches(in: ns).first(where: {
+            selection.location >= $0.range.location && NSMaxRange(selection) <= NSMaxRange($0.range)
+        }) {
+            let content = ns.substring(with: existing.contentRange)
+            replace(
+                range: existing.range,
+                with: content,
+                selecting: NSRange(location: existing.range.location, length: (content as NSString).length)
+            )
+        } else if selection.length == 0 {
+            replace(range: selection, with: "====", selecting: NSRange(location: selection.location + 2, length: 0))
+        } else {
+            replace(
+                range: selection,
+                with: "==\(ns.substring(with: selection))==",
+                selecting: NSRange(location: selection.location + 2, length: selection.length)
+            )
+        }
+
+        // `replace` inserts brand-new `==` characters into text the layout
+        // manager has already generated glyphs for — unlike a fresh keystroke
+        // building glyphs incrementally, this is a bulk mid-document edit.
+        // `didProcessEditing` already ran by the time `replace` returns (it
+        // fires synchronously off `didChangeText()`), but the fold-forcing
+        // half of that — `applyLinkFolding`'s whole-document glyph
+        // invalidation — is deferred there by one run-loop tick, since it
+        // can't run from inside NSTextStorage's own edit bracket. Called
+        // from here, outside any bracket, it can run immediately instead of
+        // trusting that deferred tick, closing whatever gap was letting
+        // `==markers==` show up unfolded for a moment (or longer) after a
+        // toolbar/menu-triggered toggle.
+        applyLinkFolding()
+    }
+
+    /// Whether this view is already observing the header buttons' toggle
+    /// notifications, so `enableHeaderToggleButtons()` can be called
+    /// idempotently from every construction site — matching the same
+    /// lazy-and-idempotent shape `recomputeLinkMatches()` already uses for
+    /// `layoutManager.delegate`.
+    private var isObservingHeaderToggleButtons = false
+
+    /// Lets the header's Checklist/Highlight buttons act on this view
+    /// directly via notification instead of `NSApp.sendAction(_:to: nil,
+    /// from: nil)`. Called only from the single-note editor
+    /// (`PlainTextEditor.makeNSView`) — Screen Edge mode's cards have no
+    /// such buttons, so there's nothing for them to observe.
+    func enableHeaderToggleButtons() {
+        guard !isObservingHeaderToggleButtons else { return }
+        isObservingHeaderToggleButtons = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(toggleChecklist(_:)),
+            name: .jotRequestToggleChecklistFromHeader, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(toggleHighlight(_:)),
+            name: .jotRequestToggleHighlightFromHeader, object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     /// Handles this app's own shortcuts directly.
     ///
     /// The main menu is not displayed outside Dock mode, and relying on it to
@@ -297,6 +382,21 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 return true
             }
         }
+        // Cmd-Option-Left/Right switch which note is showing, the keyboard
+        // equivalent of a two-finger swipe. Option rather than Control, so it
+        // doesn't collide with the reordering shortcut above, and it matches
+        // Safari/Chrome's own Cmd-Option-Left/Right tab-switching muscle
+        // memory. Same posting pattern as the move above.
+        if flags == [.command, .option] {
+            if event.keyCode == UInt16(kVK_RightArrow) {
+                NotificationCenter.default.post(name: .jotRequestNextNote, object: nil)
+                return true
+            }
+            if event.keyCode == UInt16(kVK_LeftArrow) {
+                NotificationCenter.default.post(name: .jotRequestPreviousNote, object: nil)
+                return true
+            }
+        }
         // Cmd+V is routed here too. The main menu is not displayed outside Dock
         // mode, and if it is not consulted for key equivalents then the paste
         // override is never reached at all.
@@ -308,8 +408,16 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             toggleChecklist(nil)
             return true
         }
+        if flags == [.command, .shift], key == "h" {
+            toggleHighlight(nil)
+            return true
+        }
         if flags == [.command], key == "n" {
             NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
+            return true
+        }
+        if flags == [.command], key == "/" {
+            NotificationCenter.default.post(name: .jotRequestToggleChrome, object: nil)
             return true
         }
         if flags == [.command, .shift], key == "f" {
@@ -321,6 +429,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(toggleChecklist(_:)) { return true }
+        if item.action == #selector(toggleHighlight(_:)) { return true }
         if item.action == #selector(extractTextFromClipboardImage(_:)) { return true }
         return super.validateUserInterfaceItem(item)
     }
@@ -975,6 +1084,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         for range in headingMarkers where NSLocationInRange(characterIndex, range) {
             return true
         }
+        for range in highlightMarkers where NSLocationInRange(characterIndex, range) {
+            return true
+        }
         for match in linkMatches {
             guard match.range.location + match.range.length <= text.length else { continue }
             guard characterIndex >= match.range.location, characterIndex < match.range.location + match.range.length else { continue }
@@ -998,7 +1110,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         font: NSFont,
         forGlyphRange glyphRange: NSRange
     ) -> Int {
-        guard !linkMatches.isEmpty || !headingMarkers.isEmpty, let textStorage else { return 0 }
+        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty, let textStorage else { return 0 }
         let ns = textStorage.string as NSString
 
         var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
@@ -1232,6 +1344,19 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             )
         }
 
+        // Highlights are found over the whole note, like headings just below,
+        // but only the part of each span that falls inside `target` gets its
+        // background repainted — the same "only the touched lines" discipline
+        // the rest of this pass follows, since `setAttributes(baseline...)`
+        // above already wiped whatever background used to be there.
+        let highlights = Highlight.matches(in: ns)
+        for highlight in highlights {
+            let content = NSIntersectionRange(highlight.contentRange, target)
+            guard content.length > 0 else { continue }
+            textStorage.addAttribute(.backgroundColor, value: Highlight.backgroundColor, range: content)
+        }
+        highlightMarkers = highlights.flatMap { $0.markerRanges }
+
         // Fresh positions for the folding pass: glyph generation asks about
         // arbitrary characters and has to fold against where the markers sit
         // *now*, not where they sat before this edit.
@@ -1241,6 +1366,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// Where the current note's heading markers are, in string coordinates.
     /// Recomputed by every styling pass; read by glyph generation.
     private(set) var headingMarkers: [NSRange] = []
+
+    /// Where the current note's `==...==` highlight markers are, in string
+    /// coordinates. Recomputed by every styling pass; read by glyph
+    /// generation, same as `headingMarkers`.
+    private(set) var highlightMarkers: [NSRange] = []
 
     /// Headings step up from the note's own font, so a typewriter note gets
     /// bold typewriter headings rather than a system-font intruder.
@@ -1286,12 +1416,34 @@ struct PlainTextEditor: NSViewRepresentable {
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.autohidesScrollers = true
+        // With the header hidden, this scroll view's top edge sits flush with
+        // the window's own top edge, under the transparent titlebar — exactly
+        // the case AppKit's automatic content-inset exists for, so it adds its
+        // own top inset to clear the traffic lights on top of the `topInset`
+        // already passed in for that same purpose. Doubled, not missing: the
+        // gap this produces is nearly 3x the intended one. `topInset` already
+        // covers it by hand (12pt with the header showing, 38pt without), so
+        // AppKit's own pass needs to stay out of it.
+        scrollView.automaticallyAdjustsContentInsets = false
 
         let textView = ChecklistTextView()
         textView.delegate = context.coordinator
 
         // Plain text, and nothing that rewrites what you typed.
         textView.isRichText = false
+        // `isRichText = false` doesn't remove the standard "Font ▸ Show
+        // Fonts…" contextual-menu item on its own — that one's gated by
+        // `usesFontPanel`, which defaults to true independent of rich-text
+        // status. Left alone, it opens the system Font Panel and lets you
+        // pick any per-selection font, which then vanishes on the very next
+        // keystroke: every note-type feature here (headings, checklists,
+        // highlights) repaints font/color attributes across the whole note
+        // on every edit, so a manual pick was never going to survive one.
+        // Rather than build real per-run rich text to make that panel
+        // actually work — which would break the plain-text-is-the-file
+        // model everywhere else — the honest fix is to stop offering
+        // something that only pretends to work.
+        textView.usesFontPanel = false
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -1326,6 +1478,7 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.guide = guide
         textView.textStorage?.delegate = textView
         textView.enableImageDrops()
+        textView.enableHeaderToggleButtons()
         textView.string = text
         textView.applyChecklistStyling()
         textView.recomputeMathResults()

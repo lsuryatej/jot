@@ -10,6 +10,8 @@ runThemeNoteTests()
 runCelebrationTests()
 runInteractionTests()
 runUILayerTests()
+runHighlightTests()
+runPerNoteFontTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

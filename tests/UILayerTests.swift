@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 
 // Real ChecklistTextView instances, exercised directly — no XCTest, no Xcode
@@ -53,6 +54,19 @@ private func keyEquivalent(_ view: ChecklistTextView, chars: String, modifiers: 
     return view.performKeyEquivalent(with: event)
 }
 
+/// Like `keyEquivalent`, but with a real `keyCode` — the arrow-key shortcuts
+/// (note switching, note reordering) dispatch on `event.keyCode` rather than
+/// `charactersIgnoringModifiers`, since arrow keys carry no ordinary
+/// character.
+private func arrowKeyEquivalent(_ view: ChecklistTextView, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+    let event = NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+        windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+        isARepeat: false, keyCode: keyCode
+    )!
+    return view.performKeyEquivalent(with: event)
+}
+
 func runUILayerTests() {
 
     // MARK: - Cmd+L dispatch (the bug class: paste/shortcut dispatch)
@@ -84,6 +98,85 @@ func runUILayerTests() {
         check(handled, "Cmd+N reports itself as handled")
         check(fired, "the notification actually posted")
         equal(view.string, "existing", "text is untouched — 'n' must never land in the note")
+    }
+
+    // MARK: - Header buttons (the bug class: NSApp.sendAction's responder
+    // chain silently landing on the wrong thing, or nothing)
+    //
+    // The header's Checklist/Highlight buttons used to route through
+    // NSApp.sendAction(_:to: nil, from: nil), which walks the key window's
+    // responder chain to find something that implements the selector. A
+    // real, reported bug (a rapid second click on Highlight corrupting text
+    // instead of unwrapping it) traced back to that indirection rather than
+    // the toggle logic itself, which round-trips cleanly under direct,
+    // repeated calls (see HighlightTests.swift). The fix has the button
+    // post a notification and the view observe it directly instead — these
+    // two tests cover that actual mechanism, not just the toggle logic it
+    // now reaches.
+
+    suite("the header's Checklist button reaches the view via notification, not the responder chain") {
+        let view = makeTextView("- [ ] task")
+        view.enableHeaderToggleButtons()
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+
+        NotificationCenter.default.post(name: .jotRequestToggleChecklistFromHeader, object: nil)
+        equal(view.string, "- [x] task", "the notification reached this exact view and applied the toggle")
+
+        NotificationCenter.default.removeObserver(view)
+    }
+
+    suite("the header's Highlight button reaches the view via notification, not the responder chain") {
+        let view = makeTextView("remember this")
+        view.enableHeaderToggleButtons()
+        view.setSelectedRange(NSRange(location: 9, length: 4))  // "this"
+
+        NotificationCenter.default.post(name: .jotRequestToggleHighlightFromHeader, object: nil)
+        equal(view.string, "remember ==this==", "the notification reached this exact view and applied the toggle")
+
+        NotificationCenter.default.removeObserver(view)
+    }
+
+    suite("a view that never opted in does not react to the header notifications") {
+        // enableHeaderToggleButtons() is only ever called for the single-note
+        // editor; a view that never called it (standing in for Screen Edge
+        // mode's cards, which have no such buttons) must ignore these.
+        let view = makeTextView("- [ ] task")
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+
+        NotificationCenter.default.post(name: .jotRequestToggleChecklistFromHeader, object: nil)
+        equal(view.string, "- [ ] task", "untouched — this view was never registered as an observer")
+    }
+
+    suite("Cmd-Option-Right posts the next-note notification") {
+        let view = makeTextView("existing")
+        var fired = false
+        let token = NotificationCenter.default.addObserver(forName: .jotRequestNextNote, object: nil, queue: nil) { _ in
+            fired = true
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        let handled = arrowKeyEquivalent(view, keyCode: UInt16(kVK_RightArrow), modifiers: [.command, .option])
+        check(handled, "Cmd-Option-Right reports itself as handled")
+        check(fired, "the next-note notification actually posted")
+    }
+
+    suite("Cmd-Option-Left posts the previous-note notification") {
+        let view = makeTextView("existing")
+        var fired = false
+        let token = NotificationCenter.default.addObserver(forName: .jotRequestPreviousNote, object: nil, queue: nil) { _ in
+            fired = true
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        let handled = arrowKeyEquivalent(view, keyCode: UInt16(kVK_LeftArrow), modifiers: [.command, .option])
+        check(handled, "Cmd-Option-Left reports itself as handled")
+        check(fired, "the previous-note notification actually posted")
+    }
+
+    suite("plain Right arrow (no modifiers) is not the note-switch shortcut") {
+        let view = makeTextView("existing")
+        let handled = arrowKeyEquivalent(view, keyCode: UInt16(kVK_RightArrow), modifiers: [])
+        check(!handled, "an ordinary arrow key must fall through to normal caret movement")
     }
 
     suite("Shift-Cmd-V is claimed even with nothing on the clipboard") {

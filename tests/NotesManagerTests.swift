@@ -76,16 +76,71 @@ func runAllTests() {
         check(m.activeTimerEnd != nil, "a genuinely new directive does start a timer")
     }
 
-    suite("timer does not leak across notes") {
+    suite("a running timer survives switching notes, and does not auto-restart on return") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        let owner = m.notes[m.currentIndex].id
+        check(m.activeTimerEnd != nil, "timer running on note 1")
+        equal(m.activeTimerOwnerID, owner, "note 1 owns it")
+
+        m.addNewNote()
+        check(m.activeTimerEnd != nil, "switching to a new, unrelated note leaves it running")
+        equal(m.activeTimerOwnerID, owner, "still owned by note 1, not the new note")
+
+        m.previousNote()
+        check(m.activeTimerEnd != nil, "returning to note 1 finds it still running")
+        equal(m.activeTimerOwnerID, owner, "ownership unchanged by the round trip")
+    }
+
+    suite("editing a different note while a timer runs elsewhere does not touch it") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        let owner = m.notes[m.currentIndex].id
+        check(m.activeTimerEnd != nil, "timer running on note 1")
+        let endDate = m.activeTimerEnd
+
+        m.addNewNote()
+        m.currentText = "second note, now with more text"
+        equal(m.activeTimerEnd, endDate, "unrelated typing in another note leaves the running countdown untouched")
+        equal(m.activeTimerOwnerID, owner, "ownership is still note 1's")
+    }
+
+    suite("switching to a note with an old, never-started directive does not spontaneously start it") {
+        // Simulates a directive typed in a previous session: present in the
+        // seed data from the very first load, never freshly typed this run.
+        let m = makeManager(seed: ["5m timer", "plain"])
+        m.currentIndex = 1
+        check(m.activeTimerEnd == nil, "landing elsewhere first: nothing has started yet")
+
+        m.currentIndex = 0
+        check(m.activeTimerEnd == nil, "merely looking at the note with the directive does not start it")
+
+        m.currentText = "5m timer, with an unrelated edit appended"
+        check(m.activeTimerEnd == nil, "editing around the *same* directive text still does not start it")
+    }
+
+    suite("a fresh directive in a different note silently replaces a running timer") {
         let m = makeManager()
         m.currentText = "5m timer"
         check(m.activeTimerEnd != nil, "timer running on note 1")
+        let firstOwner = m.activeTimerOwnerID
 
         m.addNewNote()
-        check(m.activeTimerEnd == nil, "switching to a new note clears the overlay")
+        m.currentText = "10m timer"
+        let secondOwner = m.notes[m.currentIndex].id
+        equal(m.activeTimerOwnerID, secondOwner, "the newest directive wins the one countdown slot")
+        check(m.activeTimerOwnerID != firstOwner, "no longer note 1's")
+    }
 
-        m.previousNote()
-        check(m.activeTimerEnd == nil, "returning to note 1 does not auto-restart it")
+    suite("deleting the note that owns a running timer cancels it") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        m.addNewNote()  // a second note, so deleting the first is a real removal
+        check(m.activeTimerEnd != nil, "timer running on note 1")
+
+        m.deleteNote(at: 0)
+        check(m.activeTimerEnd == nil, "no note left to point back to, so it's cancelled outright")
+        check(m.activeTimerOwnerID == nil, "ownership cleared too")
     }
 
     suite("removing the directive cancels the timer") {
@@ -273,6 +328,117 @@ func runAllTests() {
         check(m.activeTimerEnd != nil, "running under the old keyword")
         m.timerKeywordDidChange(to: "pomodoro")
         check(m.activeTimerEnd == nil, "stale directive no longer keeps a timer alive")
+    }
+
+    // MARK: - Pomodoro
+
+    suite("pomodoro directive parsing") {
+        let d = NotesManager.firstPomodoroDirective(in: "pomodoro 25/5")
+        equal(d?.workDuration, 1500, "25 minutes of work")
+        equal(d?.breakDuration, 300, "5 minutes of break")
+        equal(d?.source, "pomodoro 25/5", "the exact matched text")
+
+        equal(NotesManager.firstPomodoroDirective(in: "POMODORO 60/10")?.workDuration, 3600, "case-insensitive")
+        equal(NotesManager.firstPomodoroDirective(in: "buy milk")?.workDuration, nil, "no directive")
+        equal(
+            NotesManager.firstPomodoroDirective(in: "notes\npomodoro 45/15\nmore")?.source,
+            "pomodoro 45/15",
+            "found mid-note"
+        )
+    }
+
+    suite("a pomodoro cycle starts in the work phase and alternates when it fires") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        check(m.activeTimerEnd != nil, "the cycle starts")
+        equal(m.activePomodoroPhase, .work, "work comes first")
+
+        m.timerDidFire()
+        check(m.activeTimerEnd != nil, "firing does not stop the cycle")
+        equal(m.activePomodoroPhase, .rest, "work flips to break")
+
+        m.timerDidFire()
+        equal(m.activePomodoroPhase, .work, "break flips back to work")
+    }
+
+    suite("a fired phase starts the next one at the directive's own duration") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        let workEnd = m.activeTimerEnd!
+        m.timerDidFire()
+        let breakEnd = m.activeTimerEnd!
+
+        // Work is 1500s, break is 300s — the break phase should end roughly
+        // 1200s sooner than the work phase would have from the same start.
+        let workRemaining = workEnd.timeIntervalSinceNow
+        let breakRemaining = breakEnd.timeIntervalSinceNow
+        check(abs((workRemaining - breakRemaining) - 1200) < 2, "break is the shorter half of this cycle")
+    }
+
+    suite("a plain timer directive is ignored while a pomodoro directive owns the note") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5 and also 5m timer"
+        equal(m.activePomodoroPhase, .work, "pomodoro wins the note's one countdown slot")
+    }
+
+    suite("removing the pomodoro directive cancels the cycle") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "running")
+        m.currentText = "no directive here"
+        check(m.activeTimerEnd == nil, "cancelled")
+        check(m.activePomodoroPhase == nil, "phase cleared too")
+    }
+
+    suite("a pomodoro cycle survives switching notes, and does not auto-restart on return") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        let owner = m.notes[m.currentIndex].id
+        check(m.activePomodoroPhase != nil, "running on note 1")
+
+        m.addNewNote()
+        check(m.activeTimerEnd != nil, "switching to a new, unrelated note leaves it running")
+        check(m.activePomodoroPhase != nil, "phase label survives too")
+        equal(m.activeTimerOwnerID, owner, "still owned by note 1")
+
+        m.previousNote()
+        check(m.activeTimerEnd != nil, "returning to note 1 finds the cycle still running")
+        equal(m.activeTimerOwnerID, owner, "ownership unchanged by the round trip")
+    }
+
+    suite("a fresh pomodoro directive in a different note silently replaces a running cycle") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        let firstOwner = m.activeTimerOwnerID
+        check(m.activePomodoroPhase != nil, "running on note 1")
+
+        m.addNewNote()
+        m.currentText = "pomodoro 50/10"
+        let secondOwner = m.notes[m.currentIndex].id
+        equal(m.activeTimerOwnerID, secondOwner, "the newest directive wins the one countdown slot")
+        check(m.activeTimerOwnerID != firstOwner, "no longer note 1's")
+        equal(m.activePomodoroPhase, .work, "the new cycle starts at work")
+    }
+
+    suite("pomodoro keyword is configurable") {
+        equal(NotesManager.firstPomodoroDirective(in: "focus 25/5", keyword: "focus")?.workDuration, 1500,
+              "custom keyword matches")
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 25/5", keyword: "focus")?.workDuration, nil,
+              "default keyword no longer matches once changed")
+
+        let m = makeManager()
+        m.pomodoroKeyword = "focus"
+        m.currentText = "focus 50/10"
+        check(m.activePomodoroPhase != nil, "manager honours its keyword")
+    }
+
+    suite("changing the pomodoro keyword re-evaluates the current note") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "running under the old keyword")
+        m.pomodoroKeywordDidChange(to: "focus")
+        check(m.activeTimerEnd == nil, "stale directive no longer keeps a cycle alive")
+        check(m.activePomodoroPhase == nil, "phase cleared too")
     }
 
     // MARK: - Text statistics

@@ -303,6 +303,7 @@ final class SettingsManager: ObservableObject {
         static let hotKeyCode     = "hotKeyCode"
         static let hotKeyMods     = "hotKeyModifiers"
         static let timerKeyword   = "timerKeyword"
+        static let pomodoroKeyword = "pomodoroKeyword"
         static let showsFooter    = "showsFooter"
         static let screenEdge     = "screenEdge"
         static let edgeWidth      = "edgeWidth"
@@ -327,7 +328,7 @@ final class SettingsManager: ObservableObject {
         /// domains accumulate unrelated system-set keys over time, and only
         /// the app's own keys should ever cross a bundle-ID migration.
         static let all: Set<String> = [
-            displayMode, hotKeyCode, hotKeyMods, timerKeyword, showsFooter,
+            displayMode, hotKeyCode, hotKeyMods, timerKeyword, pomodoroKeyword, showsFooter,
             screenEdge, edgeWidth, appearance, appearanceTint, showsHeader, lineSpacing,
             windowFrame, syncsToNotes, listKeyword, fetchesLiveRates, checksForUpdates,
             noteFontName, noteFontSize, letterSpacing, guide,
@@ -355,6 +356,14 @@ final class SettingsManager: ObservableObject {
             // An empty keyword would make every "5m" anywhere in a note start a
             // timer, so fall back rather than store it.
             defaults.set(trimmed.isEmpty ? "timer" : trimmed, forKey: Key.timerKeyword)
+        }
+    }
+
+    /// The word that turns "<keyword> 25/5" into a work/break Pomodoro cycle.
+    @Published var pomodoroKeyword: String {
+        didSet {
+            let trimmed = pomodoroKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed.isEmpty ? "pomodoro" : trimmed, forKey: Key.pomodoroKeyword)
         }
     }
 
@@ -509,6 +518,11 @@ final class SettingsManager: ObservableObject {
         return trimmed.isEmpty ? "timer" : trimmed
     }
 
+    var effectivePomodoroKeyword: String {
+        let trimmed = pomodoroKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "pomodoro" : trimmed
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         Self.migrateFromPreviousBundleIDIfNeeded(into: defaults)
@@ -525,6 +539,7 @@ final class SettingsManager: ObservableObject {
         }
 
         self.timerKeyword = defaults.string(forKey: Key.timerKeyword) ?? "timer"
+        self.pomodoroKeyword = defaults.string(forKey: Key.pomodoroKeyword) ?? "pomodoro"
         self.showsFooter = defaults.object(forKey: Key.showsFooter) as? Bool ?? true
 
         let rawAppearance = defaults.string(forKey: Key.appearance) ?? Appearance.frosted.rawValue
@@ -667,5 +682,25 @@ final class SettingsManager: ObservableObject {
 
     var effectiveGuide: PaperGuide {
         themeOverride?.guide ?? guide
+    }
+
+    // MARK: - Per-note typography
+
+    /// Same precedence `effectiveNoteFontName`/`effectiveFontSize` already use,
+    /// with one more rung: a theme note still wins outright (it is a
+    /// deliberate whole-app statement), but between that and the picked
+    /// default, a note's own choice now sits in the middle. `perNote` is
+    /// `Note.fontName`/`fontSize` — nil for any note that has never had its
+    /// own font set, which falls straight through to the old behaviour.
+    func resolvedFontName(perNote: String?) -> String {
+        themeOverride?.fontName ?? perNote ?? noteFontName
+    }
+
+    func resolvedFontSize(perNote: Double?) -> Double {
+        themeOverride?.fontSize ?? perNote ?? noteFontSize
+    }
+
+    func resolvedEditorFont(perNoteName: String?, perNoteSize: Double?) -> NSFont {
+        NoteFont.resolved(resolvedFontName(perNote: perNoteName), size: CGFloat(resolvedFontSize(perNote: perNoteSize)))
     }
 }

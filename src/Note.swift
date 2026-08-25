@@ -8,10 +8,20 @@ import Foundation
 struct Note: Identifiable, Equatable, Codable {
     let id: UUID
     var text: String
+    /// This note's own font choice, overriding `SettingsManager.noteFontName`.
+    /// Nil means "use the default" — every note started this way before per-note
+    /// fonts existed, and a note that has never had its font touched still
+    /// reads that way, so old note files decode straight through with nothing
+    /// to migrate.
+    var fontName: String?
+    /// Same trade as `fontName`, for `SettingsManager.noteFontSize`.
+    var fontSize: Double?
 
-    init(id: UUID = UUID(), text: String = "") {
+    init(id: UUID = UUID(), text: String = "", fontName: String? = nil, fontSize: Double? = nil) {
         self.id = id
         self.text = text
+        self.fontName = fontName
+        self.fontSize = fontSize
     }
 
     var isBlank: Bool {

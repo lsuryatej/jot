@@ -10,21 +10,82 @@ struct TimerDirective: Equatable {
     let duration: TimeInterval
 }
 
+/// A Pomodoro directive found in note text, e.g. "pomodoro 25/5" — work
+/// minutes, then break minutes, separated by a slash.
+struct PomodoroDirective: Equatable {
+    let source: String
+    let workDuration: TimeInterval
+    let breakDuration: TimeInterval
+}
+
+/// Which half of a Pomodoro cycle is currently counting down.
+enum PomodoroPhase: Equatable {
+    case work
+    case rest
+}
+
 final class NotesManager: ObservableObject {
     @Published var notes: [Note] = [Note()]
 
     /// Convenience for call sites that only care about the text.
     var texts: [String] { notes.map(\.text) }
-    @Published var currentIndex: Int = 0
-    @Published private(set) var activeTimerEnd: Date?
 
-    /// The directive backing the current timer, retained even after the timer
-    /// fires. Without this, an expired "5m timer" still sitting in the text
-    /// restarts itself on the next keystroke, forever.
-    private var timerSource: String?
+    /// Seeds the newly-current note's directive tracking on every change,
+    /// covering every way this can be reassigned — swipe/keyboard
+    /// navigation, `addNewNote`, `deleteNote`, `moveNote`, and a direct jump
+    /// from global search (`ContentView.jumpTo`) alike — without each of
+    /// those call sites needing to remember to do it themselves. See
+    /// `seedIfNeeded` for why this matters.
+    @Published var currentIndex: Int = 0 {
+        didSet {
+            guard notes.indices.contains(currentIndex) else { return }
+            seedIfNeeded(noteID: notes[currentIndex].id, text: notes[currentIndex].text)
+        }
+    }
+
+    /// A running countdown now survives navigating away from the note that
+    /// started it — it used to be cleared on every note switch, which read
+    /// as the timer just vanishing with nothing to say it was still running
+    /// elsewhere. `ContentView`'s overlay already renders outside the
+    /// per-note content, so it keeps showing across a switch for free once
+    /// this stops being cleared.
+    @Published private(set) var activeTimerEnd: Date?
+    /// Set only while `activeTimerEnd` belongs to a Pomodoro cycle rather than
+    /// a plain timer, so the overlay can label the countdown "Work"/"Break"
+    /// instead of the bare clock a plain timer gets.
+    @Published private(set) var activePomodoroPhase: PomodoroPhase?
+    /// Which note the running countdown belongs to — nil when nothing is
+    /// running. Lets the overlay name it when it's not the note on screen,
+    /// and lets `evaluateTimer` tell "editing the note that actually owns
+    /// this" apart from "editing some other, unrelated note" now that a
+    /// countdown outlives navigating away from its note.
+    @Published private(set) var activeTimerOwnerID: UUID?
+
+    /// The most recently *seen* directive text in each note, keyed by note
+    /// id — one shared `timerSource` string used to be enough when a timer
+    /// only ever belonged to whichever note was current. Per-note now:
+    /// switching to a different note that happens to already contain old
+    /// directive text must not spontaneously start (or restart) anything
+    /// just because that note got edited somewhere unrelated later.
+    private var seenTimerSource: [UUID: String] = [:]
+    /// Same role as `seenTimerSource`, for Pomodoro directives.
+    private var seenPomodoroSource: [UUID: String] = [:]
+    /// Notes whose directive text has already been recorded once this
+    /// session, so `seedIfNeeded` only ever does that once per note rather
+    /// than re-deriving it (harmlessly, but needlessly) on every visit.
+    private var seededNoteIDs: Set<UUID> = []
+
+    /// The durations a running cycle alternates between. Set when a cycle
+    /// starts, read every time a phase fires to know how long the next one
+    /// runs — `activeTimerEnd` alone can't say that once it's been reset for
+    /// the next phase.
+    private var pomodoroCycle: PomodoroDirective?
 
     /// Configurable via Preferences; "5m <keyword>" starts a countdown.
     var timerKeyword: String = "timer"
+
+    /// Configurable via Preferences; "<keyword> 25/5" starts a Pomodoro cycle.
+    var pomodoroKeyword: String = "pomodoro"
 
     private let store: NoteStore
     private var pendingSave: DispatchWorkItem?
@@ -35,7 +96,15 @@ final class NotesManager: ObservableObject {
         self.saveDebounce = saveDebounce
         self.notes = store.load()
         self.currentIndex = max(0, notes.count - 1)
-        self.timerSource = Self.firstTimerDirective(in: notes[currentIndex].text, keyword: timerKeyword)?.source
+        // `currentIndex`'s didSet is not guaranteed to fire for this same
+        // assignment (property observers on a `@Published` value set during
+        // this class's own `init` are not reliable — see the font-size
+        // clamp bug in `SettingsManager.init` for the same lesson learned
+        // the hard way), so the initial note is seeded explicitly here too.
+        // `seedIfNeeded` is idempotent, so this never double-seeds.
+        if notes.indices.contains(currentIndex) {
+            seedIfNeeded(noteID: notes[currentIndex].id, text: notes[currentIndex].text)
+        }
     }
 
     // MARK: - Text
@@ -44,8 +113,31 @@ final class NotesManager: ObservableObject {
         get { notes.indices.contains(currentIndex) ? notes[currentIndex].text : "" }
         set {
             guard notes.indices.contains(currentIndex) else { return }
+            let id = notes[currentIndex].id
             notes[currentIndex].text = newValue
-            evaluateTimer(in: newValue)
+            evaluateTimer(in: newValue, noteID: id)
+            scheduleSave()
+        }
+    }
+
+    // MARK: - Per-note typography
+
+    /// Nil means this note has never had its own font set, so display falls
+    /// back to `SettingsManager.noteFontName`.
+    var currentFontName: String? {
+        get { notes.indices.contains(currentIndex) ? notes[currentIndex].fontName : nil }
+        set {
+            guard notes.indices.contains(currentIndex) else { return }
+            notes[currentIndex].fontName = newValue
+            scheduleSave()
+        }
+    }
+
+    var currentFontSize: Double? {
+        get { notes.indices.contains(currentIndex) ? notes[currentIndex].fontSize : nil }
+        set {
+            guard notes.indices.contains(currentIndex) else { return }
+            notes[currentIndex].fontSize = newValue
             scheduleSave()
         }
     }
@@ -58,8 +150,14 @@ final class NotesManager: ObservableObject {
 
     func setText(_ newValue: String, at index: Int) {
         guard notes.indices.contains(index) else { return }
+        let id = notes[index].id
         notes[index].text = newValue
-        if index == currentIndex { evaluateTimer(in: newValue) }
+        // Unconditional now, not just for whichever card happens to be
+        // `currentIndex`: Screen Edge mode shows every note as its own
+        // editable card, and a timer/Pomodoro directive typed into any of
+        // them should start counting down, not just the one that happened
+        // to be current when the mode was entered.
+        evaluateTimer(in: newValue, noteID: id)
         scheduleSave()
     }
 
@@ -74,13 +172,37 @@ final class NotesManager: ObservableObject {
     func deleteNote(at index: Int) {
         guard notes.indices.contains(index), notes.count > 1 else {
             // Never leave the model with nothing to address.
-            if notes.indices.contains(index) { notes[index].text = "" }
+            if notes.indices.contains(index) {
+                let id = notes[index].id
+                notes[index].text = ""
+                forgetTimerState(for: id)
+            }
             flush()
             return
         }
+        let id = notes[index].id
+        forgetTimerState(for: id)
         notes.remove(at: index)
         currentIndex = min(currentIndex, notes.count - 1)
         flush()
+    }
+
+    /// A deleted note leaves nothing to point back to: an orphaned countdown
+    /// running for a note that no longer exists would be actively confusing,
+    /// not just untidy, so it's cancelled outright rather than left running.
+    /// The blank-instead-of-removed path above (the last note left) hits
+    /// this too, since blanking the text there bypasses `evaluateTimer`
+    /// entirely — nothing else would ever notice the directive is gone.
+    private func forgetTimerState(for noteID: UUID) {
+        if activeTimerOwnerID == noteID {
+            activeTimerEnd = nil
+            activePomodoroPhase = nil
+            pomodoroCycle = nil
+            activeTimerOwnerID = nil
+        }
+        seenTimerSource[noteID] = nil
+        seenPomodoroSource[noteID] = nil
+        seededNoteIDs.remove(noteID)
     }
 
     // MARK: - Navigation
@@ -88,8 +210,11 @@ final class NotesManager: ObservableObject {
     func previousNote() {
         guard currentIndex > 0 else { return }
         purgeEmptyNotesPreservingCurrent()
+        // No timer bookkeeping here any more: `currentIndex`'s `didSet`
+        // seeds the note being switched to on its own, and a running
+        // countdown belonging to some other note is meant to keep going
+        // regardless of where navigation lands.
         currentIndex = max(0, currentIndex - 1)
-        adoptTimerState(for: currentText)
         flush()
     }
 
@@ -97,7 +222,6 @@ final class NotesManager: ObservableObject {
         if currentIndex < notes.count - 1 {
             purgeEmptyNotesPreservingCurrent()
             currentIndex = min(notes.count - 1, currentIndex + 1)
-            adoptTimerState(for: currentText)
             flush()
         } else {
             addNewNote()
@@ -109,7 +233,6 @@ final class NotesManager: ObservableObject {
         guard !currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         notes.append(Note())
         currentIndex = notes.count - 1
-        adoptTimerState(for: "")
         flush()
     }
 
@@ -203,36 +326,166 @@ final class NotesManager: ObservableObject {
         )
     }
 
-    private func evaluateTimer(in text: String) {
+    /// Matches "pomodoro 25/5", "pomodoro 60/10" (case-insensitive) — the
+    /// keyword, then work minutes and break minutes separated by a slash.
+    /// Keyword leads here rather than trailing like the plain timer's "5m
+    /// timer": read as "a pomodoro of 25 on, 5 off" rather than a bare
+    /// duration, which is how it was specified.
+    private static var pomodoroPatternCache: [String: NSRegularExpression] = [:]
+    private static let pomodoroPatternCacheLock = NSLock()
+
+    static func pomodoroRegex(keyword: String) -> NSRegularExpression? {
+        let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effective = keyword.isEmpty ? "pomodoro" : keyword
+
+        pomodoroPatternCacheLock.lock()
+        defer { pomodoroPatternCacheLock.unlock() }
+
+        if let cached = pomodoroPatternCache[effective] { return cached }
+        let escaped = NSRegularExpression.escapedPattern(for: effective)
+        guard let regex = try? NSRegularExpression(
+            pattern: escaped + "\\s+([0-9]+)\\s*/\\s*([0-9]+)",
+            options: .caseInsensitive
+        ) else { return nil }
+        pomodoroPatternCache[effective] = regex
+        return regex
+    }
+
+    static func firstPomodoroDirective(in text: String, keyword: String = "pomodoro") -> PomodoroDirective? {
+        guard let regex = pomodoroRegex(keyword: keyword) else { return nil }
+        let ns = text as NSString
+        guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
+              let workMinutes = Int(ns.substring(with: match.range(at: 1))),
+              let breakMinutes = Int(ns.substring(with: match.range(at: 2)))
+        else { return nil }
+
+        return PomodoroDirective(
+            source: ns.substring(with: match.range(at: 0)),
+            workDuration: TimeInterval(workMinutes) * 60,
+            breakDuration: TimeInterval(breakMinutes) * 60
+        )
+    }
+
+    /// A Pomodoro directive takes over the app's one countdown slot outright:
+    /// checked first, and when present a plain timer directive elsewhere in
+    /// the same note is ignored rather than fought over. There is still only
+    /// ever one countdown running anywhere — a fresh directive typed into
+    /// *any* note silently takes the slot over from whatever was running
+    /// before, by design (multiple independent, simultaneous timers is a
+    /// bigger feature, tracked separately in BACKLOG.md).
+    private func evaluateTimer(in text: String, noteID: UUID) {
+        if let cycle = Self.firstPomodoroDirective(in: text, keyword: pomodoroKeyword) {
+            seenTimerSource[noteID] = nil
+            // Already running, or already fired, this exact directive.
+            guard cycle.source != seenPomodoroSource[noteID] else { return }
+            seenPomodoroSource[noteID] = cycle.source
+            pomodoroCycle = cycle
+            activePomodoroPhase = .work
+            activeTimerEnd = Date().addingTimeInterval(cycle.workDuration)
+            activeTimerOwnerID = noteID
+            return
+        }
+        // No Pomodoro directive in this note right now. If this note used to
+        // have one and it's the cycle actually running, editing it away
+        // cancels the cycle — the same "remove the directive, it stops" rule
+        // a plain timer already follows below.
+        if seenPomodoroSource[noteID] != nil {
+            seenPomodoroSource[noteID] = nil
+            if activeTimerOwnerID == noteID, activePomodoroPhase != nil {
+                activeTimerEnd = nil
+                activePomodoroPhase = nil
+                pomodoroCycle = nil
+                activeTimerOwnerID = nil
+            }
+        }
+
         guard let directive = Self.firstTimerDirective(in: text, keyword: timerKeyword) else {
-            activeTimerEnd = nil
-            timerSource = nil
+            if seenTimerSource[noteID] != nil {
+                seenTimerSource[noteID] = nil
+                if activeTimerOwnerID == noteID, activePomodoroPhase == nil {
+                    activeTimerEnd = nil
+                    activeTimerOwnerID = nil
+                }
+            }
             return
         }
         // Already running, or already fired, for this exact directive.
-        guard directive.source != timerSource else { return }
-        timerSource = directive.source
+        guard directive.source != seenTimerSource[noteID] else { return }
+        seenTimerSource[noteID] = directive.source
         activeTimerEnd = Date().addingTimeInterval(directive.duration)
+        activePomodoroPhase = nil
+        pomodoroCycle = nil
+        activeTimerOwnerID = noteID
     }
 
-    /// Called when switching notes: a timer belongs to the note that started it.
-    /// An existing directive in the incoming note is recorded as already-seen so
-    /// it does not spontaneously start counting down.
-    private func adoptTimerState(for text: String) {
-        activeTimerEnd = nil
-        timerSource = Self.firstTimerDirective(in: text, keyword: timerKeyword)?.source
+    /// The first time a note is displayed this session — navigated to,
+    /// created, or jumped to from search — its existing directive text, if
+    /// any, is recorded as already seen. Without this, switching to a note
+    /// that already contains old directive text (typed in a previous
+    /// session, or just sitting there unedited) would look like "a brand
+    /// new directive" the next time *any* part of that note is edited, and
+    /// spontaneously start counting down.
+    private func seedIfNeeded(noteID: UUID, text: String) {
+        guard !seededNoteIDs.contains(noteID) else { return }
+        seededNoteIDs.insert(noteID)
+        seenTimerSource[noteID] = Self.firstTimerDirective(in: text, keyword: timerKeyword)?.source
+        seenPomodoroSource[noteID] = Self.firstPomodoroDirective(in: text, keyword: pomodoroKeyword)?.source
     }
 
-    /// Re-parses the current note after the keyword changes in Preferences.
+    /// Re-parses every note's tracking after the keyword changes in
+    /// Preferences — every previously-recorded "already seen" directive was
+    /// matched under the old keyword and means nothing under the new one.
+    /// A currently-running plain timer is cancelled too (its own keyword no
+    /// longer necessarily matches what's in its note); a running Pomodoro
+    /// cycle is left alone, since it's keyed on the separate Pomodoro
+    /// keyword and this change doesn't touch it.
     func timerKeywordDidChange(to keyword: String) {
         timerKeyword = keyword
-        activeTimerEnd = nil
-        timerSource = Self.firstTimerDirective(in: currentText, keyword: keyword)?.source
+        if activePomodoroPhase == nil {
+            activeTimerEnd = nil
+            activeTimerOwnerID = nil
+        }
+        seenTimerSource.removeAll()
+        seededNoteIDs.removeAll()
+        if notes.indices.contains(currentIndex) {
+            seedIfNeeded(noteID: notes[currentIndex].id, text: notes[currentIndex].text)
+        }
     }
 
-    /// Marks the running timer as finished without clearing `timerSource`.
+    /// Same rationale as `timerKeywordDidChange`, for the Pomodoro keyword: a
+    /// running Pomodoro cycle is cancelled, a running plain timer is left
+    /// alone.
+    func pomodoroKeywordDidChange(to keyword: String) {
+        pomodoroKeyword = keyword
+        if activePomodoroPhase != nil {
+            activeTimerEnd = nil
+            activePomodoroPhase = nil
+            pomodoroCycle = nil
+            activeTimerOwnerID = nil
+        }
+        seenPomodoroSource.removeAll()
+        seededNoteIDs.removeAll()
+        if notes.indices.contains(currentIndex) {
+            seedIfNeeded(noteID: notes[currentIndex].id, text: notes[currentIndex].text)
+        }
+    }
+
+    /// Marks the running countdown as finished. A plain timer stops and
+    /// releases ownership; a Pomodoro phase instead flips to the other half
+    /// of its cycle and starts counting that down — work becomes break,
+    /// break becomes the next work block — for as long as the directive
+    /// stays in its note, keeping the same owner throughout. The owning
+    /// note's `seenTimerSource`/`seenPomodoroSource` entry is left alone
+    /// either way, so the fired directive's own text never resurrects it.
     func timerDidFire() {
-        activeTimerEnd = nil
+        guard let phase = activePomodoroPhase, let cycle = pomodoroCycle else {
+            activeTimerEnd = nil
+            activeTimerOwnerID = nil
+            return
+        }
+        let next: PomodoroPhase = phase == .work ? .rest : .work
+        activePomodoroPhase = next
+        activeTimerEnd = Date().addingTimeInterval(next == .work ? cycle.workDuration : cycle.breakDuration)
     }
 
     // MARK: - Persistence

@@ -246,6 +246,11 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
 
         textView.isRichText = false
+        // See the matching comment in PlainTextEditor.swift: `isRichText`
+        // alone doesn't hide the contextual menu's "Font ▸ Show Fonts…",
+        // and any font it picked would be overwritten by the next restyle
+        // pass regardless.
+        textView.usesFontPanel = false
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.isAutomaticQuoteSubstitutionEnabled = false

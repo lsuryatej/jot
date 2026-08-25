@@ -66,6 +66,22 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .jotRequestGlobalSearch)) { _ in
             showingGlobalSearch.toggle()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .jotRequestToggleChrome)) { _ in
+            toggleChrome()
+        }
+    }
+
+    // MARK: - Chrome
+
+    /// One shortcut, one on/off state: header and footer flip together
+    /// rather than needing two keystrokes to reach a clean, focus-mode
+    /// screen. If they were showing different things (mixed state, reachable
+    /// only via Settings), showing both first reads as "turn the chrome on"
+    /// before the next press turns it fully off, rather than a surprise jump.
+    private func toggleChrome() {
+        let showing = settings.showsHeader || settings.showsFooter
+        settings.showsHeader = !showing
+        settings.showsFooter = !showing
     }
 
     // MARK: - Global search
@@ -137,7 +153,10 @@ struct ContentView: View {
     private var editor: some View {
         PlainTextEditor(
             lineHeightMultiple: settings.effectiveLineSpacing,
-            baseFont: settings.effectiveEditorFont,
+            baseFont: settings.resolvedEditorFont(
+                perNoteName: notesManager.currentFontName,
+                perNoteSize: notesManager.currentFontSize
+            ),
             letterSpacing: settings.effectiveLetterSpacing,
             ink: settings.effectiveInk,
             guide: settings.effectiveGuide,
@@ -164,15 +183,28 @@ struct ContentView: View {
                 .foregroundStyle(Color(nsColor: ink.secondary))
 
             Button("Checklist") {
-                // Routed through the responder chain so the button and Cmd+L
-                // run the same code path in the text view.
-                NSApp.sendAction(#selector(ChecklistTextView.toggleChecklist(_:)), to: nil, from: nil)
+                // Posted directly to the text view rather than routed through
+                // NSApp.sendAction's responder-chain walk — that indirection
+                // was the actual cause of a real, reported bug where a rapid
+                // second click on Highlight corrupted text instead of
+                // unwrapping it. See the notification's own doc comment in
+                // PreferencesView.swift.
+                NotificationCenter.default.post(name: .jotRequestToggleChecklistFromHeader, object: nil)
             }
             .font(.caption)
             .buttonStyle(.plain)
             .help("Toggle the checkbox on the current line or selection (⌘L)")
 
+            Button("Highlight") {
+                NotificationCenter.default.post(name: .jotRequestToggleHighlightFromHeader, object: nil)
+            }
+            .font(.caption)
+            .buttonStyle(.plain)
+            .help("Highlight the selection, or start a highlight at the caret (⇧⌘H)")
+
             Spacer()
+
+            fontControls
 
             Button(action: shareNote) {
                 Image(systemName: "square.and.arrow.up")
@@ -183,6 +215,47 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Color(nsColor: settings.effectiveChromeColor).opacity(0.8))
+    }
+
+    /// Font and size for the open note specifically — the header is already
+    /// optional (Cmd+/ hides it along with the footer), so putting this here
+    /// rather than only in Settings costs nothing when you don't want it, and
+    /// saves a trip to Settings for something you reach for per note. Kept
+    /// to a bare name menu and a stepper, no labels, so it sits quietly next
+    /// to the Checklist/Highlight buttons rather than crowding them.
+    private var fontControls: some View {
+        HStack(spacing: 6) {
+            Menu {
+                ForEach(NoteFont.all, id: \.self) { name in
+                    Button(name) { notesManager.currentFontName = name }
+                }
+                if notesManager.currentFontName != nil {
+                    Divider()
+                    Button("Use default") { notesManager.currentFontName = nil }
+                }
+            } label: {
+                Text(settings.resolvedFontName(perNote: notesManager.currentFontName))
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("This note's font — Settings has a separate default for new notes")
+
+            Stepper(
+                value: Binding(
+                    get: { notesManager.currentFontSize ?? settings.noteFontSize },
+                    set: { notesManager.currentFontSize = SettingsManager.clampedFontSize($0) }
+                ),
+                in: SettingsManager.fontSizeRange,
+                step: 1
+            ) {
+                Text("\(Int(settings.resolvedFontSize(perNote: notesManager.currentFontSize)))pt")
+                    .font(.caption)
+            }
+            .fixedSize()
+            .help("This note's size")
+        }
     }
 
     // MARK: - Footer
@@ -223,17 +296,48 @@ struct ContentView: View {
 
     // MARK: - Timer
 
+    /// A plain timer is unlabeled red, matching its look before Pomodoro
+    /// existed. A Pomodoro phase adds its name and swaps to green for the
+    /// break half, the closest thing this chip has to a status color, so a
+    /// glance says whether you're meant to be working or not without reading
+    /// the clock.
+    /// The owning note's title, shown only when it differs from the note on
+    /// screen. On the note that actually owns the countdown, "Work"/the
+    /// clock alone is enough — the same look this chip had before it could
+    /// outlive navigating away. Anywhere else, without this, the chip says
+    /// a timer is running but gives no hint which note to go find it on.
+    private var timerOwnerLabel: String? {
+        guard let ownerID = notesManager.activeTimerOwnerID,
+              notesManager.notes.indices.contains(notesManager.currentIndex),
+              notesManager.notes[notesManager.currentIndex].id != ownerID,
+              let owner = notesManager.notes.first(where: { $0.id == ownerID })
+        else { return nil }
+        return owner.title
+    }
+
     private var timerOverlay: some View {
-        Text(timeRemaining.isEmpty ? "--:--" : timeRemaining)
-            .font(.system(.headline, design: .monospaced))
-            .padding(8)
-            .background(Color.red.opacity(0.8))
-            .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.top, 50)
-            .padding(.trailing, 20)
-            .onAppear { updateTimer() }
-            .onReceive(tick) { _ in updateTimer() }
+        HStack(spacing: 6) {
+            if let owner = timerOwnerLabel {
+                Text(owner)
+                    .font(.system(.caption2, design: .monospaced))
+                    .lineLimit(1)
+                    .frame(maxWidth: 90, alignment: .leading)
+            }
+            if let phase = notesManager.activePomodoroPhase {
+                Text(phase == .work ? "Work" : "Break")
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+            }
+            Text(timeRemaining.isEmpty ? "--:--" : timeRemaining)
+                .font(.system(.headline, design: .monospaced))
+        }
+        .padding(8)
+        .background((notesManager.activePomodoroPhase == .rest ? Color.green : Color.red).opacity(0.8))
+        .foregroundStyle(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.top, 50)
+        .padding(.trailing, 20)
+        .onAppear { updateTimer() }
+        .onReceive(tick) { _ in updateTimer() }
     }
 
     private func updateTimer() {

@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         CurrencyRates.bootstrap(fetchesLive: settings.fetchesLiveCurrencyRates)
         UpdateChecker.check(enabled: settings.checksForUpdates)
         notesManager.timerKeyword = settings.effectiveTimerKeyword
+        notesManager.pomodoroKeyword = settings.effectivePomodoroKeyword
         notesManager.onPersist = { [weak self] notes in
             self?.scheduleAppleNotesSync(notes)
         }
@@ -45,7 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             newNoteAction: #selector(newNoteFromMenu),
             globalSearchAction: #selector(requestGlobalSearch),
             moveNoteUpAction: #selector(moveNoteUp(_:)),
-            moveNoteDownAction: #selector(moveNoteDown(_:))
+            moveNoteDownAction: #selector(moveNoteDown(_:)),
+            nextNoteAction: #selector(nextNote(_:)),
+            previousNoteAction: #selector(previousNote(_:)),
+            toggleChromeAction: #selector(toggleChromeFromMenu),
+            toggleChecklistAction: #selector(toggleChecklistFromMenu),
+            toggleHighlightAction: #selector(toggleHighlightFromMenu)
         )
 
         panel = FloatingPanel(rootView: contentView())
@@ -192,6 +198,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             .store(in: &cancellables)
 
+        settings.$pomodoroKeyword
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.notesManager.pomodoroKeywordDidChange(to: self.settings.effectivePomodoroKeyword)
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .jotRequestNewNote)
             .sink { [weak self] _ in self?.newNoteFromMenu() }
             .store(in: &cancellables)
@@ -202,6 +216,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         NotificationCenter.default.publisher(for: .jotRequestMoveNoteDown)
             .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: +1) }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .jotRequestNextNote)
+            .sink { [weak self] _ in self?.switchNoteIfVisible(by: +1) }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .jotRequestPreviousNote)
+            .sink { [weak self] _ in self?.switchNoteIfVisible(by: -1) }
             .store(in: &cancellables)
 
         // Theme notes: the appearance is derived from the note stack itself,
@@ -234,6 +256,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         notesManager.moveCurrentNote(by: delta)
     }
 
+    // MARK: - Switching
+
+    @objc func nextNote(_ sender: Any?) {
+        switchNoteIfVisible(by: +1)
+    }
+
+    @objc func previousNote(_ sender: Any?) {
+        switchNoteIfVisible(by: -1)
+    }
+
+    /// Same visibility guard as `moveCurrentNoteIfVisible`, and the same
+    /// bounds `NotesManager.nextNote`/`previousNote` already enforce — this
+    /// just picks which one to call.
+    private func switchNoteIfVisible(by delta: Int) {
+        guard isInterfaceVisible else { return }
+        delta > 0 ? notesManager.nextNote() : notesManager.previousNote()
+    }
+
+    /// The View menu's item posts the same notification Cmd+/ does in the
+    /// text view; ContentView owns `showsHeader`/`showsFooter` and is the
+    /// only thing observing it.
+    @objc private func toggleChromeFromMenu() {
+        NotificationCenter.default.post(name: .jotRequestToggleChrome, object: nil)
+    }
+
+    /// The Format menu's items post the same notifications the header's
+    /// Checklist/Highlight buttons do; the text view observes and applies
+    /// them to itself directly.
+    @objc private func toggleChecklistFromMenu() {
+        NotificationCenter.default.post(name: .jotRequestToggleChecklistFromHeader, object: nil)
+    }
+
+    @objc private func toggleHighlightFromMenu() {
+        NotificationCenter.default.post(name: .jotRequestToggleHighlightFromHeader, object: nil)
+    }
+
     /// Greys out the move items at the ends of the list, or whenever the panel
     /// is hidden, instead of letting them click into nothing. Every other item
     /// targeted here was always enabled and stays that way.
@@ -242,6 +300,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case #selector(moveNoteUp(_:)):
             return isInterfaceVisible && notesManager.currentIndex > 0
         case #selector(moveNoteDown(_:)):
+            return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+        case #selector(previousNote(_:)):
+            return isInterfaceVisible && notesManager.currentIndex > 0
+        case #selector(nextNote(_:)):
             return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
         default:
             return true
@@ -587,16 +649,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 820),
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 480),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Jot Settings"
-        // Small enough not to clip on short laptop screens; the settings
-        // scroll rather than demanding a tall window.
-        window.minSize = NSSize(width: 420, height: 360)
-        window.contentViewController = NSHostingController(rootView: PreferencesView(settings: settings))
+        // Wide enough for the sidebar plus a comfortable content column; each
+        // pane scrolls internally rather than the window needing to grow to
+        // fit the tallest one.
+        window.minSize = NSSize(width: 560, height: 380)
+        window.contentViewController = NSHostingController(rootView: PreferencesView(settings: settings, notesManager: notesManager))
         window.isReleasedWhenClosed = false
         window.center()
         window.makeKeyAndOrderFront(nil)

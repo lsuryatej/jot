@@ -13,7 +13,12 @@ enum MainMenu {
         newNoteAction: Selector,
         globalSearchAction: Selector,
         moveNoteUpAction: Selector,
-        moveNoteDownAction: Selector
+        moveNoteDownAction: Selector,
+        nextNoteAction: Selector,
+        previousNoteAction: Selector,
+        toggleChromeAction: Selector,
+        toggleChecklistAction: Selector,
+        toggleHighlightAction: Selector
     ) -> NSMenu {
         let mainMenu = NSMenu()
         mainMenu.addItem(appMenuItem(target: target, preferencesAction: preferencesAction))
@@ -21,18 +26,39 @@ enum MainMenu {
             target: target,
             newNoteAction: newNoteAction,
             moveNoteUpAction: moveNoteUpAction,
-            moveNoteDownAction: moveNoteDownAction
+            moveNoteDownAction: moveNoteDownAction,
+            nextNoteAction: nextNoteAction,
+            previousNoteAction: previousNoteAction
         ))
         mainMenu.addItem(editMenuItem(target: target, globalSearchAction: globalSearchAction))
-        mainMenu.addItem(formatMenuItem())
+        mainMenu.addItem(viewMenuItem(target: target, toggleChromeAction: toggleChromeAction))
+        mainMenu.addItem(formatMenuItem(
+            target: target,
+            toggleChecklistAction: toggleChecklistAction,
+            toggleHighlightAction: toggleHighlightAction
+        ))
         return mainMenu
+    }
+
+    private static func viewMenuItem(target: AnyObject, toggleChromeAction: Selector) -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "View")
+
+        let toggle = NSMenuItem(title: "Toggle Header & Footer", action: toggleChromeAction, keyEquivalent: "/")
+        toggle.target = target
+        menu.addItem(toggle)
+
+        item.submenu = menu
+        return item
     }
 
     private static func fileMenuItem(
         target: AnyObject,
         newNoteAction: Selector,
         moveNoteUpAction: Selector,
-        moveNoteDownAction: Selector
+        moveNoteDownAction: Selector,
+        nextNoteAction: Selector,
+        previousNoteAction: Selector
     ) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "File")
@@ -48,6 +74,18 @@ enum MainMenu {
         // PlainTextEditor.performKeyEquivalent), since the menu is not
         // reliably consulted outside Dock mode — both paths reach the same
         // NotesManager call.
+        for (title, action, key) in [
+            ("Next Note", nextNoteAction, NSRightArrowFunctionKey),
+            ("Previous Note", previousNoteAction, NSLeftArrowFunctionKey),
+        ] {
+            let switchNote = NSMenuItem(title: title, action: action, keyEquivalent: String(UnicodeScalar(key)!))
+            switchNote.keyEquivalentModifierMask = [.command, .option]
+            switchNote.target = target
+            menu.addItem(switchNote)
+        }
+
+        menu.addItem(.separator())
+
         for (title, action, key) in [
             ("Move Note Up", moveNoteUpAction, NSUpArrowFunctionKey),
             ("Move Note Down", moveNoteDownAction, NSDownArrowFunctionKey),
@@ -114,16 +152,31 @@ enum MainMenu {
         return item
     }
 
-    /// nil target: the key equivalent walks the responder chain to the text
-    /// view, so Cmd+L works whether or not the panel is the key window's focus.
-    private static func formatMenuItem() -> NSMenuItem {
+    /// Explicit target posting a notification, rather than a nil target
+    /// walking the responder chain to the text view directly — the same
+    /// fix, and the same reason, as the header's Checklist/Highlight
+    /// buttons (see the notifications' own doc comment in
+    /// PreferencesView.swift). The key equivalents shown here (⌘L, ⇧⌘H)
+    /// are cosmetic/discoverability only: `ChecklistTextView.
+    /// performKeyEquivalent` already claims those keystrokes directly and
+    /// never lets them reach the menu at all, so only an actual mouse click
+    /// on these menu items goes through this path.
+    private static func formatMenuItem(
+        target: AnyObject,
+        toggleChecklistAction: Selector,
+        toggleHighlightAction: Selector
+    ) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Format")
-        menu.addItem(
-            withTitle: "Toggle Checklist",
-            action: #selector(ChecklistTextView.toggleChecklist(_:)),
-            keyEquivalent: "l"
-        )
+
+        let checklist = NSMenuItem(title: "Toggle Checklist", action: toggleChecklistAction, keyEquivalent: "l")
+        checklist.target = target
+        menu.addItem(checklist)
+
+        let highlight = NSMenuItem(title: "Toggle Highlight", action: toggleHighlightAction, keyEquivalent: "h")
+        highlight.keyEquivalentModifierMask = [.command, .shift]
+        highlight.target = target
+        menu.addItem(highlight)
         menu.addItem(.separator())
 
         // Cmd+V keeps a pasted image; this reads it instead.

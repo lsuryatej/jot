@@ -193,6 +193,14 @@ one-size-fits-all title treatment.
 
 ![Three heading levels above a body line, hashes folded out of view](docs/screenshots/headings.png)
 
+**Highlighting.** Select text and hit Shift-Cmd-H (or the Highlight button)
+to wrap it in `==like this==` — Obsidian's own highlighter syntax, so it
+still renders as a real highlight wherever else the note ends up. The `==`
+markers fold out of view the same way heading hashes do, leaving just the
+painted text behind; hit Shift-Cmd-H again on the highlighted text to strip
+them back off. With nothing selected it drops an empty pair and puts the
+caret between them, ready to type straight into a new highlight.
+
 **Images.** Paste or drop an image and it stays an image, drawn inline. It's
 written to `Attachments/` beside your notes, referenced from the text as
 `![width](Attachments/<id>.png)`, so a note with a picture in it is still
@@ -225,6 +233,10 @@ it in is the saved order. Away from the edge, Ctrl-Cmd-Up and Ctrl-Cmd-Down
 walk the open note through the list one slot at a time. Either way you stay
 on the note you were reading.
 
+**Switch notes from the keyboard.** Cmd-Option-Right and Cmd-Option-Left move
+to the next or previous note, the keyboard equivalent of a two-finger swipe —
+same Safari/Chrome muscle memory as switching tabs.
+
 **Timers.** `5m timer`, `30s timer`, `2h timer`, the keyword is configurable.
 A timer belongs to the note that started it and won't restart itself after
 firing. When one fires you get a proper sound and, if you want it, confetti:
@@ -233,6 +245,13 @@ pick in Settings. The celebration never takes focus from what you're typing.
 
 ![A confetti burst celebrating a finished timer](docs/screenshots/timer.png)
 
+**Pomodoro.** `pomodoro 25/5` starts a work/break cycle — work minutes, then
+break minutes, either side of the slash, keyword configurable separately from
+the plain timer's. The overlay chip labels which half you're in ("Work" in
+red, "Break" in green) and each phase fires the same timer celebration as a
+plain timer before starting the next one automatically; it keeps alternating
+for as long as the directive stays in the note.
+
 **Optional Apple Notes sync.** Off by default. Turn it on and each note is
 pushed into a "Jot" folder in Apple Notes, one direction only. Nothing
 written there is ever read back, and deleting a note in Jot never deletes it
@@ -240,10 +259,20 @@ in Notes. Image sync is still being worked on — a picture in a note
 currently arrives in Notes as a separate file attachment rather than
 appearing inline, see [BACKLOG.md](BACKLOG.md).
 
-**Typography.** Eight curated system fonts, SF Mono through American
-Typewriter, plus size and letter-spacing sliders beside the existing line
-spacing control. Curated rather than a full font panel: everything offered
-ships with macOS, so the zero-dependency stance holds.
+**Typography, per note.** Eight curated system fonts, SF Mono through American
+Typewriter, plus a size slider — set independently for whichever note you have
+open, so switching one note to a serif for reading doesn't drag every other
+note along with it. Reachable two ways: a compact font-name menu and size
+stepper right in the header (hidden along with the rest of the header, Cmd+/),
+or the fuller Typography section in Settings, both edit the same per-note
+choice. Settings shows a separate, smaller "Default for new notes" pair that
+only new notes pick up; Reset next to the per-note controls goes back to it.
+Letter-spacing and line-spacing stay app-wide, beside the existing controls.
+Curated rather than the system Font Panel on purpose: every note-type feature
+here repaints font attributes across the whole note on every keystroke, so a
+per-character font pick from the full Font Book would only ever look like it
+worked before vanishing on the next edit — the standard "Font ▸ Show Fonts…"
+context-menu item is switched off for exactly that reason.
 
 **Paper types.** Six surfaces: Frosted, Glass, Solid, True Dark, Cream, and
 White. The translucent ones take an optional colour tint (graphite, amber,
@@ -256,7 +285,11 @@ nothing but text on paper.
 
 ![A note under a purple glass tint, one of five colour washes over the translucent papers](docs/screenshots/glass-tint.png)
 
-![Display, Appearance, and Typography settings in one panel](docs/screenshots/appearance-settings.png)
+![The Appearance settings pane](docs/screenshots/appearance-settings.png)
+
+*(Screenshot predates the sidebar redesign below — Settings now splits into
+General/Appearance/Typography/Notes & Timers/Privacy & Sync panes rather than
+one long scroll.)*
 
 ## Shortcuts
 
@@ -266,6 +299,8 @@ nothing but text on paper.
 | **Cmd+N** | New note |
 | **Cmd+W** | Close the frontmost window, hides the note or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
+| **Shift+Cmd+H** | Highlight the selection (`==like this==`), or start one at the caret |
+| **Cmd+/** | Toggle the header and footer together |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+F** | Find in the current note |
 | **Shift+Cmd+F** | Search every note, jump straight to the match |
@@ -274,6 +309,7 @@ nothing but text on paper.
 | **Cmd+,** | Settings |
 | **Cmd+Q** | Quit |
 | **Tab** / **Shift+Tab** | Nest or un-nest a checklist item |
+| **Cmd+Option+→** / **Cmd+Option+←** | Switch to the next or previous note |
 | **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** | Move the current note up or down the list |
 | Drag a card's grip (hover, Screen Edge mode) | Reorder notes in the sidebar |
 | Two-finger swipe | Move between notes (single-note display modes); with the header hidden, a brief badge names the note you landed on |
