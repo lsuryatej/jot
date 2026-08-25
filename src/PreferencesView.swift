@@ -435,6 +435,16 @@ struct PreferencesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                LabeledContent("Code") {
+                    TextField("code", text: $settings.codeKeyword)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                Text("First line \"\(settings.effectiveCodeKeyword)\" renders the note as monospaced code. Checklists, headings, highlights, links, and math stay switched off inside it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 LabeledContent("Timer") {
                     TextField("timer", text: $settings.timerKeyword)
                         .textFieldStyle(.roundedBorder)

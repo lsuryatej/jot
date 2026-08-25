@@ -314,6 +314,7 @@ final class SettingsManager: ObservableObject {
         static let windowFrame    = "windowFrame"
         static let syncsToNotes   = "syncsToAppleNotes"
         static let listKeyword    = "listKeyword"
+        static let codeKeyword    = "codeKeyword"
         static let fetchesLiveRates = "fetchesLiveCurrencyRates"
         static let checksForUpdates = "checksForUpdates"
         static let noteFontName   = "noteFontName"
@@ -330,7 +331,7 @@ final class SettingsManager: ObservableObject {
         static let all: Set<String> = [
             displayMode, hotKeyCode, hotKeyMods, timerKeyword, pomodoroKeyword, showsFooter,
             screenEdge, edgeWidth, appearance, appearanceTint, showsHeader, lineSpacing,
-            windowFrame, syncsToNotes, listKeyword, fetchesLiveRates, checksForUpdates,
+            windowFrame, syncsToNotes, listKeyword, codeKeyword, fetchesLiveRates, checksForUpdates,
             noteFontName, noteFontSize, letterSpacing, guide,
             celebrationStyle, timerSound,
         ]
@@ -455,6 +456,19 @@ final class SettingsManager: ObservableObject {
         return trimmed.isEmpty ? "list" : trimmed
     }
 
+    /// A bare keyword on the first line turns the note into a code block.
+    @Published var codeKeyword: String {
+        didSet {
+            let trimmed = codeKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed.isEmpty ? CodeBlock.defaultKeyword : trimmed, forKey: Key.codeKeyword)
+        }
+    }
+
+    var effectiveCodeKeyword: String {
+        let trimmed = codeKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? CodeBlock.defaultKeyword : trimmed
+    }
+
     /// The only network call this app makes by default is none at all.
     /// Off means every currency conversion uses the last cached rate (or the
     /// built-in snapshot, on a fresh install) and nothing is ever fetched.
@@ -557,6 +571,7 @@ final class SettingsManager: ObservableObject {
 
         self.syncsToAppleNotes = defaults.object(forKey: Key.syncsToNotes) as? Bool ?? false
         self.listKeyword = defaults.string(forKey: Key.listKeyword) ?? "list"
+        self.codeKeyword = defaults.string(forKey: Key.codeKeyword) ?? CodeBlock.defaultKeyword
         self.fetchesLiveCurrencyRates = defaults.object(forKey: Key.fetchesLiveRates) as? Bool ?? false
         self.checksForUpdates = defaults.object(forKey: Key.checksForUpdates) as? Bool ?? true
 
