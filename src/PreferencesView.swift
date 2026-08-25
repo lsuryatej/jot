@@ -358,14 +358,31 @@ struct PreferencesView: View {
                     .pickerStyle(.menu)
                     .frame(width: 200)
 
+                    // The size reads as its own label, and the Stepper is
+                    // left bare with `labelsHidden()`. A *titled* Stepper
+                    // inside a grouped `Form` claims the form's label column
+                    // and lays itself out across the row's full width, and
+                    // the `.fixedSize()` this used to carry then pinned that
+                    // spread-out width as non-negotiable: this one row
+                    // reported a 742pt minimum, so the whole pane demanded
+                    // 915pt inside a 620pt window and the fixed-width
+                    // sidebar was compressed to a 25pt sliver with no row
+                    // left under the cursor. That made Settings a dead end
+                    // on this pane, escapable only by resizing the window.
+                    // Measured: with this section alone the pane needs
+                    // 915pt; with either other section alone, 620pt.
+                    // Covered by `tests/ui/SettingsWindowTests.swift`.
+                    Text("\(Int(settings.noteFontSize))pt")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+
                     Stepper(
-                        "\(Int(settings.noteFontSize))pt",
+                        "",
                         value: $settings.noteFontSize,
                         in: SettingsManager.fontSizeRange,
                         step: 1
                     )
-                    .font(.system(.caption, design: .monospaced))
-                    .fixedSize()
+                    .labelsHidden()
                 }
             }
 
