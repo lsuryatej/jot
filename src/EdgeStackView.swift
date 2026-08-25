@@ -304,6 +304,13 @@ struct NoteCardEditor: NSViewRepresentable {
         }
         if textView.string != text {
             textView.string = text
+            // Same reason as the matching block in PlainTextEditor.updateNSView:
+            // the actions on the stack were recorded against the ranges of the
+            // note being swapped out, so leaving them in place lets the next
+            // Cmd+Z edit a note that was never edited, or run off the end of a
+            // shorter one and throw NSRangeException. The history ends where
+            // the note does.
+            textView.undoManager?.removeAllActions()
             textView.applyChecklistStyling()
             textView.recomputeMathResults()
             textView.recomputeLinkMatches()
