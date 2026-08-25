@@ -181,9 +181,32 @@ final class NotesManager: ObservableObject {
             return
         }
         let id = notes[index].id
+        // Which note the user is actually looking at, captured by identity
+        // before the array shifts under it. Clamping the index alone was
+        // wrong for every deletion below the current one: with [A, B, C]
+        // showing B, deleting A left `currentIndex` at 1, which is now C, so
+        // the note on screen silently changed to one the user never asked
+        // for. The clamp happened to give the right answer when the current
+        // note was last, or was the one being deleted, which is why it
+        // survived. `moveNote` just below already tracks the current note by
+        // id across its mutation; this is the same approach.
+        //
+        // Beyond the visible note, `currentIndex`'s `didSet` seeds timer
+        // tracking for whichever note it lands on, and `validateMenuItem` in
+        // Jot.swift reads it to enable the move and switch items, so a wrong
+        // index quietly spread further than the one thing it looked like.
+        let currentID = notes.indices.contains(currentIndex) ? notes[currentIndex].id : nil
         forgetTimerState(for: id)
         notes.remove(at: index)
-        currentIndex = min(currentIndex, notes.count - 1)
+        if let currentID, currentID != id, let stillThere = notes.firstIndex(where: { $0.id == currentID }) {
+            currentIndex = stillThere
+        } else {
+            // The current note itself was deleted, so there is no identity to
+            // restore. Falling to whatever now sits at that index (clamped to
+            // the end) is the existing behaviour and is what a user deleting
+            // the note they are looking at expects.
+            currentIndex = min(currentIndex, notes.count - 1)
+        }
         flush()
     }
 

@@ -304,11 +304,29 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         } else if selection.length == 0 {
             replace(range: selection, with: "====", selecting: NSRange(location: selection.location + 2, length: 0))
         } else {
-            replace(
-                range: selection,
-                with: "==\(ns.substring(with: selection))==",
-                selecting: NSRange(location: selection.location + 2, length: selection.length)
-            )
+            // Not every selection can be expressed as a highlight.
+            // `Highlight.matches` only accepts a span that stays on one line
+            // and holds no `=` of its own, so wrapping `total = 40`, a
+            // selection crossing a newline, or one covering two adjacent
+            // highlights whole emits markers the parser cannot read back:
+            // they stay on screen as literal `==`, the next toggle finds no
+            // span to unwrap, and every further click nests another pair.
+            // Rather than duplicating the parser's rules here, build the
+            // replacement, parse the text it would produce, and only commit
+            // when a real highlight lands over exactly the selected content.
+            //
+            // A refused wrap changes nothing at all — text and selection are
+            // both left as they were. The alternative, quietly narrowing the
+            // selection to its first line or dropping its `=` characters,
+            // would highlight something other than what was selected, which
+            // is a worse surprise than the button doing nothing on input the
+            // syntax has no way to represent.
+            let selected = ns.substring(with: selection)
+            let wrapped = ns.replacingCharacters(in: selection, with: "==\(selected)==") as NSString
+            let contentRange = NSRange(location: selection.location + 2, length: (selected as NSString).length)
+            guard Highlight.matches(in: wrapped).contains(where: { $0.contentRange == contentRange }) else { return }
+
+            replace(range: selection, with: "==\(selected)==", selecting: contentRange)
         }
 
         // `replace` inserts brand-new `==` characters into text the layout
