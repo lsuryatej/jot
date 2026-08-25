@@ -88,6 +88,51 @@ enum Units {
         return .success(a)
     }
 
+    /// Brings `rhs` into `lhs`'s unit so `+` and `-` combine like scales
+    /// instead of adding raw amounts under the left operand's label. The left
+    /// unit wins: "5 km + 3 m" is 5.003 km, not 5003 m.
+    ///
+    /// Returns `rhs` untouched whenever no conversion is called for — one side
+    /// dimensionless, both sides already the same unit, or a tag this table
+    /// does not recognise, which `reconcile` passes through as well.
+    static func aligned(
+        _ lhs: MathExpression.Value,
+        _ rhs: MathExpression.Value
+    ) -> Result<MathExpression.Value, MathExpression.EvalError> {
+        guard let rawLeft = lhs.unit, let rawRight = rhs.unit else { return .success(rhs) }
+
+        // Canonical names, so "kilometers" and "km" are recognised as one unit
+        // and "USD" reaches the currency branch. The result keeps the left
+        // operand's original spelling, which is what the note showed.
+        let left = canonical(rawLeft) ?? rawLeft.lowercased()
+        let right = canonical(rawRight) ?? rawRight.lowercased()
+        if left == right { return .success(rhs) }
+
+        guard let leftDim = dimension[left] ?? currencyDimension(left),
+              let rightDim = dimension[right] ?? currencyDimension(right)
+        else { return .success(rhs) }
+        guard leftDim == rightDim else { return .failure(.incompatibleUnits(rawLeft, rawRight)) }
+
+        if leftDim == "temperature" {
+            // Two different scales have no meaningful sum. Both are affine and
+            // neither reading is a delta, so converting one into the other
+            // would be inventing an interpretation. Refuse the line instead.
+            return .failure(.incompatibleUnits(rawLeft, rawRight))
+        }
+
+        if leftDim == "currency" {
+            let availability = CurrencyRates.availability(from: right, to: left)
+            guard availability == .ok else {
+                return .failure(.currencyRatesUnavailable(availability))
+            }
+            return CurrencyRates.convert(rhs.amount, from: right, to: left)
+                .map { MathExpression.Value(amount: $0.amount, unit: rawLeft) }
+        }
+
+        let base = rhs.amount * (toBase[right] ?? 1)
+        return .success(MathExpression.Value(amount: base / (toBase[left] ?? 1), unit: rawLeft))
+    }
+
     /// Currency codes are not in the physical table; anything three letters
     /// and all-alphabetic that is not a physical unit is assumed to be one, so
     /// "USD to EUR" reconciles without every currency needing an entry here.

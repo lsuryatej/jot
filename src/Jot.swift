@@ -210,6 +210,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] _ in self?.newNoteFromMenu() }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .jotRequestPrivacySettings)
+            .sink { [weak self] _ in self?.openPreferences(pane: .privacy) }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .jotRequestMoveNoteUp)
             .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: -1) }
             .store(in: &cancellables)
@@ -642,7 +646,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func showPreferences() {
+        openPreferences(pane: .general)
+    }
+
+    func openPreferences(pane: SettingsCategory) {
         if let window = preferencesWindow {
+            // The view is already alive, so the pane it should show is sent to
+            // it rather than passed at init the way a fresh window gets it.
+            NotificationCenter.default.post(name: .jotShowSettingsPane, object: pane)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -659,7 +670,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // pane scrolls internally rather than the window needing to grow to
         // fit the tallest one.
         window.minSize = NSSize(width: 560, height: 380)
-        window.contentViewController = NSHostingController(rootView: PreferencesView(settings: settings, notesManager: notesManager))
+        window.contentViewController = NSHostingController(
+            rootView: PreferencesView(settings: settings, notesManager: notesManager, category: pane)
+        )
         window.isReleasedWhenClosed = false
         window.center()
         window.makeKeyAndOrderFront(nil)

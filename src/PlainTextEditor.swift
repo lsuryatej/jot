@@ -721,6 +721,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return true
         }
 
+        // A currency hint says the sum was skipped because of a setting, so
+        // clicking it goes to the setting rather than placing a caret in the
+        // margin, where there is no text to edit anyway.
+        if mathHintRects.contains(where: { $0.insetBy(dx: -4, dy: -2).contains(point) }) {
+            NotificationCenter.default.post(name: .jotRequestPrivacySettings, object: nil)
+            return true
+        }
+
         if NSEvent.modifierFlags.contains(.command), let match = linkMatch(at: point) {
             toggleLinkExpansion(match)
             return true
@@ -962,31 +970,51 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// changes. Evaluated top to bottom in one pass so later lines see
     /// earlier variables — the whole reason this recomputes on every
     /// keystroke rather than tracking a dependency graph.
-    private var mathResults: [(lineRange: NSRange, text: String)] = []
+    /// `isHint` marks a line that produced no number but has a reason worth
+    /// saying, currently only a mixed-currency sum with no usable rate. It is
+    /// drawn muted rather than in the accent colour, and it is clickable.
+    private var mathResults: [(lineRange: NSRange, text: String, isHint: Bool)] = []
+
+    /// Where each hint was last drawn, for hit-testing a click on it. Rebuilt
+    /// on every draw, since the text under it moves as the note is edited.
+    private var mathHintRects: [NSRect] = []
 
     func recomputeMathResults() {
         guard let textStorage else { mathResults = []; return }
         let ns = textStorage.string as NSString
         var environment: [String: MathExpression.Value] = [:]
-        var results: [(NSRange, String)] = []
+        var results: [(NSRange, String, Bool)] = []
 
         ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: [.byLines]) { line, lineRange, _, _ in
             guard let line, let node = MathExpression.parse(line) else { return }
-            if case .success(let value) = MathExpression.evaluate(node, environment: &environment) {
-                results.append((lineRange, MathExpression.format(value)))
+            switch MathExpression.evaluate(node, environment: &environment) {
+            case .success(let value):
+                results.append((lineRange, MathExpression.format(value), false))
+            case .failure(let error):
+                guard let hint = MathExpression.hint(for: error) else { return }
+                results.append((lineRange, hint, true))
             }
         }
         mathResults = results
     }
 
     private func drawMathResults(in dirtyRect: NSRect) {
+        mathHintRects = []
         guard let layoutManager, let textContainer, !mathResults.isEmpty else { return }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: max(10, baseFont.pointSize - 1), weight: .medium),
+        let font = NSFont.monospacedSystemFont(ofSize: max(10, baseFont.pointSize - 1), weight: .medium)
+        let resultAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
             .foregroundColor: ink.accent,
         ]
+        // A hint is not an answer, so it does not get the accent the answers
+        // use. Muted, it reads as an aside rather than as a result.
+        let hintAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: ink.secondary,
+        ]
 
-        for (lineRange, text) in mathResults {
+        for (lineRange, text, isHint) in mathResults {
+            let attributes = isHint ? hintAttributes : resultAttributes
             let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
             guard glyphRange.length > 0 || lineRange.length == 0 else { continue }
             let fragment = layoutManager.lineFragmentUsedRect(
@@ -1011,6 +1039,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let x = Self.mathResultX(textEnd: textEnd, resultWidth: size.width, containerRight: rightEdge)
             let drawRect = NSRect(x: x, y: lineRect.minY + (lineRect.height - size.height) / 2, width: size.width, height: size.height)
             (text as NSString).draw(in: drawRect, withAttributes: attributes)
+            if isHint { mathHintRects.append(drawRect) }
         }
     }
 
