@@ -1261,6 +1261,49 @@ func runAllTests() {
         equal(store.load().map(\.text), [""], "falls back cleanly")
     }
 
+    suite("an unreadable file is moved aside instead of being overwritten") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-quarantine-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("notes.json")
+        let corrupt = Data("[{\"id\":\"11111111-1111-1111-1111-111111111111\",\"text\":\"half a rea".utf8)
+        try? corrupt.write(to: url)
+
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+        equal(store.load().map(\.text), [""], "the user still gets a usable note")
+
+        let quarantined = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?
+            .filter { $0.hasPrefix("notes.unreadable-") } ?? []
+        equal(quarantined.count, 1, "the unreadable file was preserved under a dated name")
+        let kept = quarantined.first.map { dir.appendingPathComponent($0) }
+        equal(kept.flatMap { try? Data(contentsOf: $0) }, corrupt, "byte for byte, so it can be recovered by hand")
+
+        // The debounced save that follows the user's first keystroke used to
+        // land on top of the unreadable file. It must not reach the copy.
+        store.save([Note(text: "typed after launch")])
+        equal(kept.flatMap { try? Data(contentsOf: $0) }, corrupt, "a later save does not touch the preserved copy")
+        equal(store.load().map(\.text), ["typed after launch"], "and the live file is the new, readable one")
+    }
+
+    suite("a second unreadable load does not clobber the first preserved copy") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-quarantine2-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("notes.json")
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+
+        try? Data("first wreck".utf8).write(to: url)
+        _ = store.load()
+        try? Data("second wreck".utf8).write(to: url)
+        _ = store.load()
+
+        let quarantined = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?
+            .filter { $0.hasPrefix("notes.unreadable-") }.sorted() ?? []
+        equal(quarantined.count, 2, "both copies survive, even inside the same second")
+        let bodies = Set(quarantined.compactMap { try? String(contentsOf: dir.appendingPathComponent($0), encoding: .utf8) })
+        equal(bodies, Set(["first wreck", "second wreck"]), "with their original contents")
+    }
+
     // MARK: - Global search
 
     suite("global search finds matches across every note") {
