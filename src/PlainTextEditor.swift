@@ -1045,6 +1045,32 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// written to disk.
     private var expandedLinks: Set<String> = []
 
+    /// Swaps the document for a different note's text and restyles it.
+    ///
+    /// This is the body of the note-switch branch in
+    /// `PlainTextEditor.updateNSView`, kept on the view so the sequence has one
+    /// home and can be driven directly by a test. Callers are responsible for
+    /// only reaching it on a genuine divergence between the model and the view.
+    func loadNoteText(_ text: String) {
+        let caret = selectedRange().location
+        string = text
+        // The stack that was just built up belongs to the note being left. Its
+        // actions are recorded against that note's ranges, and the text view
+        // has no idea the document underneath it changed, so the next Cmd+Z
+        // would replay the previous note's edit into this one: characters
+        // vanish from a note nobody touched, or the recorded offset lands past
+        // the end of a shorter note and the text storage raises
+        // NSRangeException. Either way `scheduleSave` writes the damage to
+        // notes.json 0.6s later. Undo history belongs to a note, and this is
+        // where a note ends, so the stack goes with it.
+        undoManager?.removeAllActions()
+        let length = (text as NSString).length
+        setSelectedRange(NSRange(location: min(caret, length), length: 0))
+        applyChecklistStyling()
+        recomputeLinkMatches()
+        applyLinkFolding()
+    }
+
     func recomputeLinkMatches() {
         // Overriding an NSTextView designated initializer to wire this up
         // once broke the plain `ChecklistTextView()` initializer every
@@ -1545,13 +1571,7 @@ struct PlainTextEditor: NSViewRepresentable {
         // switch). Assigning unconditionally would fight the user's typing and
         // reset undo on every keystroke.
         if textView.string != text {
-            let caret = textView.selectedRange().location
-            textView.string = text
-            let length = (text as NSString).length
-            textView.setSelectedRange(NSRange(location: min(caret, length), length: 0))
-            textView.applyChecklistStyling()
-            textView.recomputeLinkMatches()
-            textView.applyLinkFolding()
+            textView.loadNoteText(text)
         }
 
         // Runs after the text-diff block above, so a jump into a different
