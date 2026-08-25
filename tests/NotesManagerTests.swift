@@ -1074,6 +1074,81 @@ func runAllTests() {
         check(result != nil && result! > 0, "converts to a positive amount")
     }
 
+    /// The rendered margin string, so a unit-carrying result is asserted the
+    /// way the note actually shows it rather than as a bare Double.
+    func formatLine(_ line: String, env: inout [String: MathExpression.Value]) -> String? {
+        guard let node = MathExpression.parse(line) else { return nil }
+        guard case .success(let value) = MathExpression.evaluate(node, environment: &env) else { return nil }
+        return MathExpression.format(value)
+    }
+
+    /// The hint drawn where the number would have gone, or nil when the line
+    /// simply produces nothing.
+    func hintLine(_ line: String, env: inout [String: MathExpression.Value]) -> String? {
+        guard let node = MathExpression.parse(line) else { return nil }
+        guard case .failure(let error) = MathExpression.evaluate(node, environment: &env) else { return nil }
+        return MathExpression.hint(for: error)
+    }
+
+    suite("mixed units convert before combining, left unit wins") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(formatLine("5 km + 3 m", env: &env), "5.003 km", "metres folded into kilometres")
+        equal(formatLine("1 kg + 500 g", env: &env), "1.5 kg", "grams folded into kilograms")
+        equal(formatLine("1 h + 30 min", env: &env), "1.5 h", "minutes folded into hours")
+        equal(formatLine("1 gb + 500 mb", env: &env), "1.5 gb", "megabytes folded into gigabytes")
+        equal(formatLine("100 cm - 1 m", env: &env), "0 cm", "subtraction converts too")
+        equal(formatLine("1 mi + 1 km", env: &env), "1.6214 mi", "across measurement systems")
+        equal(formatLine("3 m + 5 km", env: &env), "5003 m", "the left unit wins whichever side is larger")
+        equal(formatLine("5 kilometers + 3 meters", env: &env), "5.003 kilometers",
+              "spelled-out aliases convert, and the left spelling is kept")
+    }
+
+    suite("same-unit and unitless arithmetic is untouched") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(formatLine("5 km + 3 km", env: &env), "8 km", "same unit adds directly")
+        equal(formatLine("20 c + 5 c", env: &env), "25 c", "same temperature scale still adds")
+        equal(formatLine("2 + 2", env: &env), "4", "no units at all")
+        equal(formatLine("2 + 3 km", env: &env), "5 km", "a bare number takes the other side's unit")
+        equal(formatLine("5 km * 2", env: &env), "10 km", "scaling by a plain number")
+    }
+
+    suite("explicit conversion still works after the arithmetic fix") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(formatLine("1 km to m", env: &env), "1000 m", "to")
+        equal(formatLine("1 h to min", env: &env), "60 min", "to, time")
+        equal(formatLine("100 cm as m", env: &env), "1 m", "as")
+        equal(formatLine("20 c to f", env: &env), "68 f", "affine conversion is unaffected")
+    }
+
+    suite("mixing temperature scales produces no result") {
+        var env: [String: MathExpression.Value] = [:]
+        // Both scales are affine and neither reading is a delta, so there is
+        // no answer to pick. The margin stays blank, as it does for prose.
+        equal(formatLine("20 c + 5 f", env: &env), nil, "celsius plus fahrenheit refuses")
+        equal(formatLine("20 c - 5 k", env: &env), nil, "celsius minus kelvin refuses")
+        equal(hintLine("20 c + 5 f", env: &env), nil, "and shows no hint either")
+        equal(formatLine("5 km + 3 kg", env: &env), nil, "unrelated dimensions still refuse")
+    }
+
+    suite("mixed currency with live rates off shows a hint, never a raw sum") {
+        var env: [String: MathExpression.Value] = [:]
+        CurrencyRates.liveRatesEnabled = false
+        equal(formatLine("5 USD + 3 EUR", env: &env), nil, "no number at all")
+        equal(hintLine("5 USD + 3 EUR", env: &env), "rates off", "the reason is shown instead")
+        equal(formatLine("5 USD + 3 USD", env: &env), "8 USD", "one currency needs no rate")
+    }
+
+    suite("mixed currency with live rates on") {
+        var env: [String: MathExpression.Value] = [:]
+        CurrencyRates.liveRatesEnabled = true
+        let sum = evalLine("5 USD + 3 EUR", env: &env)
+        check(sum != nil && sum! > 5 && sum! < 20, "converts at the current rate rather than adding raw")
+        equal(formatLine("5 USD + 3 EUR", env: &env).map { $0.hasSuffix(" USD") }, true, "labelled with the left currency")
+        equal(evalLine("5 USD + 3 EUR", env: &env).map { $0 == 8 }, false, "specifically not the raw 8")
+        equal(hintLine("5 USD + 3 ZZZ", env: &env), "no rates", "an unknown currency has no rate to use")
+        CurrencyRates.liveRatesEnabled = false
+    }
+
     suite("mutation check: reintroducing the try?-flatten bug would fail here") {
         // Regression guard for the specific bug that made every dimensionless
         // calculation fail: Swift auto-flattens `try? throwingCall().get()`

@@ -361,6 +361,22 @@ enum MathExpression {
         case unknownUnit(String)
         case incompatibleUnits(String, String)
         case divisionByZero
+        /// Two different currencies met under `+` or `-` with no rate that may
+        /// be used. Carries which of the two reasons applies, so the editor can
+        /// say which one rather than just going blank.
+        case currencyRatesUnavailable(CurrencyRates.Availability)
+    }
+
+    /// A few failures are worth a word in the margin instead of silence: a
+    /// mixed-currency sum looks like it should work, so the reason it did not
+    /// goes where the number would have been. Every other failure stays blank.
+    static func hint(for error: EvalError) -> String? {
+        guard case .currencyRatesUnavailable(let availability) = error else { return nil }
+        switch availability {
+        case .ratesOff: return "rates off"
+        case .noRate: return "no rates"
+        case .ok: return nil
+        }
     }
 
     /// A number, optionally tagged with the unit it is expressed in.
@@ -476,8 +492,18 @@ enum MathExpression {
         }
 
         switch op {
-        case "+": return .success(Value(amount: lhs.amount + rhs.amount, unit: unit))
-        case "-": return .success(Value(amount: lhs.amount - rhs.amount, unit: unit))
+        case "+", "-":
+            // Adding two amounts only means anything once they are expressed in
+            // the same unit. `reconcile` above establishes they share a
+            // dimension and hands back the label; this converts the right side
+            // into that label's unit so the amounts actually line up.
+            let right: Value
+            switch Units.aligned(lhs, rhs) {
+            case .success(let converted): right = converted
+            case .failure(let error): return .failure(error)
+            }
+            let amount = op == "+" ? lhs.amount + right.amount : lhs.amount - right.amount
+            return .success(Value(amount: amount, unit: unit))
         case "*": return .success(Value(amount: lhs.amount * rhs.amount, unit: unit ?? rhs.unit ?? lhs.unit))
         case "/":
             guard rhs.amount != 0 else { return .failure(.divisionByZero) }

@@ -16,6 +16,30 @@ enum CurrencyRates {
     ]
     private static var lastFetched: Date?
 
+    /// Mirrors `SettingsManager.fetchesLiveCurrencyRates`, pushed in from the
+    /// app at launch and whenever the toggle changes. The math evaluator runs
+    /// on every keystroke and has no view of the settings object, so the
+    /// policy lives here, next to the rates it governs. Defaults to off, the
+    /// same as the setting.
+    static var liveRatesEnabled = false
+
+    /// Whether two currencies can be combined implicitly, and if not, why.
+    enum Availability {
+        case ok
+        case ratesOff
+        case noRate
+    }
+
+    /// Implicit `+` and `-` hold a higher bar than the explicit `to` operator.
+    /// `to` is a deliberate ask, so it falls back to the cached table or the
+    /// built-in snapshot. A sum the user never asked to convert should show
+    /// nothing rather than a number computed from a rate they opted out of.
+    static func availability(from: String, to: String) -> Availability {
+        guard liveRatesEnabled else { return .ratesOff }
+        guard rates[from.lowercased()] != nil, rates[to.lowercased()] != nil else { return .noRate }
+        return .ok
+    }
+
     private static let cacheURL = NoteStore.defaultFileURL()
         .deletingLastPathComponent()
         .appendingPathComponent("currency-rates.json")
@@ -47,6 +71,7 @@ enum CurrencyRates {
     /// call — then refreshes in the background only if live rates are turned
     /// on. Call once at launch, and again whenever the setting changes.
     static func bootstrap(fetchesLive: Bool) {
+        liveRatesEnabled = fetchesLive
         loadFromDisk()
         if fetchesLive { refreshIfNeeded() }
     }
@@ -57,6 +82,7 @@ enum CurrencyRates {
     /// that can put a byte on the network, so the check happens here, at the
     /// single choke point, rather than being trusted to every call site.
     static func refreshIfNeeded(fetchesLive: Bool = true) {
+        liveRatesEnabled = fetchesLive
         guard fetchesLive else { return }
         if let lastFetched, Date().timeIntervalSince(lastFetched) < refreshInterval { return }
         Task.detached(priority: .utility) {

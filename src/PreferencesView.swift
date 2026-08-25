@@ -41,13 +41,19 @@ extension Notification.Name {
     /// such ambiguity to have.
     static let jotRequestToggleChecklistFromHeader = Notification.Name("JotRequestToggleChecklistFromHeader")
     static let jotRequestToggleHighlightFromHeader = Notification.Name("JotRequestToggleHighlightFromHeader")
+    /// Posted when the text view's "rates off" / "no rates" hint is clicked;
+    /// observed by AppDelegate, the one place that owns the settings window.
+    static let jotRequestPrivacySettings = Notification.Name("JotRequestPrivacySettings")
+    /// Posted by AppDelegate at a settings window that is already open, to
+    /// move it to a given pane. A fresh window picks its pane at init instead.
+    static let jotShowSettingsPane = Notification.Name("JotShowSettingsPane")
 }
 
 /// A settings pane. Replaces the old single long scroll — five sections
 /// scanned top to bottom in one column got unwieldy once per-note typography,
 /// Pomodoro, and the rest piled on. Grouped the way a person looks for a
 /// setting, not the order features shipped in.
-private enum SettingsCategory: String, CaseIterable, Identifiable {
+enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
     case appearance
     case typography
@@ -83,7 +89,16 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
 struct PreferencesView: View {
     @ObservedObject var settings: SettingsManager
     @ObservedObject var notesManager: NotesManager
-    @State private var category: SettingsCategory? = .general
+    @State private var category: SettingsCategory?
+
+    /// `category` starts wherever the caller opened the window to, so a fresh
+    /// window opened from the currency hint lands on Privacy & Sync without a
+    /// visible jump from General.
+    init(settings: SettingsManager, notesManager: NotesManager, category: SettingsCategory = .general) {
+        self.settings = settings
+        self.notesManager = notesManager
+        _category = State(initialValue: category)
+    }
 
     /// The font picker edits whichever note is currently open, not the app-wide
     /// default — so changing it on one note no longer changes every other one.
@@ -136,6 +151,10 @@ struct PreferencesView: View {
         // this view's ideal size "however big the window already is" rather
         // than something content can shrink out from under.
         .frame(minWidth: 620, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
+        .onReceive(NotificationCenter.default.publisher(for: .jotShowSettingsPane)) { note in
+            guard let pane = note.object as? SettingsCategory else { return }
+            category = pane
+        }
     }
 
     private var sidebar: some View {
