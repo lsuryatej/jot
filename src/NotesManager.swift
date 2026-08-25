@@ -356,7 +356,20 @@ final class NotesManager: ObservableObject {
         let ns = text as NSString
         guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
               let workMinutes = Int(ns.substring(with: match.range(at: 1))),
-              let breakMinutes = Int(ns.substring(with: match.range(at: 2)))
+              let breakMinutes = Int(ns.substring(with: match.range(at: 2))),
+              // Both halves must be a real duration. A cycle alternates
+              // between them forever, so a zero-length phase fires the
+              // instant it starts: "pomodoro 0/0" put the app in a tight
+              // loop firing the celebration (a full-screen confetti window
+              // and a sound) on every single tick, with no way out but
+              // editing the directive away. "pomodoro 0/5" is the same
+              // fault spread thinner, a celebration every five minutes
+              // forever. A plain "0m timer" is unaffected and still fires
+              // once, because a timer ends rather than repeating.
+              // Rejecting the directive here rather than clamping it means
+              // degenerate text stays inert, the same way any other
+              // unparseable line does.
+              workMinutes > 0, breakMinutes > 0
         else { return nil }
 
         return PomodoroDirective(

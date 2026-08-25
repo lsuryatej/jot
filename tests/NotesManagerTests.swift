@@ -347,6 +347,37 @@ func runAllTests() {
         )
     }
 
+    // A cycle alternates between its two phases forever, so a zero-length
+    // phase fires the instant it starts. "pomodoro 0/0" used to put the app
+    // in a tight loop, firing the celebration on every tick with no way out
+    // but editing the directive away. Both halves have to be real durations
+    // for the directive to count at all.
+    suite("a pomodoro phase of zero minutes is not a directive") {
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 0/0")?.source, nil, "both halves zero")
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 0/5")?.source, nil, "zero work")
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 25/0")?.source, nil, "zero break")
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 1/1")?.workDuration, 60, "one minute each is fine")
+    }
+
+    // Drives the real per-tick loop `ContentView.updateTimer` runs, counting
+    // how many times the celebration would fire. The bug this covers was not
+    // visible in the parser alone: it only appeared once a fired phase
+    // scheduled the next one.
+    suite("a zero-length pomodoro does not fire the celebration on every tick") {
+        let manager = makeManager()
+        manager.currentText = "pomodoro 0/0"
+        var fires = 0
+        for _ in 0..<12 {
+            guard let end = manager.activeTimerEnd else { break }
+            if end.timeIntervalSince(Date()) <= 0 {
+                fires += 1
+                manager.timerDidFire()
+            }
+        }
+        equal(fires, 0, "twelve ticks, no celebration, because the directive never starts")
+        equal(manager.activeTimerEnd, nil, "and nothing is counting down")
+    }
+
     suite("a pomodoro cycle starts in the work phase and alternates when it fires") {
         let m = makeManager()
         m.currentText = "pomodoro 25/5"
