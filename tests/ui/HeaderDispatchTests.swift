@@ -32,9 +32,7 @@ private func makeHostedTextView(_ text: String) -> (window: NSWindow, view: Chec
 
     window.contentView = view
     window.center()
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
-    pump(1.0)
+    bringUpAndWaitUntilKey(window)
     window.makeFirstResponder(view)
     pump(0.2)
     return (window, view)

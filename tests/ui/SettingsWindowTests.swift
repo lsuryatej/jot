@@ -74,9 +74,7 @@ func openSettingsWindow(settings: SettingsManager, notes: NotesManager) -> NSWin
     window.contentViewController = NSHostingController(rootView: PreferencesView(settings: settings, notesManager: notes))
     window.isReleasedWhenClosed = false
     window.center()
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
-    pump(1.0)
+    bringUpAndWaitUntilKey(window)
     return window
 }
 

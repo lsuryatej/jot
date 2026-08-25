@@ -37,8 +37,33 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$(mktemp -d)"
 OUT="$BUILD_DIR/JotUITests"
 
+# These tests put a real window on screen and ask AppKit to make it key, which
+# is a machine-wide competition: two runs at once both ask to be frontmost, and
+# the loser's synthetic clicks land in a window that is not key, where SwiftUI
+# treats the first click as activation rather than as a press. That is not
+# hypothetical. Running several of these concurrently produced a 30/40 run
+# whose ten failures were all downstream of one window never coming up. A lock
+# directory is the atomic primitive available everywhere; macOS has no flock.
+LOCK_DIR="${TMPDIR:-/tmp}/jot-ui-tests.lock"
+LOCK_WAIT=${JOT_UI_TEST_LOCK_WAIT:-600}
+lock_held=""
+waited=0
+until mkdir "$LOCK_DIR" 2>/dev/null; do
+    if [ "$waited" -ge "$LOCK_WAIT" ]; then
+        echo "error: another UI test run has held $LOCK_DIR for ${LOCK_WAIT}s." >&2
+        echo "If no run is active, remove that directory and try again." >&2
+        exit 1
+    fi
+    [ "$waited" = 0 ] && echo "waiting for another UI test run to finish..."
+    sleep 2
+    waited=$((waited + 2))
+done
+lock_held=1
+
 cleanup() {
     rm -rf "$BUILD_DIR"
+    [ -n "$lock_held" ] && rmdir "$LOCK_DIR" 2>/dev/null
+    return 0
 }
 trap cleanup EXIT
 
