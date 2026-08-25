@@ -197,3 +197,60 @@ func measuredSidebarWidth(_ view: NSView, yFromTop: CGFloat) -> CGFloat? {
     guard bestDelta > 0.02 else { return nil }
     return CGFloat(bestX) / scaleX
 }
+
+// MARK: - Key window
+
+/// Orders `window` front and waits until AppKit actually makes it key,
+/// returning whether it got there.
+///
+/// Measured on this machine, four trials each: with no `NSApp.activate` call
+/// a window in an `.accessory` binary never becomes key at all, and with one
+/// it becomes key in about 0.05s every time. So activation is required here,
+/// not belt and braces.
+///
+/// The reason this retries instead of pumping for a fixed interval: activation
+/// is a machine-wide competition, and a second copy of this suite running at
+/// the same time asks to be frontmost too. Whichever process asks last wins,
+/// and the loser's clicks then land in a window that is not key, where SwiftUI
+/// treats the first click as activation rather than as a press. That produced
+/// runs of 30/40 where the ten failures were all downstream of one window
+/// failing to come up. `test-ui.sh` now takes a machine-wide lock so two runs
+/// cannot overlap; this retry covers the rest, and keeps the ordinary
+/// uncontended case as fast as it was.
+@discardableResult
+@MainActor
+func bringUpAndWaitUntilKey(_ window: NSWindow, timeout: Double = 5.0) -> Bool {
+    window.makeKeyAndOrderFront(nil)
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    var becameKey = false
+    while Date() < deadline {
+        NSApp.activate(ignoringOtherApps: true)
+        pump(0.05)
+        if window.isKeyWindow { becameKey = true; break }
+        window.makeKey()
+    }
+    waitForStableFrame(window)
+    return becameKey && window.isKeyWindow
+}
+
+/// Pumps until the window's frame stops changing, or `timeout` passes.
+///
+/// Key status arrives in about 0.05s, but `NSHostingController` is still
+/// sizing the window from its SwiftUI content for a while after that. The
+/// first version of `bringUpAndWaitUntilKey` returned the moment the window
+/// went key and replaced a flat `pump(1.0)`, which measured the frame before
+/// it had settled and broke all five "window frame is unchanged" checks.
+/// Waiting for two consecutive identical samples settles on whatever the real
+/// value is instead of guessing how long that takes, so it stays correct on a
+/// slower machine and stays fast on this one.
+@MainActor
+func waitForStableFrame(_ window: NSWindow, timeout: Double = 3.0) {
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    var previous = window.frame
+    while Date() < deadline {
+        pump(0.1)
+        let current = window.frame
+        if current == previous { return }
+        previous = current
+    }
+}
