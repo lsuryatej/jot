@@ -1318,3 +1318,51 @@ func runAllTests() {
         equal(LinkShrink.matches(in: text).count, 2, "both links found")
     }
 }
+
+// Deleting a note below the one on screen used to leave `currentIndex`
+// pointing at whatever shifted into that slot, silently changing the visible
+// note. Reachable from the delete button on any Screen Edge card.
+func runDeleteKeepsCurrentNoteTests() {
+    suite("deleting a note keeps the user on the note they were reading") {
+        let manager = makeManager(seed: ["A", "B", "C"])
+        manager.currentIndex = 1
+        equal(manager.currentText, "B", "starting on B")
+        manager.deleteNote(at: 0)
+        equal(manager.currentText, "B", "deleting A above it leaves B on screen")
+
+        let two = makeManager(seed: ["A", "B", "C"])
+        two.currentIndex = 1
+        two.deleteNote(at: 2)
+        equal(two.currentText, "B", "deleting C below it also leaves B on screen")
+
+        let three = makeManager(seed: ["A", "B", "C"])
+        three.currentIndex = 1
+        three.deleteNote(at: 1)
+        equal(three.currentText, "C", "deleting the note you are on falls to the next one")
+
+        let last = makeManager(seed: ["A", "B", "C"])
+        last.currentIndex = 2
+        last.deleteNote(at: 2)
+        equal(last.currentText, "B", "deleting the last note falls back to the previous one")
+
+        // Two deletions in a row, each using the state the previous one left.
+        let chained = makeManager(seed: ["A", "B", "C", "D"])
+        chained.currentIndex = 3
+        chained.deleteNote(at: 0)
+        equal(chained.currentText, "D", "still on D after the first deletion")
+        chained.deleteNote(at: 0)
+        equal(chained.currentText, "D", "and after the second")
+    }
+
+    // A countdown belongs to the note that started it, so deleting a
+    // different note must not cancel it.
+    suite("deleting an unrelated note leaves a running countdown alone") {
+        let manager = makeManager(seed: ["A", "B", "C"])
+        manager.currentIndex = 1
+        manager.currentText = "25m timer"
+        check(manager.activeTimerEnd != nil, "B owns a running timer")
+        manager.deleteNote(at: 0)
+        check(manager.activeTimerEnd != nil, "deleting A does not cancel it")
+        equal(manager.currentText, "25m timer", "and B is still the note on screen")
+    }
+}
