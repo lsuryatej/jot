@@ -108,6 +108,7 @@ struct NoteCard: View {
                 lineHeightMultiple: settings.effectiveLineSpacing,
                 baseFont: settings.effectiveEditorFont,
                 listKeyword: settings.effectiveListKeyword,
+                codeKeyword: settings.effectiveCodeKeyword,
                 ink: settings.effectiveInk,
                 onHeightChange: { height = $0 }
             )
@@ -236,6 +237,7 @@ struct NoteCardEditor: NSViewRepresentable {
     var lineHeightMultiple: Double
     var baseFont: NSFont
     var listKeyword: String
+    var codeKeyword: String
     var ink: InkTheme
     var onHeightChange: (CGFloat) -> Void
 
@@ -272,6 +274,7 @@ struct NoteCardEditor: NSViewRepresentable {
 
         textView.stylesFirstLineAsTitle = true
         textView.listKeyword = listKeyword
+        textView.codeKeyword = codeKeyword
         // Repaints text and caret itself, superseding the labelColor above.
         textView.ink = ink
         textView.lineHeightMultiple = lineHeightMultiple
@@ -292,6 +295,7 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.onHeightChange = onHeightChange
 
         textView.listKeyword = listKeyword
+        textView.codeKeyword = codeKeyword
         if textView.lineHeightMultiple != lineHeightMultiple {
             textView.lineHeightMultiple = lineHeightMultiple
             textView.applyChecklistStyling()

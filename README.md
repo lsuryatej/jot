@@ -157,6 +157,14 @@ real task list in Obsidian, Bear, or GitHub.
 
 ![A checklist on translucent paper, completed items struck through](docs/screenshots/checklist.png)
 
+**Code blocks.** Type `code` alone on the first line and the whole note
+renders as monospaced code. Everything this app normally reads out of your
+text stays switched off inside it: no checklists, no headings, no
+highlights, no shrunk links, no math results. `==` is an operator again and
+`# ` is a comment. The keyword is configurable in Settings, like `list`.
+Cmd+C with nothing selected copies the whole block, keyword line excluded,
+so you can put the caret anywhere in it and paste the code straight out.
+
 **Ordered lists.** Type `1.` or `a.` or `iv.` at the start of a line,
 anywhere in any note, and it's a list item. Return continues it — `2.`, then
 `3.`, or `b.`, or `iii.` — case preserved, and Return on an empty item ends
@@ -299,6 +307,7 @@ one long scroll.)*
 | **Cmd+N** | New note |
 | **Cmd+W** | Close the frontmost window, hides the note or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
+| **Cmd+C** (nothing selected, in a `code` note) | Copy the whole code block |
 | **Shift+Cmd+H** | Highlight the selection (`==like this==`), or start one at the caret |
 | **Cmd+/** | Toggle the header and footer together |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
@@ -373,6 +382,7 @@ apply at all, a normal Xcode install should just work.
 | `src/UpdateChecker.swift` | Opt-out GitHub release check |
 | `src/TextStatistics.swift` | Word counts and selection sum/average |
 | `src/Checklist.swift` | Checklist parsing, rewriting, and list mode |
+| `src/CodeBlock.swift` | Code-block keyword matching and the copyable body |
 | `src/OrderedList.swift` | Numbered/lettered/roman list parsing and continuation |
 | `src/Headings.swift` | Heading line parsing and marker ranges |
 | `src/ThemeNote.swift` | Theme-as-note parsing and derived palettes |
@@ -398,7 +408,7 @@ apply at all, a normal Xcode install should just work.
 | `scripts/release.sh` | Builds and packages a release zip |
 | `install.sh` | The curl-installable install path |
 
-`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `OrderedList`,
+`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `CodeBlock`, `OrderedList`,
 `GlobalSearch`, `LinkShrink`, and `Attachments` are deliberately free of
 SwiftUI and AppKit, so every rule in them is covered by a dependency-free
 test. The theme parser, glass tints, and celebration configuration touch
