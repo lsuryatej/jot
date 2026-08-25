@@ -108,6 +108,68 @@ func runHighlightTests() {
         equal(view.string, "remember this please", "the whole real span is stripped regardless of exactly what was selected")
     }
 
+    // Regression coverage for the second half of the same story: a selection
+    // the `==...==` syntax simply cannot express. `Highlight.regex` refuses a
+    // span that contains an `=` of its own or crosses a line, so wrapping one
+    // of those used to emit markers no parser could read back — they showed up
+    // as literal `==` on screen, the next toggle found no span to unwrap, and
+    // every further click nested another pair. Each case below chains real
+    // repeated toggles, feeding each call the selection the previous one
+    // actually left behind, which is what a second and third real click do.
+    suite("Cmd+Shift+H refuses a selection containing an `=`, and keeps refusing it") {
+        let view = makeTextView("total = 40")
+        view.setSelectedRange(NSRange(location: 0, length: 10))
+        view.toggleHighlight(nil)
+        equal(view.string, "total = 40", "the line is left exactly as it was, not wrapped into markers nothing can read back")
+        equal(view.selectedRange(), NSRange(location: 0, length: 10), "and the selection is left alone too")
+
+        // No re-selection between clicks: this is the state the previous call
+        // left behind, the same as a real second and third click.
+        view.toggleHighlight(nil)
+        view.toggleHighlight(nil)
+        equal(view.string, "total = 40", "two more clicks still change nothing, rather than nesting ====total = 40====")
+    }
+
+    suite("Cmd+Shift+H refuses a selection spanning more than one line, and keeps refusing it") {
+        let view = makeTextView("foo\nbar")
+        view.setSelectedRange(NSRange(location: 0, length: 7))
+        view.toggleHighlight(nil)
+        equal(view.string, "foo\nbar", "a highlight cannot cross a line, so nothing is wrapped")
+
+        view.toggleHighlight(nil)
+        equal(view.string, "foo\nbar", "a second click does not nest a further pair either")
+    }
+
+    suite("Cmd+Shift+H refuses a selection spanning two adjacent highlights, and keeps refusing it") {
+        // The selection covers both spans whole, so it sits inside neither and
+        // falls through to the wrap branch — where `====a== ==b====` would be
+        // literal text no parser reads as anything.
+        let view = makeTextView("==a== ==b==")
+        view.setSelectedRange(NSRange(location: 0, length: 11))
+        view.toggleHighlight(nil)
+        equal(view.string, "==a== ==b==", "both existing highlights survive untouched")
+
+        view.toggleHighlight(nil)
+        equal(view.string, "==a== ==b==", "and a second click still leaves them alone")
+    }
+
+    suite("a refused wrap does not stop the next, legal one from working") {
+        // The refusal is per-call, not a latched state: narrowing the
+        // selection to something the syntax can represent must still wrap, and
+        // toggling that again must still round-trip.
+        let view = makeTextView("total = 40")
+        view.setSelectedRange(NSRange(location: 0, length: 10))
+        view.toggleHighlight(nil)
+        equal(view.string, "total = 40", "the whole-line selection is refused")
+
+        view.setSelectedRange(NSRange(location: 0, length: 5))  // "total"
+        view.toggleHighlight(nil)
+        equal(view.string, "==total== = 40", "a selection the syntax can express still wraps")
+
+        view.toggleHighlight(nil)
+        equal(view.string, "total = 40", "and round-trips off again on the selection that wrap left behind")
+    }
+
     suite("Cmd+Shift+H with nothing selected opens an empty pair") {
         let view = makeTextView("note: ")
         view.setSelectedRange(NSRange(location: 6, length: 0))

@@ -181,9 +181,32 @@ final class NotesManager: ObservableObject {
             return
         }
         let id = notes[index].id
+        // Which note the user is actually looking at, captured by identity
+        // before the array shifts under it. Clamping the index alone was
+        // wrong for every deletion below the current one: with [A, B, C]
+        // showing B, deleting A left `currentIndex` at 1, which is now C, so
+        // the note on screen silently changed to one the user never asked
+        // for. The clamp happened to give the right answer when the current
+        // note was last, or was the one being deleted, which is why it
+        // survived. `moveNote` just below already tracks the current note by
+        // id across its mutation; this is the same approach.
+        //
+        // Beyond the visible note, `currentIndex`'s `didSet` seeds timer
+        // tracking for whichever note it lands on, and `validateMenuItem` in
+        // Jot.swift reads it to enable the move and switch items, so a wrong
+        // index quietly spread further than the one thing it looked like.
+        let currentID = notes.indices.contains(currentIndex) ? notes[currentIndex].id : nil
         forgetTimerState(for: id)
         notes.remove(at: index)
-        currentIndex = min(currentIndex, notes.count - 1)
+        if let currentID, currentID != id, let stillThere = notes.firstIndex(where: { $0.id == currentID }) {
+            currentIndex = stillThere
+        } else {
+            // The current note itself was deleted, so there is no identity to
+            // restore. Falling to whatever now sits at that index (clamped to
+            // the end) is the existing behaviour and is what a user deleting
+            // the note they are looking at expects.
+            currentIndex = min(currentIndex, notes.count - 1)
+        }
         flush()
     }
 
@@ -356,7 +379,20 @@ final class NotesManager: ObservableObject {
         let ns = text as NSString
         guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
               let workMinutes = Int(ns.substring(with: match.range(at: 1))),
-              let breakMinutes = Int(ns.substring(with: match.range(at: 2)))
+              let breakMinutes = Int(ns.substring(with: match.range(at: 2))),
+              // Both halves must be a real duration. A cycle alternates
+              // between them forever, so a zero-length phase fires the
+              // instant it starts: "pomodoro 0/0" put the app in a tight
+              // loop firing the celebration (a full-screen confetti window
+              // and a sound) on every single tick, with no way out but
+              // editing the directive away. "pomodoro 0/5" is the same
+              // fault spread thinner, a celebration every five minutes
+              // forever. A plain "0m timer" is unaffected and still fires
+              // once, because a timer ends rather than repeating.
+              // Rejecting the directive here rather than clamping it means
+              // degenerate text stays inert, the same way any other
+              // unparseable line does.
+              workMinutes > 0, breakMinutes > 0
         else { return nil }
 
         return PomodoroDirective(

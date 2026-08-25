@@ -44,6 +44,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/NotesManager.swift \
     src/TextStatistics.swift \
     src/Checklist.swift \
+    src/CodeBlock.swift \
     src/OrderedList.swift \
     src/KeyCombo.swift \
     src/SettingsManager.swift \
@@ -61,6 +62,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/UILayerTests.swift \
     tests/HighlightTests.swift \
     tests/PerNoteFontTests.swift \
+    tests/CodeBlockTests.swift \
     tests/main.swift \
     -o "$OUT"
 

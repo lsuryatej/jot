@@ -84,6 +84,13 @@ struct NoteStore {
                 writeBackup(data, of: notes)
                 return notes
             }
+            // Neither shape decoded. An empty file is just an empty file, but
+            // bytes we cannot read are somebody's notes in a damaged state,
+            // and the next debounced save is 0.6s away from writing a single
+            // blank note over them. Move them out of the way first.
+            if !data.isEmpty {
+                quarantineUnreadableFile()
+            }
         }
 
         if allowsLegacyMigration, let migrated = migrateFromUserDefaults() {
@@ -92,6 +99,33 @@ struct NoteStore {
         }
 
         return [Note()]
+    }
+
+    /// Renames a file that would not decode to `notes.unreadable-<stamp>.json`
+    /// beside it, so nothing the app does afterwards can destroy it.
+    ///
+    /// There is no recovery UI: the point is only that the failure stops being
+    /// destructive and leaves something a person can find. The dated `Backups/`
+    /// copies are still the first thing to reach for; this is the damaged
+    /// original itself, which those backups do not contain.
+    private func quarantineUnreadableFile() {
+        let directory = fileURL.deletingLastPathComponent()
+        let stamp = Self.timestampFormatter.string(from: Date())
+        var destination = directory.appendingPathComponent("notes.unreadable-\(stamp).json")
+
+        // Two bad loads inside the same second would otherwise land on the
+        // same name, and the second must not overwrite the first.
+        if FileManager.default.fileExists(atPath: destination.path) {
+            let suffix = UUID().uuidString.prefix(8)
+            destination = directory.appendingPathComponent("notes.unreadable-\(stamp)-\(suffix).json")
+        }
+
+        do {
+            try FileManager.default.moveItem(at: fileURL, to: destination)
+            NSLog("Jot: \(fileURL.path) did not decode; kept the original at \(destination.path)")
+        } catch {
+            NSLog("Jot: \(fileURL.path) did not decode and could not be moved aside: \(error)")
+        }
     }
 
     /// Writes atomically, so an interrupted save cannot truncate the file.

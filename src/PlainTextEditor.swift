@@ -139,6 +139,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// A bare keyword on the first line puts the note in checklist mode.
     var listKeyword: String = "list"
 
+    /// A bare keyword on the first line turns the note into a code block.
+    var codeKeyword: String = CodeBlock.defaultKeyword {
+        didSet {
+            guard codeKeyword != oldValue else { return }
+            applyChecklistStyling()
+        }
+    }
+
     /// The palette text is painted with, derived from the chosen surface.
     var ink: InkTheme = .system {
         didSet {
@@ -160,6 +168,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// Whether the note was in list mode at the last edit, so the switch can be
     /// noticed and the existing body converted once.
     private var wasListMode = false
+
+    /// Whether the note was a code block at the last edit. Mirrors
+    /// `wasListMode`, and exists for the same reason: typing or deleting the
+    /// keyword changes how every *other* line is drawn, which a restyle
+    /// limited to the edited line would not pick up.
+    private var wasCodeMode = false
 
     /// Renders the first line larger and bolder, so a note reads as a titled
     /// card without the title being a separate field. The text stays plain.
@@ -252,6 +266,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     // MARK: - Toggle
 
     @objc func toggleChecklist(_ sender: Any?) {
+        // Markers mean nothing inside a code block, so the command that writes
+        // them does nothing there rather than leaving inert `- [ ]` in the code.
+        guard !isCodeMode else { return }
         let ns = string as NSString
         let selection = selectedRange()
         let lineRange = ns.length == 0
@@ -278,6 +295,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// With nothing selected, drops an empty `====` pair and lands the caret
     /// between the two marker pairs, ready to type straight into it.
     @objc func toggleHighlight(_ sender: Any?) {
+        guard !isCodeMode else { return }
         let selection = selectedRange()
         let ns = string as NSString
 
@@ -304,11 +322,29 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         } else if selection.length == 0 {
             replace(range: selection, with: "====", selecting: NSRange(location: selection.location + 2, length: 0))
         } else {
-            replace(
-                range: selection,
-                with: "==\(ns.substring(with: selection))==",
-                selecting: NSRange(location: selection.location + 2, length: selection.length)
-            )
+            // Not every selection can be expressed as a highlight.
+            // `Highlight.matches` only accepts a span that stays on one line
+            // and holds no `=` of its own, so wrapping `total = 40`, a
+            // selection crossing a newline, or one covering two adjacent
+            // highlights whole emits markers the parser cannot read back:
+            // they stay on screen as literal `==`, the next toggle finds no
+            // span to unwrap, and every further click nests another pair.
+            // Rather than duplicating the parser's rules here, build the
+            // replacement, parse the text it would produce, and only commit
+            // when a real highlight lands over exactly the selected content.
+            //
+            // A refused wrap changes nothing at all — text and selection are
+            // both left as they were. The alternative, quietly narrowing the
+            // selection to its first line or dropping its `=` characters,
+            // would highlight something other than what was selected, which
+            // is a worse surprise than the button doing nothing on input the
+            // syntax has no way to represent.
+            let selected = ns.substring(with: selection)
+            let wrapped = ns.replacingCharacters(in: selection, with: "==\(selected)==") as NSString
+            let contentRange = NSRange(location: selection.location + 2, length: (selected as NSString).length)
+            guard Highlight.matches(in: wrapped).contains(where: { $0.contentRange == contentRange }) else { return }
+
+            replace(range: selection, with: "==\(selected)==", selecting: contentRange)
         }
 
         // `replace` inserts brand-new `==` characters into text the layout
@@ -404,6 +440,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             paste(nil)
             return true
         }
+        // Cmd+C is claimed only for the case that would otherwise be missed:
+        // the caret inside a code block, in a display mode with no main menu
+        // to dispatch the Edit menu's Copy. Every other Cmd+C falls through to
+        // the standard copy exactly as before, and the first-responder check
+        // keeps this from reaching over the find bar's own copy.
+        if flags == [.command], key == "c", window?.firstResponder === self,
+           copyWholeCodeBlock() {
+            return true
+        }
         if flags == [.command], key == "l" {
             toggleChecklist(nil)
             return true
@@ -428,8 +473,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
-        if item.action == #selector(toggleChecklist(_:)) { return true }
-        if item.action == #selector(toggleHighlight(_:)) { return true }
+        // Both are no-ops inside a code block, so the menu says so instead of
+        // offering a command that would do nothing.
+        if item.action == #selector(toggleChecklist(_:)) { return !isCodeMode }
+        if item.action == #selector(toggleHighlight(_:)) { return !isCodeMode }
         if item.action == #selector(extractTextFromClipboardImage(_:)) { return true }
         return super.validateUserInterfaceItem(item)
     }
@@ -437,7 +484,33 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     // MARK: - List mode
 
     var isListMode: Bool {
-        Checklist.isListMode(string, keyword: listKeyword)
+        // A code note is never also a list note: both keywords claim the whole
+        // first line, and if someone configures the same word for both, the
+        // code block wins. Rendering a note as plain monospaced text is the
+        // more literal reading of "this line says code", and it is the mode
+        // that switches everything else off, so letting it win keeps the two
+        // from half-applying over each other.
+        !isCodeMode && Checklist.isListMode(string, keyword: listKeyword)
+    }
+
+    var isCodeMode: Bool {
+        CodeBlock.isCodeMode(string, keyword: codeKeyword)
+    }
+
+    /// The face a code block is drawn in.
+    ///
+    /// Code mode overrides the font *name* that per-note and theme-note
+    /// typography resolved to, but keeps the size those settled on. The point
+    /// of the keyword is monospaced rendering, so a proportional per-note
+    /// font would defeat it, while the size is a legibility choice that has
+    /// nothing to do with the note being code. A base font that is already
+    /// fixed-pitch is left exactly as it is, so a user who picked Menlo (or a
+    /// theme note that did) keeps their own monospaced face rather than being
+    /// pushed onto the system one.
+    private var codeFont: NSFont {
+        baseFont.isFixedPitch
+            ? baseFont
+            : .monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular)
     }
 
     /// Converts the body the moment the keyword appears, and only then.
@@ -466,9 +539,49 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
     }
 
+    // MARK: - Code blocks
+
+    /// Whether this edit flipped code mode on or off.
+    private func codeModeDidChange() -> Bool {
+        let now = isCodeMode
+        defer { wasCodeMode = now }
+        return now != wasCodeMode
+    }
+
+    /// Copies the whole code block when there is nothing selected and the
+    /// caret sits inside one, and reports whether it did. False means the
+    /// ordinary copy should run: either this is not a code note, or there is a
+    /// selection, which is an explicit request for exactly that text.
+    ///
+    /// Takes the pasteboard so a test can hand it a private one instead of
+    /// clobbering whatever the user has on the general clipboard.
+    @discardableResult
+    func copyWholeCodeBlock(to pasteboard: NSPasteboard = .general) -> Bool {
+        guard selectedRange().length == 0,
+              let body = CodeBlock.body(of: string, keyword: codeKeyword)
+        else { return false }
+        pasteboard.clearContents()
+        pasteboard.setString(body, forType: .string)
+        return true
+    }
+
+    /// Overridden rather than handled only in `performKeyEquivalent`, so the
+    /// Edit menu's own Copy item behaves the same way the shortcut does.
+    override func copy(_ sender: Any?) {
+        if copyWholeCodeBlock() { return }
+        super.copy(sender)
+    }
+
     // MARK: - Return
 
     override func insertNewline(_ sender: Any?) {
+        // Nothing continues itself inside a code block: no checklist items, no
+        // ordered numbering. Return inserts a newline and that is all.
+        guard !isCodeMode else {
+            super.insertNewline(sender)
+            return
+        }
+
         let selection = selectedRange()
         guard selection.length == 0, (string as NSString).length > 0 else {
             super.insertNewline(sender)
@@ -558,11 +671,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     // MARK: - Nesting
 
     override func insertTab(_ sender: Any?) {
-        if !indentSelection(by: 1) { super.insertTab(sender) }
+        // Tab indents checklist items everywhere else; in a code block it is
+        // just a tab, which is what indenting code with it should do.
+        if isCodeMode || !indentSelection(by: 1) { super.insertTab(sender) }
     }
 
     override func insertBacktab(_ sender: Any?) {
-        if !indentSelection(by: -1) { super.insertBacktab(sender) }
+        if isCodeMode || !indentSelection(by: -1) { super.insertBacktab(sender) }
     }
 
     private func indentSelection(by levels: Int) -> Bool {
@@ -623,7 +738,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             insertImage(image, at: selectedRange().location)
             return
         }
-        if let pasted = NSPasteboard.general.string(forType: .string),
+        if !isCodeMode,
+           let pasted = NSPasteboard.general.string(forType: .string),
            let converted = Checklist.pastedAsListItems(pasted, into: string, keyword: listKeyword) {
             let range = clamped(selectedRange())
             replace(
@@ -718,6 +834,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     func handleSpecialClick(at point: NSPoint) -> Bool {
         if let placed = image(at: point) {
             beginResize(placed, from: point)
+            return true
+        }
+
+        // A currency hint says the sum was skipped because of a setting, so
+        // clicking it goes to the setting rather than placing a caret in the
+        // margin, where there is no text to edit anyway.
+        if mathHintRects.contains(where: { $0.insetBy(dx: -4, dy: -2).contains(point) }) {
+            NotificationCenter.default.post(name: .jotRequestPrivacySettings, object: nil)
             return true
         }
 
@@ -962,31 +1086,53 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// changes. Evaluated top to bottom in one pass so later lines see
     /// earlier variables — the whole reason this recomputes on every
     /// keystroke rather than tracking a dependency graph.
-    private var mathResults: [(lineRange: NSRange, text: String)] = []
+    /// `isHint` marks a line that produced no number but has a reason worth
+    /// saying, currently only a mixed-currency sum with no usable rate. It is
+    /// drawn muted rather than in the accent colour, and it is clickable.
+    private var mathResults: [(lineRange: NSRange, text: String, isHint: Bool)] = []
+
+    /// Where each hint was last drawn, for hit-testing a click on it. Rebuilt
+    /// on every draw, since the text under it moves as the note is edited.
+    private var mathHintRects: [NSRect] = []
 
     func recomputeMathResults() {
-        guard let textStorage else { mathResults = []; return }
+        // Math results are a parse of the text, so they stay out of a code
+        // block like every other parser.
+        guard let textStorage, !isCodeMode else { mathResults = []; return }
         let ns = textStorage.string as NSString
         var environment: [String: MathExpression.Value] = [:]
-        var results: [(NSRange, String)] = []
+        var results: [(NSRange, String, Bool)] = []
 
         ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: [.byLines]) { line, lineRange, _, _ in
             guard let line, let node = MathExpression.parse(line) else { return }
-            if case .success(let value) = MathExpression.evaluate(node, environment: &environment) {
-                results.append((lineRange, MathExpression.format(value)))
+            switch MathExpression.evaluate(node, environment: &environment) {
+            case .success(let value):
+                results.append((lineRange, MathExpression.format(value), false))
+            case .failure(let error):
+                guard let hint = MathExpression.hint(for: error) else { return }
+                results.append((lineRange, hint, true))
             }
         }
         mathResults = results
     }
 
     private func drawMathResults(in dirtyRect: NSRect) {
+        mathHintRects = []
         guard let layoutManager, let textContainer, !mathResults.isEmpty else { return }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: max(10, baseFont.pointSize - 1), weight: .medium),
+        let font = NSFont.monospacedSystemFont(ofSize: max(10, baseFont.pointSize - 1), weight: .medium)
+        let resultAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
             .foregroundColor: ink.accent,
         ]
+        // A hint is not an answer, so it does not get the accent the answers
+        // use. Muted, it reads as an aside rather than as a result.
+        let hintAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: ink.secondary,
+        ]
 
-        for (lineRange, text) in mathResults {
+        for (lineRange, text, isHint) in mathResults {
+            let attributes = isHint ? hintAttributes : resultAttributes
             let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
             guard glyphRange.length > 0 || lineRange.length == 0 else { continue }
             let fragment = layoutManager.lineFragmentUsedRect(
@@ -1011,6 +1157,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let x = Self.mathResultX(textEnd: textEnd, resultWidth: size.width, containerRight: rightEdge)
             let drawRect = NSRect(x: x, y: lineRect.minY + (lineRect.height - size.height) / 2, width: size.width, height: size.height)
             (text as NSString).draw(in: drawRect, withAttributes: attributes)
+            if isHint { mathHintRects.append(drawRect) }
         }
     }
 
@@ -1027,6 +1174,32 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// written to disk.
     private var expandedLinks: Set<String> = []
 
+    /// Swaps the document for a different note's text and restyles it.
+    ///
+    /// This is the body of the note-switch branch in
+    /// `PlainTextEditor.updateNSView`, kept on the view so the sequence has one
+    /// home and can be driven directly by a test. Callers are responsible for
+    /// only reaching it on a genuine divergence between the model and the view.
+    func loadNoteText(_ text: String) {
+        let caret = selectedRange().location
+        string = text
+        // The stack that was just built up belongs to the note being left. Its
+        // actions are recorded against that note's ranges, and the text view
+        // has no idea the document underneath it changed, so the next Cmd+Z
+        // would replay the previous note's edit into this one: characters
+        // vanish from a note nobody touched, or the recorded offset lands past
+        // the end of a shorter note and the text storage raises
+        // NSRangeException. Either way `scheduleSave` writes the damage to
+        // notes.json 0.6s later. Undo history belongs to a note, and this is
+        // where a note ends, so the stack goes with it.
+        undoManager?.removeAllActions()
+        let length = (text as NSString).length
+        setSelectedRange(NSRange(location: min(caret, length), length: 0))
+        applyChecklistStyling()
+        recomputeLinkMatches()
+        applyLinkFolding()
+    }
+
     func recomputeLinkMatches() {
         // Overriding an NSTextView designated initializer to wire this up
         // once broke the plain `ChecklistTextView()` initializer every
@@ -1035,7 +1208,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // initializer is overridden. Wiring it lazily here, idempotently,
         // sidesteps that entirely.
         if layoutManager?.delegate !== self { layoutManager?.delegate = self }
-        guard let textStorage else { linkMatches = []; return }
+        guard let textStorage, !isCodeMode else { linkMatches = []; return }
         linkMatches = LinkShrink.matches(in: textStorage.string)
     }
 
@@ -1110,6 +1283,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         font: NSFont,
         forGlyphRange glyphRange: NSRange
     ) -> Int {
+        // The three marker arrays are already emptied for a code block by the
+        // styling pass; the explicit guard says so at the point it matters,
+        // since folding a character out of code would hide real content.
+        guard !isCodeMode else { return 0 }
         guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty, let textStorage else { return 0 }
         let ns = textStorage.string as NSString
 
@@ -1185,10 +1362,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         changeInLength delta: Int
     ) {
         guard !isStyling, editedMask.contains(.editedCharacters) else { return }
+        let codeModeChanged = codeModeDidChange()
         applyListModeIfNeeded()
         // Title styling spans the first line, which an edit anywhere can change
-        // the extent of, so restyle the whole note when that mode is on.
-        applyChecklistStyling(in: stylesFirstLineAsTitle ? nil : editedRange)
+        // the extent of, so restyle the whole note when that mode is on. The
+        // same goes for the edit that adds or removes the code keyword: every
+        // other line has to pick up (or drop) the code treatment.
+        applyChecklistStyling(in: stylesFirstLineAsTitle || codeModeChanged ? nil : editedRange)
         recomputeMathResults()
         recomputeLinkMatches()
         // Deferred like `applyListModeIfNeeded`: folding forces glyph
@@ -1213,8 +1393,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let whole = NSRange(location: 0, length: ns.length)
         let target = ns.length == 0 ? whole : ns.lineRange(for: clamped(range ?? whole))
 
+        let isCode = isCodeMode
         var baseline: [NSAttributedString.Key: Any] = [
-            .font: baseFont,
+            .font: isCode ? codeFont : baseFont,
             .foregroundColor: ink.text,
             .paragraphStyle: paragraphStyle,
         ]
@@ -1223,6 +1404,23 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             baseline[.kern] = letterSpacing
         }
         textStorage.setAttributes(baseline, range: target)
+
+        // A code block is plain monospaced text and nothing else: every parser
+        // below this point stays out of it, and the marker positions glyph
+        // generation folds against are emptied so no marker folds either. The
+        // keyword line is painted the same pale way list mode paints its own.
+        if isCode {
+            if ns.length > 0 {
+                let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
+                let marker = NSIntersectionRange(firstLine, target)
+                if marker.length > 0 {
+                    textStorage.addAttribute(.foregroundColor, value: ink.secondary, range: marker)
+                }
+            }
+            highlightMarkers = []
+            headingMarkers = []
+            return
+        }
 
         if Checklist.isListMode(ns as String, keyword: listKeyword), ns.length > 0 {
             let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
@@ -1393,6 +1591,7 @@ struct PlainTextEditor: NSViewRepresentable {
     var ink: InkTheme = .system
     var guide: PaperGuide = .none
     var listKeyword: String = "list"
+    var codeKeyword: String = CodeBlock.defaultKeyword
     /// Extra room at the top when the header bar is hidden, so the first line
     /// clears the traffic lights instead of tucking under them.
     var topInset: CGFloat = 12
@@ -1472,6 +1671,7 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.baseFont = baseFont
         textView.letterSpacing = letterSpacing
         textView.listKeyword = listKeyword
+        textView.codeKeyword = codeKeyword
         // The ink assignment repaints text and caret itself; the labelColor
         // above only covers the moment before it.
         textView.ink = ink
@@ -1502,6 +1702,9 @@ struct PlainTextEditor: NSViewRepresentable {
         if textView.listKeyword != listKeyword {
             textView.listKeyword = listKeyword
         }
+        if textView.codeKeyword != codeKeyword {
+            textView.codeKeyword = codeKeyword
+        }
 
         if textView.lineHeightMultiple != lineHeightMultiple {
             textView.lineHeightMultiple = lineHeightMultiple
@@ -1527,13 +1730,7 @@ struct PlainTextEditor: NSViewRepresentable {
         // switch). Assigning unconditionally would fight the user's typing and
         // reset undo on every keystroke.
         if textView.string != text {
-            let caret = textView.selectedRange().location
-            textView.string = text
-            let length = (text as NSString).length
-            textView.setSelectedRange(NSRange(location: min(caret, length), length: 0))
-            textView.applyChecklistStyling()
-            textView.recomputeLinkMatches()
-            textView.applyLinkFolding()
+            textView.loadNoteText(text)
         }
 
         // Runs after the text-diff block above, so a jump into a different

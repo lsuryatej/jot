@@ -161,6 +161,7 @@ struct ContentView: View {
             ink: settings.effectiveInk,
             guide: settings.effectiveGuide,
             listKeyword: settings.effectiveListKeyword,
+            codeKeyword: settings.effectiveCodeKeyword,
             topInset: settings.showsHeader ? 12 : 38,
             text: Binding(
                 get: { notesManager.currentText },

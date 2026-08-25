@@ -162,6 +162,30 @@ enum MathExpression {
         let tokens: [Token]
         var index = 0
 
+        /// How many nested groupings the parser will descend through before
+        /// giving up on the line.
+        ///
+        /// Recursive descent has no stack of its own, so a line like 4000 open
+        /// parens (or 4000 leading minus signs) used to recurse until the real
+        /// stack ran out and the process died with SIGSEGV. That is reachable
+        /// by an ordinary paste, since every line is reparsed on every
+        /// keystroke.
+        ///
+        /// One level of nesting costs eight frames here (expression through
+        /// primary), and the observed crash threshold on the main thread's 8MB
+        /// stack sits between 2000 and 3000 levels, so a level runs roughly
+        /// 3KB. 256 levels is therefore under a megabyte of stack, an order of
+        /// magnitude clear of the limit, while being far more nesting than any
+        /// expression a person writes by hand. Past it the line just fails to
+        /// parse, which is what every other unparseable line already does: no
+        /// result is drawn, and the text is left exactly as typed.
+        static let maxDepth = 256
+
+        /// Nesting levels currently open. Every production that recurses on
+        /// itself counts against it: parenthesised groups, unary minus, the
+        /// right-associative "^", and the target of a percent "of" phrase.
+        var depth = 0
+
         var isAtEnd: Bool { index >= tokens.count }
         var current: Token? { index < tokens.count ? tokens[index] : nil }
 
@@ -261,6 +285,9 @@ enum MathExpression {
         // unary := "-" unary | power
         mutating func parseUnary() -> Node? {
             if match(.op("-")) {
+                guard depth < Self.maxDepth else { return nil }
+                depth += 1
+                defer { depth -= 1 }
                 guard let operand = parseUnary() else { return nil }
                 return .negate(operand)
             }
@@ -271,6 +298,9 @@ enum MathExpression {
         mutating func parsePower() -> Node? {
             guard let left = parsePercent() else { return nil }
             if match(.op("^")) {
+                guard depth < Self.maxDepth else { return nil }
+                depth += 1
+                defer { depth -= 1 }
                 guard let right = parseUnary() else { return nil }
                 return .binary("^", left, right)
             }
@@ -284,6 +314,9 @@ enum MathExpression {
             if match(.op("%")) {
                 if case .word("of") = current {
                     index += 1
+                    guard depth < Self.maxDepth else { return nil }
+                    depth += 1
+                    defer { depth -= 1 }
                     guard let target = parseMultiplicative() else { return nil }
                     return .percentOf(left, target)
                 }
@@ -308,6 +341,9 @@ enum MathExpression {
                 return .variable(name)
 
             case .op("("):
+                guard depth < Self.maxDepth else { return nil }
+                depth += 1
+                defer { depth -= 1 }
                 guard let inner = parseAssignmentOrExpression() else { return nil }
                 guard match(.op(")")) else { return nil }
                 return inner
@@ -325,6 +361,22 @@ enum MathExpression {
         case unknownUnit(String)
         case incompatibleUnits(String, String)
         case divisionByZero
+        /// Two different currencies met under `+` or `-` with no rate that may
+        /// be used. Carries which of the two reasons applies, so the editor can
+        /// say which one rather than just going blank.
+        case currencyRatesUnavailable(CurrencyRates.Availability)
+    }
+
+    /// A few failures are worth a word in the margin instead of silence: a
+    /// mixed-currency sum looks like it should work, so the reason it did not
+    /// goes where the number would have been. Every other failure stays blank.
+    static func hint(for error: EvalError) -> String? {
+        guard case .currencyRatesUnavailable(let availability) = error else { return nil }
+        switch availability {
+        case .ratesOff: return "rates off"
+        case .noRate: return "no rates"
+        case .ok: return nil
+        }
     }
 
     /// A number, optionally tagged with the unit it is expressed in.
@@ -440,8 +492,18 @@ enum MathExpression {
         }
 
         switch op {
-        case "+": return .success(Value(amount: lhs.amount + rhs.amount, unit: unit))
-        case "-": return .success(Value(amount: lhs.amount - rhs.amount, unit: unit))
+        case "+", "-":
+            // Adding two amounts only means anything once they are expressed in
+            // the same unit. `reconcile` above establishes they share a
+            // dimension and hands back the label; this converts the right side
+            // into that label's unit so the amounts actually line up.
+            let right: Value
+            switch Units.aligned(lhs, rhs) {
+            case .success(let converted): right = converted
+            case .failure(let error): return .failure(error)
+            }
+            let amount = op == "+" ? lhs.amount + right.amount : lhs.amount - right.amount
+            return .success(Value(amount: amount, unit: unit))
         case "*": return .success(Value(amount: lhs.amount * rhs.amount, unit: unit ?? rhs.unit ?? lhs.unit))
         case "/":
             guard rhs.amount != 0 else { return .failure(.divisionByZero) }

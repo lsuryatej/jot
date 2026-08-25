@@ -347,6 +347,37 @@ func runAllTests() {
         )
     }
 
+    // A cycle alternates between its two phases forever, so a zero-length
+    // phase fires the instant it starts. "pomodoro 0/0" used to put the app
+    // in a tight loop, firing the celebration on every tick with no way out
+    // but editing the directive away. Both halves have to be real durations
+    // for the directive to count at all.
+    suite("a pomodoro phase of zero minutes is not a directive") {
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 0/0")?.source, nil, "both halves zero")
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 0/5")?.source, nil, "zero work")
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 25/0")?.source, nil, "zero break")
+        equal(NotesManager.firstPomodoroDirective(in: "pomodoro 1/1")?.workDuration, 60, "one minute each is fine")
+    }
+
+    // Drives the real per-tick loop `ContentView.updateTimer` runs, counting
+    // how many times the celebration would fire. The bug this covers was not
+    // visible in the parser alone: it only appeared once a fired phase
+    // scheduled the next one.
+    suite("a zero-length pomodoro does not fire the celebration on every tick") {
+        let manager = makeManager()
+        manager.currentText = "pomodoro 0/0"
+        var fires = 0
+        for _ in 0..<12 {
+            guard let end = manager.activeTimerEnd else { break }
+            if end.timeIntervalSince(Date()) <= 0 {
+                fires += 1
+                manager.timerDidFire()
+            }
+        }
+        equal(fires, 0, "twelve ticks, no celebration, because the directive never starts")
+        equal(manager.activeTimerEnd, nil, "and nothing is counting down")
+    }
+
     suite("a pomodoro cycle starts in the work phase and alternates when it fires") {
         let m = makeManager()
         m.currentText = "pomodoro 25/5"
@@ -1043,6 +1074,81 @@ func runAllTests() {
         check(result != nil && result! > 0, "converts to a positive amount")
     }
 
+    /// The rendered margin string, so a unit-carrying result is asserted the
+    /// way the note actually shows it rather than as a bare Double.
+    func formatLine(_ line: String, env: inout [String: MathExpression.Value]) -> String? {
+        guard let node = MathExpression.parse(line) else { return nil }
+        guard case .success(let value) = MathExpression.evaluate(node, environment: &env) else { return nil }
+        return MathExpression.format(value)
+    }
+
+    /// The hint drawn where the number would have gone, or nil when the line
+    /// simply produces nothing.
+    func hintLine(_ line: String, env: inout [String: MathExpression.Value]) -> String? {
+        guard let node = MathExpression.parse(line) else { return nil }
+        guard case .failure(let error) = MathExpression.evaluate(node, environment: &env) else { return nil }
+        return MathExpression.hint(for: error)
+    }
+
+    suite("mixed units convert before combining, left unit wins") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(formatLine("5 km + 3 m", env: &env), "5.003 km", "metres folded into kilometres")
+        equal(formatLine("1 kg + 500 g", env: &env), "1.5 kg", "grams folded into kilograms")
+        equal(formatLine("1 h + 30 min", env: &env), "1.5 h", "minutes folded into hours")
+        equal(formatLine("1 gb + 500 mb", env: &env), "1.5 gb", "megabytes folded into gigabytes")
+        equal(formatLine("100 cm - 1 m", env: &env), "0 cm", "subtraction converts too")
+        equal(formatLine("1 mi + 1 km", env: &env), "1.6214 mi", "across measurement systems")
+        equal(formatLine("3 m + 5 km", env: &env), "5003 m", "the left unit wins whichever side is larger")
+        equal(formatLine("5 kilometers + 3 meters", env: &env), "5.003 kilometers",
+              "spelled-out aliases convert, and the left spelling is kept")
+    }
+
+    suite("same-unit and unitless arithmetic is untouched") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(formatLine("5 km + 3 km", env: &env), "8 km", "same unit adds directly")
+        equal(formatLine("20 c + 5 c", env: &env), "25 c", "same temperature scale still adds")
+        equal(formatLine("2 + 2", env: &env), "4", "no units at all")
+        equal(formatLine("2 + 3 km", env: &env), "5 km", "a bare number takes the other side's unit")
+        equal(formatLine("5 km * 2", env: &env), "10 km", "scaling by a plain number")
+    }
+
+    suite("explicit conversion still works after the arithmetic fix") {
+        var env: [String: MathExpression.Value] = [:]
+        equal(formatLine("1 km to m", env: &env), "1000 m", "to")
+        equal(formatLine("1 h to min", env: &env), "60 min", "to, time")
+        equal(formatLine("100 cm as m", env: &env), "1 m", "as")
+        equal(formatLine("20 c to f", env: &env), "68 f", "affine conversion is unaffected")
+    }
+
+    suite("mixing temperature scales produces no result") {
+        var env: [String: MathExpression.Value] = [:]
+        // Both scales are affine and neither reading is a delta, so there is
+        // no answer to pick. The margin stays blank, as it does for prose.
+        equal(formatLine("20 c + 5 f", env: &env), nil, "celsius plus fahrenheit refuses")
+        equal(formatLine("20 c - 5 k", env: &env), nil, "celsius minus kelvin refuses")
+        equal(hintLine("20 c + 5 f", env: &env), nil, "and shows no hint either")
+        equal(formatLine("5 km + 3 kg", env: &env), nil, "unrelated dimensions still refuse")
+    }
+
+    suite("mixed currency with live rates off shows a hint, never a raw sum") {
+        var env: [String: MathExpression.Value] = [:]
+        CurrencyRates.liveRatesEnabled = false
+        equal(formatLine("5 USD + 3 EUR", env: &env), nil, "no number at all")
+        equal(hintLine("5 USD + 3 EUR", env: &env), "rates off", "the reason is shown instead")
+        equal(formatLine("5 USD + 3 USD", env: &env), "8 USD", "one currency needs no rate")
+    }
+
+    suite("mixed currency with live rates on") {
+        var env: [String: MathExpression.Value] = [:]
+        CurrencyRates.liveRatesEnabled = true
+        let sum = evalLine("5 USD + 3 EUR", env: &env)
+        check(sum != nil && sum! > 5 && sum! < 20, "converts at the current rate rather than adding raw")
+        equal(formatLine("5 USD + 3 EUR", env: &env).map { $0.hasSuffix(" USD") }, true, "labelled with the left currency")
+        equal(evalLine("5 USD + 3 EUR", env: &env).map { $0 == 8 }, false, "specifically not the raw 8")
+        equal(hintLine("5 USD + 3 ZZZ", env: &env), "no rates", "an unknown currency has no rate to use")
+        CurrencyRates.liveRatesEnabled = false
+    }
+
     suite("mutation check: reintroducing the try?-flatten bug would fail here") {
         // Regression guard for the specific bug that made every dimensionless
         // calculation fail: Swift auto-flattens `try? throwingCall().get()`
@@ -1086,6 +1192,26 @@ func runAllTests() {
     suite("chained assignment references") {
         let results = evalDoc(["a = 10", "b = a * 2", "c = b + a", "c"])
         equal(results, [10, 20, 30, 30], "each variable available to every later line")
+    }
+
+    suite("deeply nested input is refused rather than crashing the process") {
+        // A pasted line of thousands of open parens used to blow the stack
+        // through unbounded recursive descent and kill the app outright. The
+        // parser now stops descending past a fixed depth and the line simply
+        // reads as prose.
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine(String(repeating: "(", count: 4000), env: &env), nil, "4000 unclosed parens")
+        equal(evalLine(String(repeating: "(", count: 4000) + "1 + 1" + String(repeating: ")", count: 4000), env: &env),
+              nil, "4000 balanced parens around a real expression")
+        // Unary minus recurses on itself the same way, so a long run of them
+        // is the same crash by another route.
+        equal(evalLine(String(repeating: "-", count: 4000) + "5", env: &env), nil, "4000 leading minus signs")
+        // Two more productions recurse on themselves the same way: the
+        // right-associative "^", and the target of a percent "of" phrase.
+        equal(evalLine("2" + String(repeating: "^2", count: 4000), env: &env), nil, "4000 chained exponents")
+        equal(evalLine(String(repeating: "100% of ", count: 4000) + "5", env: &env), nil, "4000 chained percent-of phrases")
+        // Nesting a human would actually write still evaluates.
+        equal(evalLine("((((((((((2 + 3))))))))))", env: &env), 5, "ten levels of real nesting still works")
     }
 
     suite("renaming the app moves the whole storage directory") {
@@ -1241,6 +1367,49 @@ func runAllTests() {
         equal(store.load().map(\.text), [""], "falls back cleanly")
     }
 
+    suite("an unreadable file is moved aside instead of being overwritten") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-quarantine-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("notes.json")
+        let corrupt = Data("[{\"id\":\"11111111-1111-1111-1111-111111111111\",\"text\":\"half a rea".utf8)
+        try? corrupt.write(to: url)
+
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+        equal(store.load().map(\.text), [""], "the user still gets a usable note")
+
+        let quarantined = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?
+            .filter { $0.hasPrefix("notes.unreadable-") } ?? []
+        equal(quarantined.count, 1, "the unreadable file was preserved under a dated name")
+        let kept = quarantined.first.map { dir.appendingPathComponent($0) }
+        equal(kept.flatMap { try? Data(contentsOf: $0) }, corrupt, "byte for byte, so it can be recovered by hand")
+
+        // The debounced save that follows the user's first keystroke used to
+        // land on top of the unreadable file. It must not reach the copy.
+        store.save([Note(text: "typed after launch")])
+        equal(kept.flatMap { try? Data(contentsOf: $0) }, corrupt, "a later save does not touch the preserved copy")
+        equal(store.load().map(\.text), ["typed after launch"], "and the live file is the new, readable one")
+    }
+
+    suite("a second unreadable load does not clobber the first preserved copy") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stickynotes-quarantine2-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("notes.json")
+        let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
+
+        try? Data("first wreck".utf8).write(to: url)
+        _ = store.load()
+        try? Data("second wreck".utf8).write(to: url)
+        _ = store.load()
+
+        let quarantined = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?
+            .filter { $0.hasPrefix("notes.unreadable-") }.sorted() ?? []
+        equal(quarantined.count, 2, "both copies survive, even inside the same second")
+        let bodies = Set(quarantined.compactMap { try? String(contentsOf: dir.appendingPathComponent($0), encoding: .utf8) })
+        equal(bodies, Set(["first wreck", "second wreck"]), "with their original contents")
+    }
+
     // MARK: - Global search
 
     suite("global search finds matches across every note") {
@@ -1316,5 +1485,53 @@ func runAllTests() {
     suite("multiple links in one note are all found") {
         let text = "https://www.example.com/one/two/three and https://www.another-example.org/four/five/six"
         equal(LinkShrink.matches(in: text).count, 2, "both links found")
+    }
+}
+
+// Deleting a note below the one on screen used to leave `currentIndex`
+// pointing at whatever shifted into that slot, silently changing the visible
+// note. Reachable from the delete button on any Screen Edge card.
+func runDeleteKeepsCurrentNoteTests() {
+    suite("deleting a note keeps the user on the note they were reading") {
+        let manager = makeManager(seed: ["A", "B", "C"])
+        manager.currentIndex = 1
+        equal(manager.currentText, "B", "starting on B")
+        manager.deleteNote(at: 0)
+        equal(manager.currentText, "B", "deleting A above it leaves B on screen")
+
+        let two = makeManager(seed: ["A", "B", "C"])
+        two.currentIndex = 1
+        two.deleteNote(at: 2)
+        equal(two.currentText, "B", "deleting C below it also leaves B on screen")
+
+        let three = makeManager(seed: ["A", "B", "C"])
+        three.currentIndex = 1
+        three.deleteNote(at: 1)
+        equal(three.currentText, "C", "deleting the note you are on falls to the next one")
+
+        let last = makeManager(seed: ["A", "B", "C"])
+        last.currentIndex = 2
+        last.deleteNote(at: 2)
+        equal(last.currentText, "B", "deleting the last note falls back to the previous one")
+
+        // Two deletions in a row, each using the state the previous one left.
+        let chained = makeManager(seed: ["A", "B", "C", "D"])
+        chained.currentIndex = 3
+        chained.deleteNote(at: 0)
+        equal(chained.currentText, "D", "still on D after the first deletion")
+        chained.deleteNote(at: 0)
+        equal(chained.currentText, "D", "and after the second")
+    }
+
+    // A countdown belongs to the note that started it, so deleting a
+    // different note must not cancel it.
+    suite("deleting an unrelated note leaves a running countdown alone") {
+        let manager = makeManager(seed: ["A", "B", "C"])
+        manager.currentIndex = 1
+        manager.currentText = "25m timer"
+        check(manager.activeTimerEnd != nil, "B owns a running timer")
+        manager.deleteNote(at: 0)
+        check(manager.activeTimerEnd != nil, "deleting A does not cancel it")
+        equal(manager.currentText, "25m timer", "and B is still the note on screen")
     }
 }

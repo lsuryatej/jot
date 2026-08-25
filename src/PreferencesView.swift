@@ -41,13 +41,19 @@ extension Notification.Name {
     /// such ambiguity to have.
     static let jotRequestToggleChecklistFromHeader = Notification.Name("JotRequestToggleChecklistFromHeader")
     static let jotRequestToggleHighlightFromHeader = Notification.Name("JotRequestToggleHighlightFromHeader")
+    /// Posted when the text view's "rates off" / "no rates" hint is clicked;
+    /// observed by AppDelegate, the one place that owns the settings window.
+    static let jotRequestPrivacySettings = Notification.Name("JotRequestPrivacySettings")
+    /// Posted by AppDelegate at a settings window that is already open, to
+    /// move it to a given pane. A fresh window picks its pane at init instead.
+    static let jotShowSettingsPane = Notification.Name("JotShowSettingsPane")
 }
 
 /// A settings pane. Replaces the old single long scroll — five sections
 /// scanned top to bottom in one column got unwieldy once per-note typography,
 /// Pomodoro, and the rest piled on. Grouped the way a person looks for a
 /// setting, not the order features shipped in.
-private enum SettingsCategory: String, CaseIterable, Identifiable {
+enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
     case appearance
     case typography
@@ -83,7 +89,16 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
 struct PreferencesView: View {
     @ObservedObject var settings: SettingsManager
     @ObservedObject var notesManager: NotesManager
-    @State private var category: SettingsCategory? = .general
+    @State private var category: SettingsCategory?
+
+    /// `category` starts wherever the caller opened the window to, so a fresh
+    /// window opened from the currency hint lands on Privacy & Sync without a
+    /// visible jump from General.
+    init(settings: SettingsManager, notesManager: NotesManager, category: SettingsCategory = .general) {
+        self.settings = settings
+        self.notesManager = notesManager
+        _category = State(initialValue: category)
+    }
 
     /// The font picker edits whichever note is currently open, not the app-wide
     /// default — so changing it on one note no longer changes every other one.
@@ -136,6 +151,10 @@ struct PreferencesView: View {
         // this view's ideal size "however big the window already is" rather
         // than something content can shrink out from under.
         .frame(minWidth: 620, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
+        .onReceive(NotificationCenter.default.publisher(for: .jotShowSettingsPane)) { note in
+            guard let pane = note.object as? SettingsCategory else { return }
+            category = pane
+        }
     }
 
     private var sidebar: some View {
@@ -358,14 +377,31 @@ struct PreferencesView: View {
                     .pickerStyle(.menu)
                     .frame(width: 200)
 
+                    // The size reads as its own label, and the Stepper is
+                    // left bare with `labelsHidden()`. A *titled* Stepper
+                    // inside a grouped `Form` claims the form's label column
+                    // and lays itself out across the row's full width, and
+                    // the `.fixedSize()` this used to carry then pinned that
+                    // spread-out width as non-negotiable: this one row
+                    // reported a 742pt minimum, so the whole pane demanded
+                    // 915pt inside a 620pt window and the fixed-width
+                    // sidebar was compressed to a 25pt sliver with no row
+                    // left under the cursor. That made Settings a dead end
+                    // on this pane, escapable only by resizing the window.
+                    // Measured: with this section alone the pane needs
+                    // 915pt; with either other section alone, 620pt.
+                    // Covered by `tests/ui/SettingsWindowTests.swift`.
+                    Text("\(Int(settings.noteFontSize))pt")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+
                     Stepper(
-                        "\(Int(settings.noteFontSize))pt",
+                        "",
                         value: $settings.noteFontSize,
                         in: SettingsManager.fontSizeRange,
                         step: 1
                     )
-                    .font(.system(.caption, design: .monospaced))
-                    .fixedSize()
+                    .labelsHidden()
                 }
             }
 
@@ -398,6 +434,16 @@ struct PreferencesView: View {
                 Text("First line \"\(settings.effectiveListKeyword)\" makes the note a checklist.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                LabeledContent("Code") {
+                    TextField("code", text: $settings.codeKeyword)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                Text("First line \"\(settings.effectiveCodeKeyword)\" renders the note as monospaced code. Checklists, headings, highlights, links, and math stay switched off inside it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 LabeledContent("Timer") {
                     TextField("timer", text: $settings.timerKeyword)
