@@ -474,4 +474,14 @@ func runUILayerTests() {
         let font = storage.attribute(.font, at: 8, effectiveRange: nil) as? NSFont
         check((font?.pointSize ?? 0) > view.baseFont.pointSize + 2, "and still styles as a heading")
     }
+
+    suite("a pasted line of thousands of parens does not kill the process") {
+        // The crash reached the parser through this exact path: math is
+        // recomputed for every line on every keystroke, so a single paste was
+        // enough. Surviving the call is the assertion.
+        let view = makeTextView("notes\n" + String(repeating: "(", count: 4000) + "\n2 + 2")
+        view.recomputeMathResults()
+        check(true, "recomputeMathResults returned instead of overflowing the stack")
+        equal(view.string.contains(String(repeating: "(", count: 4000)), true, "the pasted text itself is left alone")
+    }
 }

@@ -1088,6 +1088,26 @@ func runAllTests() {
         equal(results, [10, 20, 30, 30], "each variable available to every later line")
     }
 
+    suite("deeply nested input is refused rather than crashing the process") {
+        // A pasted line of thousands of open parens used to blow the stack
+        // through unbounded recursive descent and kill the app outright. The
+        // parser now stops descending past a fixed depth and the line simply
+        // reads as prose.
+        var env: [String: MathExpression.Value] = [:]
+        equal(evalLine(String(repeating: "(", count: 4000), env: &env), nil, "4000 unclosed parens")
+        equal(evalLine(String(repeating: "(", count: 4000) + "1 + 1" + String(repeating: ")", count: 4000), env: &env),
+              nil, "4000 balanced parens around a real expression")
+        // Unary minus recurses on itself the same way, so a long run of them
+        // is the same crash by another route.
+        equal(evalLine(String(repeating: "-", count: 4000) + "5", env: &env), nil, "4000 leading minus signs")
+        // Two more productions recurse on themselves the same way: the
+        // right-associative "^", and the target of a percent "of" phrase.
+        equal(evalLine("2" + String(repeating: "^2", count: 4000), env: &env), nil, "4000 chained exponents")
+        equal(evalLine(String(repeating: "100% of ", count: 4000) + "5", env: &env), nil, "4000 chained percent-of phrases")
+        // Nesting a human would actually write still evaluates.
+        equal(evalLine("((((((((((2 + 3))))))))))", env: &env), 5, "ten levels of real nesting still works")
+    }
+
     suite("renaming the app moves the whole storage directory") {
         let base = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("jot-rename-\(UUID().uuidString)")
