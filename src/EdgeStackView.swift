@@ -92,11 +92,25 @@ struct NoteCard: View {
     let baseFont: NSFont
     @Binding var draggingNoteID: UUID?
 
-    @State private var height: CGFloat = 40
+    /// The height the note's content actually needs — kept current
+    /// regardless of whether a fixed height is in effect, so a fresh drag
+    /// has a real starting point and double-clicking the handle has a real
+    /// value to reset to.
+    @State private var contentHeight: CGFloat = 40
     @State private var isHovered = false
+    /// The height a resize drag started from. Nil outside an active drag.
+    @State private var dragStartHeight: CGFloat?
 
     /// Whether this card is the one a drag is carrying right now.
     private var isCarried: Bool { draggingNoteID == noteID }
+
+    /// Nil means "size to content" — this card's own persisted override, if
+    /// the resize handle has ever been dragged.
+    private var fixedHeight: Double? { notesManager.cardHeight(at: index) }
+
+    /// What actually gets asked of the editor's frame: the persisted fixed
+    /// height if there is one, otherwise the content's own natural height.
+    private var displayedHeight: CGFloat { fixedHeight.map { CGFloat($0) } ?? contentHeight }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -110,9 +124,9 @@ struct NoteCard: View {
                 listKeyword: settings.effectiveListKeyword,
                 codeKeyword: settings.effectiveCodeKeyword,
                 ink: settings.effectiveInk,
-                onHeightChange: { height = $0 }
+                onHeightChange: { contentHeight = $0 }
             )
-            .frame(height: height)
+            .frame(height: displayedHeight)
             .padding(12)
 
             if isHovered {
@@ -141,6 +155,7 @@ struct NoteCard: View {
                 )
         )
         .overlay(alignment: .topLeading) { reorderGrip }
+        .overlay(alignment: .bottom) { resizeHandle }
         // A hovered card lifts a little off the stack; a carried one dims so
         // the eye keeps track of what is being moved while the others part.
         .shadow(color: .black.opacity(isHovered && !isCarried ? 0.10 : 0), radius: 7, y: 2)
@@ -176,6 +191,43 @@ struct NoteCard: View {
                     return NSItemProvider(object: noteID.uuidString as NSString)
                 }
                 .help("Drag to reorder")
+                .transition(.opacity)
+        }
+    }
+
+    /// A thin strip along the bottom edge: drag to give this card a fixed
+    /// height shorter than its content instead of growing to fit it, with
+    /// the overflow scrolling inside the card. Double-click resets to
+    /// sizing to content. Sits in the outer padding below `NoteCardEditor`'s
+    /// own frame, not on top of it — the same reason `reorderGrip` needs a
+    /// corner of its own: the editor is a real NSTextView claiming every
+    /// mouse event over its own bounds.
+    @ViewBuilder
+    private var resizeHandle: some View {
+        if isHovered {
+            Rectangle()
+                .fill(Color(nsColor: settings.effectiveInk.secondary).opacity(0.35))
+                .frame(height: 3)
+                .clipShape(Capsule())
+                .padding(.horizontal, 44)
+                .frame(height: 12)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .help("Drag to resize, double-click to fit content")
+                .gesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { value in
+                            if dragStartHeight == nil {
+                                dragStartHeight = fixedHeight.map { CGFloat($0) } ?? contentHeight
+                            }
+                            let proposed = (dragStartHeight ?? contentHeight) + value.translation.height
+                            notesManager.setCardHeight(Double(max(40, proposed)), at: index)
+                        }
+                        .onEnded { _ in dragStartHeight = nil }
+                )
+                .onTapGesture(count: 2) {
+                    notesManager.setCardHeight(nil, at: index)
+                }
                 .transition(.opacity)
         }
     }
@@ -231,7 +283,12 @@ private struct NoteCardDropDelegate: DropDelegate {
 }
 
 /// A checklist-capable editor that reports the height it needs, so a card can
-/// size itself to its note instead of scrolling internally.
+/// size itself to its note by default — and, wrapped in a real `NSScrollView`,
+/// can just as well be given a fixed height shorter than that and scroll its
+/// overflow internally instead, when the card's resize handle has been
+/// dragged. The scroll view is transparent to that choice: whatever height
+/// SwiftUI's `.frame` on this view ends up giving it, a scroller appears only
+/// when the content actually overflows it.
 struct NoteCardEditor: NSViewRepresentable {
     @Binding var text: String
     var lineHeightMultiple: Double
@@ -243,7 +300,19 @@ struct NoteCardEditor: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    func makeNSView(context: Context) -> ChecklistTextView {
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.autohidesScrollers = true
+        // Same reasoning as `SwipeScrollView`'s matching line: without this,
+        // AppKit adds its own top content inset whenever this scroll view's
+        // top edge happens to land flush with something it thinks deserves
+        // clearance, double-counting space this view never asked it to add.
+        scrollView.automaticallyAdjustsContentInsets = false
+
         let textView = ChecklistTextView()
         textView.delegate = context.coordinator
 
@@ -287,11 +356,13 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.recomputeLinkMatches()
         textView.applyLinkFolding()
 
-        return textView
+        scrollView.documentView = textView
+        return scrollView
     }
 
-    func updateNSView(_ textView: ChecklistTextView, context: Context) {
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
+        guard let textView = scrollView.documentView as? ChecklistTextView else { return }
         textView.onHeightChange = onHeightChange
 
         textView.listKeyword = listKeyword

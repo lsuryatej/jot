@@ -16,12 +16,20 @@ struct Note: Identifiable, Equatable, Codable {
     var fontName: String?
     /// Same trade as `fontName`, for `SettingsManager.noteFontSize`.
     var fontSize: Double?
+    /// This note's Screen Edge card height, in points, when the user has
+    /// dragged its resize handle to something shorter than its content. Nil
+    /// means "size to content" — the only behaviour before this existed, so
+    /// old note files with no key decode straight through with nothing to
+    /// migrate, same trade as `fontName`/`fontSize`. Unused outside Screen
+    /// Edge mode; a windowed note has no card to size.
+    var cardHeight: Double?
 
-    init(id: UUID = UUID(), text: String = "", fontName: String? = nil, fontSize: Double? = nil) {
+    init(id: UUID = UUID(), text: String = "", fontName: String? = nil, fontSize: Double? = nil, cardHeight: Double? = nil) {
         self.id = id
         self.text = text
         self.fontName = fontName
         self.fontSize = fontSize
+        self.cardHeight = cardHeight
     }
 
     var isBlank: Bool {

@@ -57,6 +57,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/PreferencesView.swift \
     tests/NotesManagerTests.swift \
     tests/ReminderDirectiveTests.swift \
+    tests/ResizableCardTests.swift \
     tests/GlassTintTests.swift \
     tests/ThemeNoteTests.swift \
     tests/CelebrationTests.swift \
