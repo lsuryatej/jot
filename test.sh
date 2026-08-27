@@ -40,6 +40,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/Units.swift \
     src/CurrencyRates.swift \
     src/MathExpression.swift \
+    src/UpdateChecker.swift \
     src/NoteStore.swift \
     src/ReminderDirective.swift \
     src/ReminderScheduler.swift \
@@ -58,6 +59,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/NotesManagerTests.swift \
     tests/ReminderDirectiveTests.swift \
     tests/ResizableCardTests.swift \
+    tests/UpdateCheckerTests.swift \
     tests/GlassTintTests.swift \
     tests/ThemeNoteTests.swift \
     tests/CelebrationTests.swift \

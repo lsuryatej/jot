@@ -17,6 +17,7 @@ runCodeBlockTests()
 runReminderDirectiveTests()
 runReminderNotesManagerTests()
 runResizableCardTests()
+runUpdateCheckerTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

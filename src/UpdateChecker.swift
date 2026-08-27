@@ -58,7 +58,7 @@ final class UpdateChecker: ObservableObject {
 
     /// Plain dotted-integer comparison — enough for "1.2.0" vs "1.10.0"
     /// without pulling in a semver library for three numbers.
-    static func isNewer(_ a: String, than b: String) -> Bool {
+    nonisolated static func isNewer(_ a: String, than b: String) -> Bool {
         let av = a.split(separator: ".").compactMap { Int($0) }
         let bv = b.split(separator: ".").compactMap { Int($0) }
         for i in 0..<max(av.count, bv.count) {
@@ -73,22 +73,66 @@ final class UpdateChecker: ObservableObject {
     /// it and relaunch. An ad-hoc-signed app has no safe way to replace its
     /// own running binary, so without Homebrew the honest fallback is
     /// sending the user to the release page rather than pretending to update.
+    ///
+    /// Relaunching used to happen unconditionally in the termination handler,
+    /// regardless of whether `brew upgrade` actually changed anything —
+    /// which it does not always do even on a clean, zero-status exit: brew
+    /// treats "already installed" as success, and this project's own
+    /// Homebrew cask is bumped by hand after each release (see BACKLOG.md),
+    /// so a user could click this the moment a new version is announced but
+    /// before the cask itself catches up. The reported bug — click restart,
+    /// the app quits, and the same old version comes back — is exactly what
+    /// that produces: brew "succeeds" at upgrading nothing, and the old
+    /// `/Applications/Jot.app` gets reopened and called done. The same gap
+    /// covers a user who has Homebrew for unrelated tools but installed Jot
+    /// via `install.sh`: `brew upgrade --cask jot` fails fast for a cask
+    /// that was never installed, and the old code ignored that too.
+    ///
+    /// The fix trusts neither the exit status nor brew's own claims: it
+    /// re-reads the actual installed bundle's version from disk after the
+    /// process exits, and only relaunches if that genuinely moved forward.
     func performUpdate() {
         guard let brew = Self.brewPath() else {
             NSWorkspace.shared.open(Self.releasesPage)
             return
         }
+        let versionBeforeUpgrade = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: brew)
         process.arguments = ["upgrade", "--cask", "jot"]
         process.terminationHandler = { _ in
             DispatchQueue.main.async {
-                NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Jot.app"))
+                let installedVersion = Self.installedVersion(at: Self.installedAppPath) ?? versionBeforeUpgrade
+                guard Self.isNewer(installedVersion, than: versionBeforeUpgrade) else {
+                    // Nothing on disk actually changed — do not relaunch into
+                    // the exact binary that was just running and call it an
+                    // update. Send the user to a path that definitely works.
+                    NSWorkspace.shared.open(Self.releasesPage)
+                    return
+                }
+                NSWorkspace.shared.open(URL(fileURLWithPath: Self.installedAppPath))
                 NSApp.terminate(nil)
             }
         }
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            NSWorkspace.shared.open(Self.releasesPage)
+        }
+    }
+
+    nonisolated static let installedAppPath = "/Applications/Jot.app"
+
+    /// Reads `CFBundleShortVersionString` straight from the installed app's
+    /// own `Info.plist` on disk — not `Bundle.main`, which would still
+    /// report this (old, currently-running) process's version even after
+    /// the file on disk changed underneath it. `path` is overridable so this
+    /// is testable against a fixture bundle rather than the real install.
+    nonisolated static func installedVersion(at path: String) -> String? {
+        let plistURL = URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")
+        guard let dict = NSDictionary(contentsOf: plistURL) else { return nil }
+        return dict["CFBundleShortVersionString"] as? String
     }
 
     private static func brewPath() -> String? {
