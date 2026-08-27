@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         UpdateChecker.check(enabled: settings.checksForUpdates)
         notesManager.timerKeyword = settings.effectiveTimerKeyword
         notesManager.pomodoroKeyword = settings.effectivePomodoroKeyword
+        notesManager.reminderKeyword = settings.effectiveReminderKeyword
         notesManager.onPersist = { [weak self] notes in
             self?.scheduleAppleNotesSync(notes)
         }
@@ -203,6 +204,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.notesManager.pomodoroKeywordDidChange(to: self.settings.effectivePomodoroKeyword)
+            }
+            .store(in: &cancellables)
+
+        settings.$reminderKeyword
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.notesManager.reminderKeywordDidChange(to: self.settings.effectiveReminderKeyword)
             }
             .store(in: &cancellables)
 

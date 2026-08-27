@@ -304,6 +304,7 @@ final class SettingsManager: ObservableObject {
         static let hotKeyMods     = "hotKeyModifiers"
         static let timerKeyword   = "timerKeyword"
         static let pomodoroKeyword = "pomodoroKeyword"
+        static let reminderKeyword = "reminderKeyword"
         static let showsFooter    = "showsFooter"
         static let screenEdge     = "screenEdge"
         static let edgeWidth      = "edgeWidth"
@@ -329,7 +330,7 @@ final class SettingsManager: ObservableObject {
         /// domains accumulate unrelated system-set keys over time, and only
         /// the app's own keys should ever cross a bundle-ID migration.
         static let all: Set<String> = [
-            displayMode, hotKeyCode, hotKeyMods, timerKeyword, pomodoroKeyword, showsFooter,
+            displayMode, hotKeyCode, hotKeyMods, timerKeyword, pomodoroKeyword, reminderKeyword, showsFooter,
             screenEdge, edgeWidth, appearance, appearanceTint, showsHeader, lineSpacing,
             windowFrame, syncsToNotes, listKeyword, codeKeyword, fetchesLiveRates, checksForUpdates,
             noteFontName, noteFontSize, letterSpacing, guide,
@@ -365,6 +366,14 @@ final class SettingsManager: ObservableObject {
         didSet {
             let trimmed = pomodoroKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
             defaults.set(trimmed.isEmpty ? "pomodoro" : trimmed, forKey: Key.pomodoroKeyword)
+        }
+    }
+
+    /// The word that turns "<keyword> 3pm" into a wall-clock reminder.
+    @Published var reminderKeyword: String {
+        didSet {
+            let trimmed = reminderKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed.isEmpty ? "remind" : trimmed, forKey: Key.reminderKeyword)
         }
     }
 
@@ -537,6 +546,11 @@ final class SettingsManager: ObservableObject {
         return trimmed.isEmpty ? "pomodoro" : trimmed
     }
 
+    var effectiveReminderKeyword: String {
+        let trimmed = reminderKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "remind" : trimmed
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         Self.migrateFromPreviousBundleIDIfNeeded(into: defaults)
@@ -554,6 +568,7 @@ final class SettingsManager: ObservableObject {
 
         self.timerKeyword = defaults.string(forKey: Key.timerKeyword) ?? "timer"
         self.pomodoroKeyword = defaults.string(forKey: Key.pomodoroKeyword) ?? "pomodoro"
+        self.reminderKeyword = defaults.string(forKey: Key.reminderKeyword) ?? "remind"
         self.showsFooter = defaults.object(forKey: Key.showsFooter) as? Bool ?? true
 
         let rawAppearance = defaults.string(forKey: Key.appearance) ?? Appearance.frosted.rawValue

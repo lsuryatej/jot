@@ -463,6 +463,16 @@ struct PreferencesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                LabeledContent("Reminder") {
+                    TextField("remind", text: $settings.reminderKeyword)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                Text("e.g. \"\(settings.effectiveReminderKeyword) 3pm\" or \"\(settings.effectiveReminderKeyword) tomorrow 9am\" — fires a system notification at that clock time, even if Jot isn't the frontmost app. Unlike Timer and Pomodoro, any number of reminders can be pending at once. First use asks for notification permission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Celebration") {

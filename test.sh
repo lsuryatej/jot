@@ -41,6 +41,8 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/CurrencyRates.swift \
     src/MathExpression.swift \
     src/NoteStore.swift \
+    src/ReminderDirective.swift \
+    src/ReminderScheduler.swift \
     src/NotesManager.swift \
     src/TextStatistics.swift \
     src/Checklist.swift \
@@ -54,6 +56,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/PlainTextEditor.swift \
     src/PreferencesView.swift \
     tests/NotesManagerTests.swift \
+    tests/ReminderDirectiveTests.swift \
     tests/GlassTintTests.swift \
     tests/ThemeNoteTests.swift \
     tests/CelebrationTests.swift \

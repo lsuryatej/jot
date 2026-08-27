@@ -37,14 +37,18 @@ func suite(_ name: String, _ body: () -> Void) {
 }
 
 /// Fresh manager over a throwaway file, with legacy migration disabled so the
-/// user's real notes are never touched by a test run.
-func makeManager(seed: [String]? = nil) -> NotesManager {
+/// user's real notes are never touched by a test run. Always given a fake
+/// reminder scheduler: `UNUserNotificationCenter` needs a real app bundle
+/// and a user-facing authorization prompt, neither of which this swiftc-only
+/// binary has, so the real `SystemReminderScheduler` must never be reachable
+/// from a test.
+func makeManager(seed: [String]? = nil, reminderScheduler: ReminderScheduling = SpyReminderScheduler()) -> NotesManager {
     let url = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("stickynotes-tests-\(UUID().uuidString)")
         .appendingPathComponent("notes.json")
     let store = NoteStore(fileURL: url, allowsLegacyMigration: false)
     if let seed { store.save(seed.map { Note(text: $0) }) }
-    return NotesManager(store: store, saveDebounce: 0)
+    return NotesManager(store: store, saveDebounce: 0, reminderScheduler: reminderScheduler)
 }
 
 func runAllTests() {

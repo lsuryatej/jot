@@ -70,6 +70,16 @@ final class NotesManager: ObservableObject {
     private var seenTimerSource: [UUID: String] = [:]
     /// Same role as `seenTimerSource`, for Pomodoro directives.
     private var seenPomodoroSource: [UUID: String] = [:]
+    /// Reminders have no shared slot to fight over — any number can be
+    /// pending at once, across any number of notes — so this tracks a *set*
+    /// of directive-source strings per note rather than one. A source
+    /// present here is believed to already have a pending system
+    /// notification, whether scheduled this session or seeded from a note
+    /// that already contained the text when first displayed (see
+    /// `seedIfNeeded`); a source that drops out of this set on the next
+    /// evaluation had its directive edited or deleted, and its notification
+    /// is cancelled to match.
+    private var seenReminderSources: [UUID: Set<String>] = [:]
     /// Notes whose directive text has already been recorded once this
     /// session, so `seedIfNeeded` only ever does that once per note rather
     /// than re-deriving it (harmlessly, but needlessly) on every visit.
@@ -87,13 +97,23 @@ final class NotesManager: ObservableObject {
     /// Configurable via Preferences; "<keyword> 25/5" starts a Pomodoro cycle.
     var pomodoroKeyword: String = "pomodoro"
 
+    /// Configurable via Preferences; "<keyword> 3pm" schedules a wall-clock
+    /// reminder.
+    var reminderKeyword: String = "remind"
+
     private let store: NoteStore
     private var pendingSave: DispatchWorkItem?
     private let saveDebounce: TimeInterval
+    private let reminderScheduler: ReminderScheduling
 
-    init(store: NoteStore = NoteStore(), saveDebounce: TimeInterval = 0.6) {
+    init(
+        store: NoteStore = NoteStore(),
+        saveDebounce: TimeInterval = 0.6,
+        reminderScheduler: ReminderScheduling = SystemReminderScheduler()
+    ) {
         self.store = store
         self.saveDebounce = saveDebounce
+        self.reminderScheduler = reminderScheduler
         self.notes = store.load()
         self.currentIndex = max(0, notes.count - 1)
         // `currentIndex`'s didSet is not guaranteed to fire for this same
@@ -116,6 +136,7 @@ final class NotesManager: ObservableObject {
             let id = notes[currentIndex].id
             notes[currentIndex].text = newValue
             evaluateTimer(in: newValue, noteID: id)
+            evaluateReminders(in: newValue, noteID: id)
             scheduleSave()
         }
     }
@@ -158,6 +179,21 @@ final class NotesManager: ObservableObject {
         // them should start counting down, not just the one that happened
         // to be current when the mode was entered.
         evaluateTimer(in: newValue, noteID: id)
+        evaluateReminders(in: newValue, noteID: id)
+        scheduleSave()
+    }
+
+    /// Nil means "size to content" — a Screen Edge card's default, and what
+    /// every card was before a resize handle existed at all.
+    func cardHeight(at index: Int) -> Double? {
+        notes.indices.contains(index) ? notes[index].cardHeight : nil
+    }
+
+    /// Setting nil is how the resize handle's double-click resets a card
+    /// back to sizing itself to its content.
+    func setCardHeight(_ newValue: Double?, at index: Int) {
+        guard notes.indices.contains(index) else { return }
+        notes[index].cardHeight = newValue
         scheduleSave()
     }
 
@@ -216,6 +252,8 @@ final class NotesManager: ObservableObject {
     /// The blank-instead-of-removed path above (the last note left) hits
     /// this too, since blanking the text there bypasses `evaluateTimer`
     /// entirely — nothing else would ever notice the directive is gone.
+    /// Any pending reminders that note owned are cancelled the same way, for
+    /// the same reason — see `forgetReminderState`.
     private func forgetTimerState(for noteID: UUID) {
         if activeTimerOwnerID == noteID {
             activeTimerEnd = nil
@@ -226,6 +264,21 @@ final class NotesManager: ObservableObject {
         seenTimerSource[noteID] = nil
         seenPomodoroSource[noteID] = nil
         seededNoteIDs.remove(noteID)
+        forgetReminderState(for: noteID)
+    }
+
+    /// Cancels every pending reminder notification belonging to `noteID`.
+    /// Unlike the timer's single slot, there is no "owner" check needed here
+    /// — every source this note ever had a reminder for is tracked in
+    /// `seenReminderSources`, whether it was scheduled this session or
+    /// merely seeded from text a previous session already scheduled.
+    private func forgetReminderState(for noteID: UUID) {
+        guard let sources = seenReminderSources[noteID], !sources.isEmpty else {
+            seenReminderSources[noteID] = nil
+            return
+        }
+        reminderScheduler.cancel(identifiers: sources.map { reminderIdentifier(noteID: noteID, source: $0) })
+        seenReminderSources[noteID] = nil
     }
 
     // MARK: - Navigation
@@ -454,6 +507,48 @@ final class NotesManager: ObservableObject {
         activeTimerOwnerID = noteID
     }
 
+    /// A deterministic identifier for a given note's directive text, so a
+    /// pending notification can be cancelled without this app having kept
+    /// anything else on disk about it — including one seeded from a
+    /// previous session, whose identifier was never actually stored anywhere
+    /// (see `seedIfNeeded`).
+    private func reminderIdentifier(noteID: UUID, source: String) -> String {
+        "jot-reminder-\(noteID.uuidString)-\(source)"
+    }
+
+    /// Unlike a timer or Pomodoro cycle, a reminder never contends for a
+    /// shared slot: every distinct `remind` line found anywhere in any note
+    /// gets its own pending system notification, and any number can be
+    /// pending at once. This only ever schedules a source that wasn't
+    /// already in `seenReminderSources`, and only ever cancels one that was
+    /// there and no longer is — so retyping the exact same directive text
+    /// (nothing changed) never touches the scheduler at all.
+    private func evaluateReminders(in text: String, noteID: UUID) {
+        let directives = ReminderDirective.directives(in: text, keyword: reminderKeyword)
+        let currentSources = Set(directives.map(\.source))
+        let previousSources = seenReminderSources[noteID] ?? []
+
+        let removed = previousSources.subtracting(currentSources)
+        if !removed.isEmpty {
+            reminderScheduler.cancel(identifiers: removed.map { reminderIdentifier(noteID: noteID, source: $0) })
+        }
+
+        let added = directives.filter { !previousSources.contains($0.source) }
+        if !added.isEmpty {
+            let title = Note(text: text).title
+            for directive in added {
+                reminderScheduler.schedule(
+                    identifier: reminderIdentifier(noteID: noteID, source: directive.source),
+                    fireDate: directive.fireDate,
+                    title: title == "Untitled note" ? "Reminder" : title,
+                    body: directive.source
+                )
+            }
+        }
+
+        seenReminderSources[noteID] = currentSources.isEmpty ? nil : currentSources
+    }
+
     /// The first time a note is displayed this session — navigated to,
     /// created, or jumped to from search — its existing directive text, if
     /// any, is recorded as already seen. Without this, switching to a note
@@ -466,6 +561,13 @@ final class NotesManager: ObservableObject {
         seededNoteIDs.insert(noteID)
         seenTimerSource[noteID] = Self.firstTimerDirective(in: text, keyword: timerKeyword)?.source
         seenPomodoroSource[noteID] = Self.firstPomodoroDirective(in: text, keyword: pomodoroKeyword)?.source
+        // Deliberately not scheduled here, only recorded as already seen:
+        // if this text came from a previous session, whatever it already
+        // scheduled either already fired or is still pending with the OS
+        // under the same deterministic identifier — either way, re-adding it
+        // now would be redundant at best. See `evaluateReminders`.
+        let sources = ReminderDirective.directives(in: text, keyword: reminderKeyword).map(\.source)
+        seenReminderSources[noteID] = sources.isEmpty ? nil : Set(sources)
     }
 
     /// Re-parses every note's tracking after the keyword changes in
@@ -500,6 +602,24 @@ final class NotesManager: ObservableObject {
             activeTimerOwnerID = nil
         }
         seenPomodoroSource.removeAll()
+        seededNoteIDs.removeAll()
+        if notes.indices.contains(currentIndex) {
+            seedIfNeeded(noteID: notes[currentIndex].id, text: notes[currentIndex].text)
+        }
+    }
+
+    /// Same rationale again, for the reminder keyword. Unlike the two
+    /// above, there's no single running thing to cancel immediately — a
+    /// reminder scheduled under the old keyword is only ever cancelled the
+    /// next time *that specific note* is actually edited (`evaluateReminders`
+    /// diffs against `seenReminderSources`, which this clears), since a note
+    /// never revisited this session isn't tracked here at all yet to know
+    /// what to cancel. A known limitation, not a silent gap: it means an
+    /// old-keyword reminder in a note nobody reopens still fires on its
+    /// original schedule after the keyword changes.
+    func reminderKeywordDidChange(to keyword: String) {
+        reminderKeyword = keyword
+        seenReminderSources.removeAll()
         seededNoteIDs.removeAll()
         if notes.indices.contains(currentIndex) {
             seedIfNeeded(noteID: notes[currentIndex].id, text: notes[currentIndex].text)
