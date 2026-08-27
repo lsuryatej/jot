@@ -149,6 +149,28 @@ func runReminderDirectiveTests() {
         check(ReminderDirective.parseTimePhrase("", now: now, calendar: calendar) == nil, "empty phrase")
     }
 
+    suite("reminder: friendlyDescription phrases the confirmation toast") {
+        let calendar = utcCalendar()
+        var todayLater = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: now)
+        todayLater.hour = 18
+        todayLater.minute = 0
+        let laterToday = calendar.date(from: todayLater)!
+        equal(ReminderDirective.friendlyDescription(for: laterToday, now: now, calendar: calendar),
+              "Today at 6:00 PM", "same calendar day reads as \"Today\"")
+
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: laterToday)!
+        equal(ReminderDirective.friendlyDescription(for: tomorrow, now: now, calendar: calendar),
+              "Tomorrow at 6:00 PM", "the next calendar day reads as \"Tomorrow\"")
+
+        let nextWeek = calendar.date(byAdding: .day, value: 8, to: now)!
+        var comps = calendar.dateComponents([.year, .month, .day], from: nextWeek)
+        comps.hour = 10
+        comps.minute = 0
+        let farOut = calendar.date(from: comps)!
+        equal(ReminderDirective.friendlyDescription(for: farOut, now: now, calendar: calendar),
+              "Thu, Sep 3 at 10:00 AM", "anything further out names the weekday and date")
+    }
+
     suite("reminder: directives(in:keyword:) finds every line, dedupes identical ones") {
         let text = "remind 3pm\nsome other line\nremind tomorrow 9am"
         let found = ReminderDirective.directives(in: text, keyword: "remind", now: now, calendar: calendar)
@@ -186,6 +208,23 @@ func runReminderNotesManagerTests() {
         // Editing something unrelated in the same note must not reschedule.
         manager.currentText = "remind in 30 minutes\nbuy milk"
         equal(scheduler.scheduled.count, 1, "still just the one — retyping the same directive doesn't reschedule")
+    }
+
+    suite("NotesManager: a new reminder publishes a confirmation message") {
+        let scheduler = SpyReminderScheduler()
+        let manager = makeManager(reminderScheduler: scheduler)
+        check(manager.reminderConfirmation == nil, "nothing to confirm before any directive exists")
+
+        manager.currentText = "remind in 10 minutes"
+        check(manager.reminderConfirmation?.hasPrefix("Reminder set for") == true,
+              "a single new directive gets a plain-language confirmation: \(manager.reminderConfirmation ?? "nil")")
+
+        // Retyping the same, already-scheduled directive is not a new
+        // confirmation-worthy event — evaluateReminders only publishes one
+        // for genuinely new sources, matching what it schedules.
+        manager.reminderConfirmation = nil
+        manager.currentText = "remind in 10 minutes\nbuy milk"
+        check(manager.reminderConfirmation == nil, "no fresh confirmation for text that didn't add a new directive")
     }
 
     suite("NotesManager: multiple reminders stack instead of replacing each other") {

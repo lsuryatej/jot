@@ -9,6 +9,40 @@ struct ReminderDirective: Equatable {
     /// scheduled" apart from "the note changed somewhere unrelated."
     let source: String
     let fireDate: Date
+
+    /// "Today at 3:00 PM", "Tomorrow at 9:00 AM", "Fri, Sep 4 at 10:00 AM" —
+    /// what a confirmation toast shows right after a reminder directive is
+    /// recognized, so a mistyped time or date is obvious immediately rather
+    /// than only at the moment it fires, when it's too late to just retype
+    /// it.
+    static func friendlyDescription(for fireDate: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        func formatter(_ pattern: String) -> DateFormatter {
+            let formatter = DateFormatter()
+            // Matching the same calendar/timezone the "which day is this"
+            // comparisons below use, rather than each formatter defaulting
+            // to the system's own — the two must agree, or a caller passing
+            // a non-default calendar (every test in this file) sees a
+            // "Today"/"Tomorrow" label paired with a time computed in a
+            // different timezone than the one that decided it was today.
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = pattern
+            return formatter
+        }
+        let time = formatter("h:mm a")
+
+        if calendar.isDate(fireDate, inSameDayAs: now) {
+            return "Today at \(time.string(from: fireDate))"
+        }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+           calendar.isDate(fireDate, inSameDayAs: tomorrow) {
+            return "Tomorrow at \(time.string(from: fireDate))"
+        }
+
+        let dayAndDate = formatter("EEE, MMM d")
+        return "\(dayAndDate.string(from: fireDate)) at \(time.string(from: fireDate))"
+    }
 }
 
 /// Parses `remind <phrase>` lines into concrete fire dates.

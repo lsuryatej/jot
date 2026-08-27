@@ -19,6 +19,7 @@ struct ContentView: View {
     /// and nothing else on screen says which note you are now reading.
     @State private var swipeFeedback: String?
     @State private var swipeFeedbackDismiss: DispatchWorkItem?
+    @State private var reminderToastDismiss: DispatchWorkItem?
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -53,6 +54,7 @@ struct ContentView: View {
             }
 
             swipeFeedbackOverlay
+            reminderToastOverlay
 
             if showingGlobalSearch {
                 GlobalSearchView(notesManager: notesManager, isPresented: $showingGlobalSearch) { result in
@@ -68,6 +70,10 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .jotRequestToggleChrome)) { _ in
             toggleChrome()
+        }
+        .onChange(of: notesManager.reminderConfirmation) { _, newValue in
+            guard newValue != nil else { return }
+            showReminderToast()
         }
     }
 
@@ -415,6 +421,44 @@ struct ContentView: View {
         }
         swipeFeedbackDismiss = dismiss
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: dismiss)
+    }
+
+    // MARK: - Reminder feedback
+
+    /// A brief "Reminder set for …" confirmation the moment a `remind`
+    /// directive is typed, so a wrong time or date is obvious immediately —
+    /// answers the same question the swipe chip does ("did what I just do
+    /// actually take?"), just for a different action. Shown regardless of
+    /// display mode: reminders can be set from a windowed note or an edge
+    /// card alike, unlike the swipe chip, which only ever matters with the
+    /// header hidden.
+    @ViewBuilder
+    private var reminderToastOverlay: some View {
+        if let message = notesManager.reminderConfirmation {
+            Text(message)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
+                .frame(maxWidth: .infinity)
+                .padding(.top, settings.showsHeader ? 44 : 10)
+                .allowsHitTesting(false)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    /// Longer on screen than the swipe chip (2.5s vs 1.4s): this is telling
+    /// you something you need to actually read and check, not just
+    /// confirming where you already know you landed.
+    private func showReminderToast() {
+        reminderToastDismiss?.cancel()
+        let dismiss = DispatchWorkItem {
+            withAnimation(.easeIn(duration: 0.3)) { notesManager.reminderConfirmation = nil }
+        }
+        reminderToastDismiss = dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: dismiss)
     }
 
     // MARK: - Share

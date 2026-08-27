@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 import Combine
+import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation, UNUserNotificationCenterDelegate {
     private let settings = SettingsManager.shared
 
     /// One model shared by every container. The panel and the popover are
@@ -40,6 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         notesManager.onPersist = { [weak self] notes in
             self?.scheduleAppleNotesSync(notes)
         }
+        // `willPresent` below fires for a reminder notification regardless
+        // of whether this app is frontmost, as long as it's running at all
+        // — which is the whole payoff: the same confetti-plus-sound moment
+        // the countdown timer gets, not just a banner easy to miss in the
+        // corner of the screen.
+        UNUserNotificationCenter.current().delegate = self
 
         NSApp.mainMenu = MainMenu.build(
             target: self,
@@ -703,6 +710,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         preferencesWindow = window
+    }
+
+    // MARK: - Reminder notifications
+
+    /// Fires whenever a notification is about to display, whether or not
+    /// this app is the frontmost one — background/accessory apps still get
+    /// this callback as long as they're running, which is what makes it
+    /// usable here at all. Only a `remind` directive's own notifications
+    /// (identified by `reminderIdentifierPrefix`) trigger the in-app
+    /// celebration; anything else notifying through this app in the future
+    /// would otherwise silently inherit fireworks it never asked for.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        let identifier = notification.request.identifier
+        Task { @MainActor in
+            if identifier.hasPrefix(reminderIdentifierPrefix) {
+                CelebrationWindowController.fire(style: self.settings.celebrationStyle, sound: self.settings.timerSound)
+            }
+        }
+        completionHandler([.banner, .sound])
     }
 }
 

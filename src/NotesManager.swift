@@ -80,6 +80,13 @@ final class NotesManager: ObservableObject {
     /// evaluation had its directive edited or deleted, and its notification
     /// is cancelled to match.
     private var seenReminderSources: [UUID: Set<String>] = [:]
+    /// A brief confirmation message ("Reminder set for Today at 3:00 PM"),
+    /// set the moment a genuinely new `remind` directive is scheduled.
+    /// `ContentView` shows this as a transient toast and is responsible for
+    /// clearing it back to nil once shown — this only ever sets a fresh
+    /// value, matching the write-only shape `swipeFeedback` already uses in
+    /// `ContentView` for the same kind of "say what just happened" chip.
+    @Published var reminderConfirmation: String?
     /// Notes whose directive text has already been recorded once this
     /// session, so `seedIfNeeded` only ever does that once per note rather
     /// than re-deriving it (harmlessly, but needlessly) on every visit.
@@ -513,7 +520,7 @@ final class NotesManager: ObservableObject {
     /// previous session, whose identifier was never actually stored anywhere
     /// (see `seedIfNeeded`).
     private func reminderIdentifier(noteID: UUID, source: String) -> String {
-        "jot-reminder-\(noteID.uuidString)-\(source)"
+        "\(reminderIdentifierPrefix)\(noteID.uuidString)-\(source)"
     }
 
     /// Unlike a timer or Pomodoro cycle, a reminder never contends for a
@@ -544,6 +551,15 @@ final class NotesManager: ObservableObject {
                     body: directive.source
                 )
             }
+            // A confirmation for whichever directive was just typed, so a
+            // wrong time or date is obvious immediately rather than only at
+            // the moment it fires. `added` almost always has exactly one
+            // entry — someone typing a second `remind` line at the same
+            // instant as a first is not a real case worth a fancier message
+            // for.
+            reminderConfirmation = added.count == 1
+                ? "Reminder set for \(ReminderDirective.friendlyDescription(for: added[0].fireDate))"
+                : "\(added.count) reminders set"
         }
 
         seenReminderSources[noteID] = currentSources.isEmpty ? nil : currentSources

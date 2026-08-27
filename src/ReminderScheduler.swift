@@ -1,6 +1,12 @@
 import Foundation
 import UserNotifications
 
+/// Every reminder notification's identifier starts with this, so the
+/// `UNUserNotificationCenterDelegate` in `AppDelegate` can tell "this is one
+/// of ours, fire the in-app celebration too" apart from any other
+/// notification without needing to ask `NotesManager` anything.
+let reminderIdentifierPrefix = "jot-reminder-"
+
 /// What `NotesManager` needs from a reminder backend: schedule one, or
 /// cancel some. Kept as a protocol so the logic that decides *which*
 /// reminders are new or removed (in `NotesManager`) stays testable without
