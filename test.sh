@@ -60,6 +60,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/ReminderDirectiveTests.swift \
     tests/ResizableCardTests.swift \
     tests/UpdateCheckerTests.swift \
+    tests/ImageMarkdownVisibilityTests.swift \
     tests/GlassTintTests.swift \
     tests/ThemeNoteTests.swift \
     tests/CelebrationTests.swift \
