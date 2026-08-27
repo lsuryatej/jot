@@ -204,18 +204,26 @@ struct NoteCard: View {
     /// mouse event over its own bounds.
     @ViewBuilder
     private var resizeHandle: some View {
-        if isHovered {
+        // `dragStartHeight != nil` keeps this view (and the gesture attached
+        // to it) alive for the whole drag even after the pointer leaves the
+        // card's bounds — which a downward resize drag does almost
+        // immediately. Gating purely on `isHovered` made `onHover` fire
+        // `false` mid-drag, which removed this view from the hierarchy via
+        // the `if` above and silently killed the DragGesture along with it:
+        // the drag looked like it stopped responding the moment the cursor
+        // crossed the card's edge, which is exactly the reported friction.
+        if isHovered || dragStartHeight != nil {
             Rectangle()
                 .fill(Color(nsColor: settings.effectiveInk.secondary).opacity(0.35))
                 .frame(height: 3)
                 .clipShape(Capsule())
                 .padding(.horizontal, 44)
-                .frame(height: 12)
+                .frame(height: 14)
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .help("Drag to resize, double-click to fit content")
                 .gesture(
-                    DragGesture(minimumDistance: 1)
+                    DragGesture(minimumDistance: 0, coordinateSpace: .global)
                         .onChanged { value in
                             if dragStartHeight == nil {
                                 dragStartHeight = fixedHeight.map { CGFloat($0) } ?? contentHeight
