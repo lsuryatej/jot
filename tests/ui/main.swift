@@ -13,6 +13,7 @@ MainActor.assumeIsolated { startApplication() }
 runSettingsWindowTests()
 runHeaderDispatchTests()
 runUndoAcrossNoteSwitchTests()
+runImageResizeTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
