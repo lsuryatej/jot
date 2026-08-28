@@ -75,6 +75,15 @@ struct ContentView: View {
             guard newValue != nil else { return }
             showReminderToast()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .jotReminderNotAuthorized)) { _ in
+            // Reuses the same confirmation toast/timer: this is exactly the
+            // same "say what just happened with the reminder you typed"
+            // moment, just the failure case of it rather than the success
+            // one — the two should never both be trying to say something at
+            // the same time.
+            notesManager.reminderConfirmation = "Notifications are off — enable in System Settings"
+            showReminderToast()
+        }
     }
 
     // MARK: - Chrome

@@ -30,11 +30,42 @@ protocol ReminderScheduling {
 /// the feature is used keeps that consistent with the rest of the app's
 /// privacy stance (see BACKLOG.md).
 final class SystemReminderScheduler: ReminderScheduling {
-    private var didRequestAuthorization = false
-
+    /// The previous version called `UNUserNotificationCenter.add(_:)`
+    /// immediately after firing off `requestAuthorization` without waiting
+    /// for either to actually resolve — so a request could reach `add`
+    /// before the user had answered the permission prompt at all, and
+    /// `add`'s completion was never even checked, meaning a `.denied`
+    /// answer (or any other failure — a malformed trigger, anything) failed
+    /// completely silently. Reported directly as "reminder still not
+    /// working" with nothing else to go on, which is exactly what a silent
+    /// failure looks like from the outside. Every path below now either
+    /// schedules for real or explains why not, out loud.
     func schedule(identifier: String, fireDate: Date, title: String, body: String) {
-        requestAuthorizationIfNeeded()
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                Self.add(identifier: identifier, fireDate: fireDate, title: title, body: body, to: center)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+                    if let error {
+                        NSLog("Jot: reminder authorization request failed: \(error.localizedDescription)")
+                    }
+                    guard granted else {
+                        NotificationCenter.default.post(name: .jotReminderNotAuthorized, object: nil)
+                        return
+                    }
+                    Self.add(identifier: identifier, fireDate: fireDate, title: title, body: body, to: center)
+                }
+            case .denied:
+                NotificationCenter.default.post(name: .jotReminderNotAuthorized, object: nil)
+            @unknown default:
+                NotificationCenter.default.post(name: .jotReminderNotAuthorized, object: nil)
+            }
+        }
+    }
 
+    private static func add(identifier: String, fireDate: Date, title: String, body: String, to center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -49,17 +80,15 @@ final class SystemReminderScheduler: ReminderScheduling {
         // Adding a request with an identifier that is already pending
         // replaces it — exactly what's wanted when the same directive text
         // is re-evaluated (e.g. after a relaunch) rather than a duplicate.
-        UNUserNotificationCenter.current().add(request)
+        center.add(request) { error in
+            if let error {
+                NSLog("Jot: failed to schedule reminder \(identifier): \(error.localizedDescription)")
+            }
+        }
     }
 
     func cancel(identifiers: [String]) {
         guard !identifiers.isEmpty else { return }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
-    }
-
-    private func requestAuthorizationIfNeeded() {
-        guard !didRequestAuthorization else { return }
-        didRequestAuthorization = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 }

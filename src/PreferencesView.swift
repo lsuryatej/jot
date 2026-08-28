@@ -47,6 +47,12 @@ extension Notification.Name {
     /// Posted by AppDelegate at a settings window that is already open, to
     /// move it to a given pane. A fresh window picks its pane at init instead.
     static let jotShowSettingsPane = Notification.Name("JotShowSettingsPane")
+    /// Posted by `SystemReminderScheduler` when it discovers notifications
+    /// are denied for this app — a `remind` directive was typed, but nothing
+    /// will ever actually fire until that's changed in System Settings.
+    /// Observed by `ContentView`, which already owns the toast this reuses
+    /// to say so.
+    static let jotReminderNotAuthorized = Notification.Name("JotReminderNotAuthorized")
 }
 
 /// A settings pane. Replaces the old single long scroll — five sections
