@@ -18,6 +18,10 @@ libraries linked in.
 
 ![Jot evaluating a pizza dough recipe on Cream paper, variables and running totals included](docs/screenshots/hero.png)
 
+<!-- TODO: a 5-10s GIF here (Option+A summon, a math line, a pasted image,
+     hide) would land faster than the static hero on link-preview-driven
+     traffic like HN/Reddit. -->
+
 ## Install
 
 ```bash
@@ -47,25 +51,6 @@ these fixes, right-click the app → Open, or go to System Settings → Privacy
 pointing at a copy that no longer exists, and the next `brew install` reports
 "already installed" and does nothing.
 
-### Continuous verification
-
-Both install paths are checked by CI, not just by hand:
-
-- **`smoke-test-install-sh`** runs on every release, as a second job in
-  [`release.yml`](.github/workflows/release.yml), on its own fresh runner.
-  Installs via `install.sh` against the release that job just published, then
-  checks the app exists, is executable, matches the tagged version, carries a
-  valid ad-hoc signature, and is not quarantined.
-- **[`brew-smoke-test.yml`](.github/workflows/brew-smoke-test.yml)** runs
-  daily, plus on demand, instead of per-release. The Homebrew cask is bumped
-  by hand after each release, so there's always a window where it's briefly
-  out of sync with the latest tag. Installs via the exact published
-  `brew install lsuryatej/jot/jot` command on a throwaway runner, checks the
-  same things, cleans up with `brew uninstall --cask jot`.
-
-Both ran through a genuinely fresh machine before the quarantine fix was
-trusted, not just the machine it was written on.
-
 ## Why this exists
 
 Most "quick note" apps on macOS are either a $5-59 indie tool (Antinote,
@@ -82,6 +67,7 @@ what you get for free with Jot versus what they charge for.
 | | **Jot** | [Antinote](https://antinote.io/) | [Numi](https://numi.app/) | [Soulver 4](https://soulver.app/) |
 |---|---|---|---|---|
 | Price | Free, open source | $5 one-time | Free, $23.59 to unlock notes + sync | $59 one-time (+$26/yr optional) |
+| Binary size | ~950 KB, zero dependencies | Lightweight, closed | Lightweight, closed | Lightweight, closed |
 | Inline math with variables | Yes | Yes | Yes | Yes |
 | Unit conversion | Yes, offline | Yes | Yes | Yes |
 | Currency conversion | Yes, opt-in live rates | Yes | Yes, paid tier | Yes, live by default |
@@ -374,61 +360,27 @@ toolchain and SDK pair, so `build.sh` locates one explicitly (checking
 trusting `xcode-select`. On a non-beta macOS this constraint likely doesn't
 apply at all, a normal Xcode install should just work.
 
-## Layout
+### Continuous verification
 
-| Path | Role |
-|---|---|
-| `src/main.swift` | AppKit entry point |
-| `src/Jot.swift` | App delegate, display modes, panel, status item |
-| `src/MainMenu.swift` | Menu bar, including the Find items that drive Cmd+F |
-| `src/SettingsManager.swift` | Preferences, display-mode and privacy-toggle definitions |
-| `src/PreferencesView.swift` | Settings window and the shortcut recorder |
-| `src/HotKeyController.swift` | Global shortcut registration |
-| `src/KeyCombo.swift` | Shortcut model and its display form |
-| `src/MathExpression.swift` | The math parser and evaluator |
-| `src/Units.swift` | Unit conversion tables |
-| `src/CurrencyRates.swift` | Opt-in live exchange rates, cached |
-| `src/UpdateChecker.swift` | Opt-out GitHub release check |
-| `src/TextStatistics.swift` | Word counts and selection sum/average |
-| `src/Checklist.swift` | Checklist parsing, rewriting, and list mode |
-| `src/CodeBlock.swift` | Code-block keyword matching and the copyable body |
-| `src/OrderedList.swift` | Numbered/lettered/roman list parsing and continuation |
-| `src/Headings.swift` | Heading line parsing and marker ranges |
-| `src/ThemeNote.swift` | Theme-as-note parsing and derived palettes |
-| `src/GlassTint.swift` | Tint choices for the translucent papers |
-| `src/Celebration.swift` | Timer celebration configuration: styles and sounds |
-| `src/CelebrationWindow.swift` | The confetti window itself |
-| `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
-| `src/EdgeStackView.swift` | The edge sidebar and its note cards |
-| `src/Note.swift` | The note model and its stable identity |
-| `src/GlobalSearch.swift` | Cross-note search, matching every note's text directly |
-| `src/GlobalSearchView.swift` | The Cmd+Shift+F overlay |
-| `src/LinkShrink.swift` | Finds long URLs and the domain worth keeping visible |
-| `src/Attachments.swift` | Inline image storage and markdown references |
-| `src/TextRecognition.swift` | Vision-backed screenshot to text |
-| `src/AppleNotesSync.swift` | One-way push into Apple Notes |
-| `src/ContentView.swift` | Panel UI: header, editor, timer overlay, share |
-| `src/PlainTextEditor.swift` | `NSTextView` wrapper: swipe, images, math rendering |
-| `src/NotesManager.swift` | Note state, navigation, timer parsing |
-| `src/NoteStore.swift` | Atomic file persistence, backups, and migrations |
-| `tests/` | Logic tests, run by `./test.sh` |
-| `tests/ui/` | Window harness, run by `./test-ui.sh` |
-| `resources/Info.plist` | Bundle metadata |
-| `resources/AppIcon.icns` | App icon, regenerated by `scripts/make-icon.swift` |
-| `scripts/release.sh` | Builds and packages a release zip |
-| `install.sh` | The curl-installable install path |
+Both install paths above are checked by CI, not just by hand:
 
-`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `CodeBlock`, `OrderedList`,
-`GlobalSearch`, `LinkShrink`, and `Attachments` are deliberately free of
-SwiftUI and AppKit, so every rule in them is covered by a dependency-free
-test. The theme parser, glass tints, and celebration configuration touch
-only colours and sounds, which behave headless, so they're tested too.
-`./test.sh` runs 545 checks total, that plus a UI-layer slice against real
-`NSTextView` instances, in a few seconds.
+- **`smoke-test-install-sh`** runs on every release, as a second job in
+  [`release.yml`](.github/workflows/release.yml), on its own fresh runner.
+  Installs via `install.sh` against the release that job just published, then
+  checks the app exists, is executable, matches the tagged version, carries a
+  valid ad-hoc signature, and is not quarantined.
+- **[`brew-smoke-test.yml`](.github/workflows/brew-smoke-test.yml)** runs
+  daily, plus on demand, instead of per-release. The Homebrew cask is bumped
+  by hand after each release, so there's always a window where it's briefly
+  out of sync with the latest tag. Installs via the exact published
+  `brew install lsuryatej/jot/jot` command on a throwaway runner, checks the
+  same things, cleans up with `brew uninstall --cask jot`.
 
-`Jot.app/` and `dist/` are build output and gitignored. `build.sh` deletes
-and rebuilds the bundle every run, so a stale binary or signature can't
-survive.
+Both ran through a genuinely fresh machine before the quarantine fix was
+trusted, not just the machine it was written on.
+
+File-by-file layout, what's tested where, and build-output details live in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Data
 
