@@ -1260,6 +1260,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         for range in highlightMarkers where NSLocationInRange(characterIndex, range) {
             return true
         }
+        for range in emphasisMarkers where NSLocationInRange(characterIndex, range) {
+            return true
+        }
         for match in linkMatches {
             guard match.range.location + match.range.length <= text.length else { continue }
             guard characterIndex >= match.range.location, characterIndex < match.range.location + match.range.length else { continue }
@@ -1283,11 +1286,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         font: NSFont,
         forGlyphRange glyphRange: NSRange
     ) -> Int {
-        // The three marker arrays are already emptied for a code block by the
+        // The marker arrays are already emptied for a code block by the
         // styling pass; the explicit guard says so at the point it matters,
         // since folding a character out of code would hide real content.
         guard !isCodeMode else { return 0 }
-        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty, let textStorage else { return 0 }
+        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty || !emphasisMarkers.isEmpty,
+              let textStorage else { return 0 }
         let ns = textStorage.string as NSString
 
         var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
@@ -1419,6 +1423,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             }
             highlightMarkers = []
             headingMarkers = []
+            emphasisMarkers = []
             return
         }
 
@@ -1459,7 +1464,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 // Room above a heading so it reads as its own section; the
                 // very first line keeps its inset instead of pushing down.
                 if lineRange.location > 0 {
-                    style.paragraphSpacingBefore = [CGFloat(18), 12, 8][heading.level - 1]
+                    // Shrinking gaps down to a floor: past level 4 the deeper
+                    // levels sit close together on purpose, since a run of
+                    // them is usually one dense subsection rather than four
+                    // separate ones.
+                    style.paragraphSpacingBefore = [CGFloat(18), 12, 8, 6, 6, 6][heading.level - 1]
                 }
                 textStorage.addAttributes(
                     [.font: self.headingFont(heading), .paragraphStyle: style],
@@ -1555,6 +1564,19 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
         highlightMarkers = highlights.flatMap { $0.markerRanges }
 
+        // Emphasis runs after everything above it on purpose: it restyles the
+        // font each run is already carrying rather than deriving one from
+        // `baseFont`, so `## text with **bold**` keeps its heading size and
+        // only gains the weight, and a bold word on the auto-title line stays
+        // title-sized. Whatever painted that font has to have painted it first.
+        let emphases = Emphasis.matches(in: ns)
+        for emphasis in emphases {
+            let content = NSIntersectionRange(emphasis.contentRange, target)
+            guard content.length > 0 else { continue }
+            applyEmphasis(emphasis.kind, to: content, in: textStorage)
+        }
+        emphasisMarkers = emphases.flatMap { $0.markerRanges }
+
         // Fresh positions for the folding pass: glyph generation asks about
         // arbitrary characters and has to fold against where the markers sit
         // *now*, not where they sat before this edit.
@@ -1570,13 +1592,62 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// generation, same as `headingMarkers`.
     private(set) var highlightMarkers: [NSRange] = []
 
+    /// Where the current note's `**`, `*` and `` ` `` markers are, in string
+    /// coordinates. Recomputed by every styling pass; read by glyph
+    /// generation, same as `headingMarkers`.
+    private(set) var emphasisMarkers: [NSRange] = []
+
+    /// Restyles one emphasis span's content in place.
+    ///
+    /// Enumerating the existing `.font` rather than starting from `baseFont`
+    /// is what lets bold inside a heading stay heading-sized: the trait is
+    /// added to whatever is already there. A run that somehow carries no font
+    /// falls back to the body one rather than being skipped.
+    private func applyEmphasis(_ kind: Emphasis.Kind, to range: NSRange, in textStorage: NSTextStorage) {
+        let manager = NSFontManager.shared
+        textStorage.enumerateAttribute(.font, in: range, options: []) { value, runRange, _ in
+            let current = (value as? NSFont) ?? self.baseFont
+            switch kind {
+            case .strong:
+                textStorage.addAttribute(
+                    .font,
+                    value: manager.convert(current, toHaveTrait: .boldFontMask),
+                    range: runRange
+                )
+            case .emphasis:
+                textStorage.addAttribute(
+                    .font,
+                    value: manager.convert(current, toHaveTrait: .italicFontMask),
+                    range: runRange
+                )
+            case .code:
+                // The same reasoning as `codeFont`: a note already set in a
+                // fixed-pitch face keeps its own rather than being pushed onto
+                // the system mono, and the wash carries the signal instead.
+                let mono = current.isFixedPitch
+                    ? current
+                    : NSFont.monospacedSystemFont(ofSize: current.pointSize, weight: .regular)
+                textStorage.addAttributes(
+                    [.font: mono, .backgroundColor: Emphasis.codeBackgroundColor],
+                    range: runRange
+                )
+            }
+        }
+    }
+
     /// Headings step up from the note's own font, so a typewriter note gets
     /// bold typewriter headings rather than a system-font intruder.
     private func headingFont(_ heading: Heading) -> NSFont {
-        let lift: CGFloat = [6.0, 3.5, 1.5][heading.level - 1]
+        // Size carries the top of the hierarchy and weight carries the bottom.
+        // Level 3 is the hinge: the last level that gets any lift, and the one
+        // that trades bold away so it cannot be mistaken for a level 2. Below
+        // it nothing grows, because a scratchpad cannot hold six distinct
+        // sizes and a heading that renders smaller than body text looks broken.
+        let lift: CGFloat = [6.0, 3.5, 1.5, 0.0, 0.0, 0.0][heading.level - 1]
         let manager = NSFontManager.shared
         let sized = manager.convert(baseFont, toSize: baseFont.pointSize + lift)
-        return heading.level == 3 ? sized : manager.convert(sized, toHaveTrait: .boldFontMask)
+        guard heading.level != 3 else { return sized }
+        return manager.convert(sized, toHaveTrait: .boldFontMask)
     }
 }
 

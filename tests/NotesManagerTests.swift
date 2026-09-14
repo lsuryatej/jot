@@ -736,19 +736,32 @@ func runAllTests() {
 
     // MARK: - Headings
 
-    suite("heading parsing takes one to three hashes and a space") {
+    suite("heading parsing takes one to six hashes and a space") {
         equal(Heading.parse("# Title"), Heading(level: 1, markerLength: 2), "level one")
         equal(Heading.parse("## Title"), Heading(level: 2, markerLength: 3), "level two")
         equal(Heading.parse("### Title"), Heading(level: 3, markerLength: 4), "level three")
-        check(Heading.parse("#### Title") == nil, "four hashes has no level here")
+        // Levels four to six exist because pasted AI output reaches for them
+        // constantly, and literal hashes in the note are the whole complaint.
+        equal(Heading.parse("#### Title"), Heading(level: 4, markerLength: 5), "level four")
+        equal(Heading.parse("##### Title"), Heading(level: 5, markerLength: 6), "level five")
+        equal(Heading.parse("###### Title"), Heading(level: 6, markerLength: 7), "level six")
+        check(Heading.parse("####### Title") == nil, "seven hashes runs past the ceiling")
         check(Heading.parse("#hashtag") == nil, "no space is ordinary text")
         check(Heading.parse("#") == nil, "a lone hash is ordinary text")
         check(Heading.parse("###") == nil, "hashes with no space are ordinary text")
-        check(Heading.parse(" # Title") == nil, "leading whitespace disqualifies")
-        check(Heading.parse("#NoSpace") == nil, "glued text disqualifies")
+        check(Heading.parse("######") == nil, "six hashes with no space are ordinary text too")
+        check(Heading.parse("####nospace") == nil, "a deep marker still needs its space")
+        check(Heading.parse("######nospace") == nil, "the deepest marker needs it as well")
         check(Heading.parse("plain words") == nil, "prose is not a heading")
         check(Heading.parse("- [ ] # inside an item") == nil,
               "a hash mid-line means nothing to the heading parser")
+
+        for level in 1...6 {
+            let hashes = String(repeating: "#", count: level)
+            check(Heading.parse(" \(hashes) Title") == nil,
+                  "leading whitespace disqualifies \(hashes)")
+            check(Heading.parse("\(hashes)Glued") == nil, "glued text disqualifies \(hashes)")
+        }
     }
 
     suite("heading markers map into whole-string coordinates") {
@@ -759,6 +772,20 @@ func runAllTests() {
             "both markers found at their lines"
         )
         equal(Heading.markerRanges(in: "no headings here" as NSString), [], "none in plain prose")
+
+        // A note shaped like pasted chat output: mixed depths, with a
+        // seven-hash line in the middle that the parser must step over
+        // without disturbing the offsets of what follows.
+        let mixed = "## Notes\nbody\n#### Deeper\n####### not a heading\n###### Deepest" as NSString
+        equal(
+            Heading.markerRanges(in: mixed),
+            [
+                NSRange(location: 0, length: 3),
+                NSRange(location: 14, length: 5),
+                NSRange(location: 48, length: 7),
+            ],
+            "deep markers land at their true whole-string offsets"
+        )
     }
 
     suite("headings never become list items") {

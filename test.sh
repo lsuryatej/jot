@@ -32,6 +32,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/NoteFont.swift \
     src/Headings.swift \
     src/Highlight.swift \
+    src/Emphasis.swift \
     src/GlobalSearch.swift \
     src/LinkShrink.swift \
     src/Attachments.swift \
@@ -68,6 +69,8 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/OrderedListTests.swift \
     tests/UILayerTests.swift \
     tests/HighlightTests.swift \
+    tests/EmphasisTests.swift \
+    tests/EmphasisWiringTests.swift \
     tests/PerNoteFontTests.swift \
     tests/CodeBlockTests.swift \
     tests/main.swift \
