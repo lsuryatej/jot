@@ -97,6 +97,47 @@ final class SwipeScrollView: NSScrollView {
 /// effect had always been there on `==highlights==`; inline code made it
 /// impossible to ignore, because pasted output is full of code spans.
 final class TextHeightBackgroundLayoutManager: NSLayoutManager {
+    /// Moves one incoming background rect onto the baseline of the line
+    /// fragment it belongs to, at the height of its own font. Returns nil when
+    /// this fragment is not the rect's fragment.
+    ///
+    /// Pure on purpose, exactly like `caretRect`: the two mistakes below are
+    /// invisible from the drawing code and impossible to catch through an
+    /// AppKit override, so the math lives somewhere a test can reach it
+    /// without a layout manager, a text storage, or a window server.
+    ///
+    /// - Parameters:
+    ///   - rect: the rect AppKit wants filled, in the text view's coordinates.
+    ///   - lineFragment: the fragment, in the text container's coordinates.
+    ///   - baselineOffset: the glyph baseline's y within that fragment.
+    ///   - containerInset: the text view's `textContainerInset`.
+    ///   - font: the font of the run being washed, not the line's first font.
+    static func backgroundRect(
+        for rect: NSRect,
+        lineFragment: NSRect,
+        baselineOffset: CGFloat,
+        containerInset: NSSize,
+        font: NSFont
+    ) -> NSRect? {
+        // Trap one: the rect arrives with the container inset already applied
+        // while fragments are measured from the container's own origin. At
+        // this app's 38pt top inset the two spaces never overlap at all, so an
+        // intersection test against a raw fragment silently matches nothing
+        // and every rect falls through uncorrected.
+        let fragment = lineFragment.offsetBy(dx: containerInset.width, dy: containerInset.height)
+        guard fragment.intersects(rect) else { return nil }
+
+        // Trap two: a line-height multiple does not inflate this rect. It
+        // pushes the glyphs down inside a taller fragment and leaves the rect
+        // behind at the top, so the box is already the right height and simply
+        // in the wrong place. Guarding on height and bailing out therefore
+        // corrects nothing. Always reposition.
+        var corrected = rect
+        corrected.origin.y = fragment.minY + baselineOffset - ceil(font.ascender)
+        corrected.size.height = ceil(font.ascender - font.descender)
+        return corrected
+    }
+
     override func fillBackgroundRectArray(
         _ rectArray: UnsafePointer<NSRect>,
         count rectCount: Int,
@@ -110,11 +151,12 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
 
         color.setFill()
         let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
-        // The rects arrive in the text view's coordinates, with the container
-        // inset already applied; line fragments are measured from the
-        // container's own origin. Without this they are a full inset apart and
-        // nothing ever lines up.
         let inset = firstTextView?.textContainerInset ?? .zero
+        // The run's own font, not the line's first one. Inline code swaps in a
+        // monospaced face mid-line, and sizing its wash off whatever the line
+        // happened to start with leaves the box floating off the text.
+        let characterIndex = min(max(0, charRange.location), textStorage.length - 1)
+        let font = textStorage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont
 
         for index in 0..<rectCount {
             let rect = rectArray[index]
@@ -123,28 +165,18 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
 
             enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, fragmentGlyphRange, _ in
                 // One rect per line fragment, so the first fragment this rect
-                // overlaps vertically is the one it belongs to.
-                let fragment = fragmentRect.offsetBy(dx: inset.width, dy: inset.height)
-                guard !matched, fragment.intersects(rect) else { return }
+                // overlaps is the one it belongs to.
+                guard !matched, let font else { return }
+                guard let fitted = Self.backgroundRect(
+                    for: rect,
+                    lineFragment: fragmentRect,
+                    baselineOffset: self.location(forGlyphAt: fragmentGlyphRange.location).y,
+                    containerInset: inset,
+                    font: font
+                ) else { return }
+
                 matched = true
-
-                // The run's own font, not the line's first one. Inline code
-                // swaps in a monospaced face mid-line, and sizing its wash off
-                // whatever the line happened to start with is what left the box
-                // floating above the text it belongs to.
-                let characterIndex = min(max(0, charRange.location), textStorage.length - 1)
-                let font = textStorage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont
-                guard let font else { return }
-
-                // Always repositioned, never only resized. A line-height
-                // multiple does not inflate this rect, it pushes the glyphs
-                // down inside a taller fragment and leaves the rect behind at
-                // the top, so the box is the right height in the wrong place.
-                // Testing the height and bailing out misses that case entirely.
-                let textHeight = ceil(font.ascender - font.descender)
-                let baseline = fragment.minY + self.location(forGlyphAt: fragmentGlyphRange.location).y
-                corrected.origin.y = baseline - ceil(font.ascender)
-                corrected.size.height = textHeight
+                corrected = fitted
             }
 
             // A hair of padding so the wash reads as a surface behind the text

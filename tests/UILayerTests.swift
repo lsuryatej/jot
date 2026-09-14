@@ -485,3 +485,146 @@ func runUILayerTests() {
         equal(view.string.contains(String(repeating: "(", count: 4000)), true, "the pasted text itself is left alone")
     }
 }
+
+// MARK: - Background run geometry
+//
+// The bug class: a `.backgroundColor` wash painted a line above the words it
+// belongs to. The math used to live inline inside an AppKit override, where a
+// completely broken first version passed the whole suite. It is a pure
+// function now, so these drive it with hand-built rects, no window server.
+
+func runBackgroundRectTests() {
+    typealias Manager = TextHeightBackgroundLayoutManager
+
+    let body = NSFont.systemFont(ofSize: 13)
+    let code = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    let bodyAscender = ceil(body.ascender)
+    let bodyHeight = ceil(body.ascender - body.descender)
+
+    suite("a rect that is already the right height is still moved onto the baseline") {
+        // The exact case the first fix missed. A line-height multiple leaves
+        // the rect the correct size and simply too high, so any `guard
+        // rect.height > textHeight` corrects nothing at all.
+        let fragment = NSRect(x: 0, y: 0, width: 300, height: 30)
+        let rect = NSRect(x: 10, y: 0, width: 50, height: bodyHeight)
+        let corrected = Manager.backgroundRect(
+            for: rect, lineFragment: fragment, baselineOffset: 20,
+            containerInset: .zero, font: body
+        )
+
+        guard let corrected else {
+            check(false, "the rect overlaps the fragment, so it must be corrected")
+            return
+        }
+        equal(corrected.origin.y, 20 - bodyAscender, "repositioned onto the baseline at offset 20")
+        equal(corrected.height, bodyHeight, "height was already right and stays right")
+        check(corrected.origin.y > rect.origin.y, "it moved down, off the top of the fragment")
+        check(corrected != rect, "a height guard would have returned this untouched")
+    }
+
+    suite("the container inset is applied before matching and before positioning") {
+        // Fragments are measured from the text container's origin, the rects
+        // arrive in view space with the inset already in them. At this app's
+        // 38pt hidden-header inset the two spaces do not overlap at all, so
+        // forgetting the inset means nothing ever matches.
+        let fragment = NSRect(x: 0, y: 0, width: 300, height: 20)
+        let rect = NSRect(x: 10, y: 38, width: 50, height: 20)
+
+        let inset = Manager.backgroundRect(
+            for: rect, lineFragment: fragment, baselineOffset: 15,
+            containerInset: NSSize(width: 0, height: 38), font: body
+        )
+        guard let inset else {
+            check(false, "with the inset applied the fragment and the rect share a space")
+            return
+        }
+        equal(inset.origin.y, 38 + 15 - bodyAscender, "positioned in the rect's own space, not 38pt away")
+        check(abs(inset.midY - rect.midY) < 10, "the wash lands on the text, not a line above it")
+
+        let ignored = Manager.backgroundRect(
+            for: rect, lineFragment: fragment, baselineOffset: 15,
+            containerInset: .zero, font: body
+        )
+        check(ignored == nil, "drop the inset and the same inputs stop matching entirely")
+    }
+
+    suite("shifting the inset shifts the corrected rect by exactly that much") {
+        let fragment = NSRect(x: 0, y: 0, width: 300, height: 20)
+        let noInset = Manager.backgroundRect(
+            for: NSRect(x: 10, y: 0, width: 50, height: 20), lineFragment: fragment,
+            baselineOffset: 15, containerInset: .zero, font: body
+        )
+        let withInset = Manager.backgroundRect(
+            for: NSRect(x: 10, y: 38, width: 50, height: 20), lineFragment: fragment,
+            baselineOffset: 15, containerInset: NSSize(width: 0, height: 38), font: body
+        )
+        guard let noInset, let withInset else {
+            check(false, "both configurations match their fragment")
+            return
+        }
+        equal(withInset.origin.y - noInset.origin.y, 38, "a 38pt inset moves the result exactly 38pt")
+        equal(withInset.height, noInset.height, "and changes nothing about the height")
+    }
+
+    suite("a run is sized off its own font, not the line's") {
+        // A code span inside a heading: the fragment is as tall as the 24pt
+        // line, the run is 13pt monospaced. Sizing the wash off the line is
+        // what painted a box reaching up into the line above.
+        let heading = NSFont.systemFont(ofSize: 24)
+        let fragment = NSRect(x: 0, y: 0, width: 300, height: 34)
+        let rect = NSRect(x: 40, y: 0, width: 30, height: 34)
+        let asHeading = Manager.backgroundRect(
+            for: rect, lineFragment: fragment, baselineOffset: 26,
+            containerInset: .zero, font: heading
+        )
+        let asCode = Manager.backgroundRect(
+            for: rect, lineFragment: fragment, baselineOffset: 26,
+            containerInset: .zero, font: code
+        )
+        guard let asHeading, let asCode else {
+            check(false, "both fonts match the same fragment")
+            return
+        }
+        equal(asCode.height, ceil(code.ascender - code.descender), "sized off the monospaced metrics")
+        equal(asCode.origin.y, 26 - ceil(code.ascender), "and hung off the monospaced ascender")
+        check(asCode.height < asHeading.height, "the 13pt run does not take the 24pt line's height")
+        check(asCode.origin.y > asHeading.origin.y, "nor the 24pt line's much higher top edge")
+        equal(asHeading.origin.y, 26 - ceil(heading.ascender), "the heading run answers to its own ascender")
+    }
+
+    suite("a fragment taller than its text shrinks the wash down onto the baseline") {
+        let fragment = NSRect(x: 0, y: 100, width: 300, height: 40)
+        let corrected = Manager.backgroundRect(
+            for: NSRect(x: 0, y: 100, width: 50, height: 40), lineFragment: fragment,
+            baselineOffset: 30, containerInset: .zero, font: body
+        )
+        guard let corrected else {
+            check(false, "the rect covers the whole fragment, so it matches")
+            return
+        }
+        equal(corrected.height, bodyHeight, "shrunk from 40pt to the text height")
+        equal(corrected.origin.y, 130 - bodyAscender, "and sits on the fragment's own baseline")
+        check(corrected.maxY <= fragment.maxY, "the wash stays inside the line it belongs to")
+    }
+
+    suite("x and width are never touched") {
+        let corrected = Manager.backgroundRect(
+            for: NSRect(x: 17.5, y: 0, width: 63.25, height: 20),
+            lineFragment: NSRect(x: 0, y: 0, width: 300, height: 20),
+            baselineOffset: 15, containerInset: .zero, font: body
+        )
+        equal(corrected?.origin.x, 17.5, "horizontal position is AppKit's business, not ours")
+        equal(corrected?.width, 63.25, "and so is the width")
+    }
+
+    suite("a fragment on a different line claims nothing") {
+        // Every rect is offered every fragment in the range, so the ones that
+        // do not belong must say no rather than dragging the wash elsewhere.
+        let corrected = Manager.backgroundRect(
+            for: NSRect(x: 10, y: 0, width: 50, height: 20),
+            lineFragment: NSRect(x: 0, y: 200, width: 300, height: 20),
+            baselineOffset: 15, containerInset: .zero, font: body
+        )
+        check(corrected == nil, "a fragment 200pt away is not this rect's line")
+    }
+}
