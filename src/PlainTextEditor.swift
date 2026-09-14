@@ -87,6 +87,74 @@ final class SwipeScrollView: NSScrollView {
     }
 }
 
+/// Draws `.backgroundColor` runs at the height of the text itself rather than
+/// the height of the line fragment holding it.
+///
+/// Exactly the correction `caretRect` already makes, for exactly the same
+/// reason. A line-height multiple adds its extra leading above the glyphs, and
+/// AppKit fills the whole fragment, so a highlight ends up painted across the
+/// gap above its own words and into the descenders of the line before it. The
+/// effect had always been there on `==highlights==`; inline code made it
+/// impossible to ignore, because pasted output is full of code spans.
+final class TextHeightBackgroundLayoutManager: NSLayoutManager {
+    override func fillBackgroundRectArray(
+        _ rectArray: UnsafePointer<NSRect>,
+        count rectCount: Int,
+        forCharacterRange charRange: NSRange,
+        color: NSColor
+    ) {
+        guard let textStorage, textStorage.length > 0, rectCount > 0 else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+
+        color.setFill()
+        let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+        // The rects arrive in the text view's coordinates, with the container
+        // inset already applied; line fragments are measured from the
+        // container's own origin. Without this they are a full inset apart and
+        // nothing ever lines up.
+        let inset = firstTextView?.textContainerInset ?? .zero
+
+        for index in 0..<rectCount {
+            let rect = rectArray[index]
+            var corrected = rect
+            var matched = false
+
+            enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, fragmentGlyphRange, _ in
+                // One rect per line fragment, so the first fragment this rect
+                // overlaps vertically is the one it belongs to.
+                let fragment = fragmentRect.offsetBy(dx: inset.width, dy: inset.height)
+                guard !matched, fragment.intersects(rect) else { return }
+                matched = true
+
+                // The run's own font, not the line's first one. Inline code
+                // swaps in a monospaced face mid-line, and sizing its wash off
+                // whatever the line happened to start with is what left the box
+                // floating above the text it belongs to.
+                let characterIndex = min(max(0, charRange.location), textStorage.length - 1)
+                let font = textStorage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont
+                guard let font else { return }
+
+                // Always repositioned, never only resized. A line-height
+                // multiple does not inflate this rect, it pushes the glyphs
+                // down inside a taller fragment and leaves the rect behind at
+                // the top, so the box is the right height in the wrong place.
+                // Testing the height and bailing out misses that case entirely.
+                let textHeight = ceil(font.ascender - font.descender)
+                let baseline = fragment.minY + self.location(forGlyphAt: fragmentGlyphRange.location).y
+                corrected.origin.y = baseline - ceil(font.ascender)
+                corrected.size.height = textHeight
+            }
+
+            // A hair of padding so the wash reads as a surface behind the text
+            // rather than a box clamped to its bounding rect.
+            let padded = corrected.insetBy(dx: -1.5, dy: -1)
+            NSBezierPath(roundedRect: padded, xRadius: 3, yRadius: 3).fill()
+        }
+    }
+}
+
 /// Text view with checklist behaviour.
 ///
 /// The text stays plain markdown on disk. Everything here is presentation and
@@ -1212,6 +1280,22 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         linkMatches = LinkShrink.matches(in: textStorage.string)
     }
 
+    /// Swaps in the layout manager that draws backgrounds at text height.
+    ///
+    /// Call this on a freshly constructed view and nowhere else. Replacing a
+    /// layout manager that has already laid text out leaves the new one's idea
+    /// of the string stale, and the typesetter walks off the end of it the next
+    /// time anything asks for a glyph. An empty view has nothing to go stale.
+    ///
+    /// It is a separate call rather than initializer work because overriding a
+    /// designated initializer would take the plain `ChecklistTextView()` every
+    /// other call site relies on down with it, the same trap documented on
+    /// `recomputeLinkMatches`.
+    func installBackgroundLayoutManager() {
+        guard let textContainer, textStorage?.length ?? 0 == 0 else { return }
+        textContainer.replaceLayoutManager(TextHeightBackgroundLayoutManager())
+    }
+
     /// Folds every collapsed link's scheme and path out of the glyph stream
     /// entirely, rather than just coloring them invisible: color alone would
     /// still reserve their full width, leaving a blank gap where the hidden
@@ -1615,11 +1699,17 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     range: runRange
                 )
             case .emphasis:
-                textStorage.addAttribute(
-                    .font,
-                    value: manager.convert(current, toHaveTrait: .italicFontMask),
-                    range: runRange
-                )
+                let italic = manager.convert(current, toHaveTrait: .italicFontMask)
+                // Plenty of fixed-pitch faces have no italic cut, SF Mono among
+                // them, and that is the default note font. `convert` hands back
+                // the upright face unchanged in that case, which would fold the
+                // asterisks away and put nothing at all in their place. Colour
+                // carries the emphasis instead rather than losing it.
+                if manager.traits(of: italic).contains(.italicFontMask) {
+                    textStorage.addAttribute(.font, value: italic, range: runRange)
+                } else {
+                    textStorage.addAttribute(.foregroundColor, value: self.ink.accent, range: runRange)
+                }
             case .code:
                 // The same reasoning as `codeFont`: a note already set in a
                 // fixed-pitch face keeps its own rather than being pushed onto
@@ -1697,6 +1787,7 @@ struct PlainTextEditor: NSViewRepresentable {
         scrollView.automaticallyAdjustsContentInsets = false
 
         let textView = ChecklistTextView()
+        textView.installBackgroundLayoutManager()
         textView.delegate = context.coordinator
 
         // Plain text, and nothing that rewrites what you typed.
