@@ -30,16 +30,21 @@ enum LinkShrink {
             guard let result, let url = result.url, var host = url.host, !host.isEmpty else { return }
             if host.lowercased().hasPrefix("www.") { host = String(host.dropFirst(4)) }
 
-            let full = ns.substring(with: result.range)
+            // NSDataDetector keeps a trailing "?" that almost always ends the
+            // sentence ("did you see example.com/x?"); a real query has text after it.
+            var range = result.range
+            while range.length > 0, ns.character(at: NSMaxRange(range) - 1) == 63 { range.length -= 1 }
+
+            let full = ns.substring(with: range)
             guard let hostRange = full.range(of: host, options: .caseInsensitive) else { return }
             let hostNSRange = NSRange(hostRange, in: full)
             let displayRange = NSRange(
-                location: result.range.location + hostNSRange.location,
+                location: range.location + hostNSRange.location,
                 length: hostNSRange.length
             )
 
-            guard result.range.length - displayRange.length >= minimumHiddenLength else { return }
-            results.append(LinkMatch(range: result.range, displayRange: displayRange))
+            guard range.length - displayRange.length >= minimumHiddenLength else { return }
+            results.append(LinkMatch(range: range, displayRange: displayRange))
         }
 
         return results

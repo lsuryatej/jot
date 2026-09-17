@@ -118,7 +118,7 @@ func runImageMarkdownVisibilityTests() {
 
         let colorAfter = view.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         equal(colorAfter, NSColor.clear,
-              "still cleared after a resize — FAILS today: replace() alone doesn't trigger the restyle pass that clears it")
+              "still cleared after a resize, even though replace() alone doesn't trigger the restyle pass")
     }
 
     suite("the width annotation's own digits are cleared, not just the brackets/parens") {

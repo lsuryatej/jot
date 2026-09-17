@@ -21,14 +21,9 @@ private func amount(_ line: String) -> Double? {
     return value.amount
 }
 
-/// A throwaway defaults suite that also skips the one-time import from the
-/// old StickyNotes bundle: without the sentinel, `SettingsManager.init` copies
-/// whatever that real domain holds on this machine into the suite.
 private func isolatedDefaults() -> (UserDefaults, String) {
     let name = "JotTests.coverage-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: name)!
-    defaults.set(true, forKey: "migratedSettingsFromStickyNotesBundle")
-    return (defaults, name)
+    return (UserDefaults(suiteName: name)!, name)
 }
 
 private func hex(_ color: NSColor?) -> String {
@@ -330,5 +325,41 @@ func runCoverageGapTests() {
         defaults.set(0, forKey: "hotKeyModifiers")
         equal(SettingsManager(defaults: defaults).hotKey, KeyCombo.default,
               "a stored modifier-less combo falls back to the default")
+    }
+
+    // MARK: - Release fixes
+
+    suite("a result at 1e15 scale keeps its decimals") {
+        equal(formatted("999999999999999 + 0.5"), "999999999999999.5",
+              "rounding must not scale the value past double precision first")
+        equal(formatted("123456789012.34567 + 0"), "123456789012.3457", "four decimals still round")
+    }
+
+    suite("an overflowing result shows nothing") {
+        check(formatted("10 ^ 400") == nil, "no `inf` in the margin")
+        check(formatted("-(10 ^ 400)") == nil, "no `-inf` either")
+    }
+
+    func linkText(_ text: String) -> [String] {
+        let ns = text as NSString
+        return LinkShrink.matches(in: text).map { ns.substring(with: $0.range) }
+    }
+
+    suite("sentence punctuation after a link stays outside it") {
+        equal(linkText("did you read https://example.com/articles/one?"), ["https://example.com/articles/one"],
+              "a trailing question mark is the sentence's, not the URL's")
+        equal(linkText("read https://example.com/articles/one!"), ["https://example.com/articles/one"],
+              "same for an exclamation mark")
+        equal(linkText("see https://example.com/articles/one?id=4 now"), ["https://example.com/articles/one?id=4"],
+              "a real query string is kept")
+    }
+
+    suite("an injected settings suite never imports the real old-bundle settings") {
+        let name = "JotTests.isolation-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        _ = SettingsManager(defaults: defaults)
+        check(defaults.object(forKey: "migratedSettingsFromStickyNotesBundle") == nil,
+              "the StickyNotes import only runs for the app's real defaults")
     }
 }
