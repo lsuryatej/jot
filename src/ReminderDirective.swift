@@ -82,9 +82,15 @@ extension ReminderDirective {
     static func directives(
         in text: String,
         keyword: String,
+        codeKeyword: String = CodeBlock.defaultKeyword,
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [ReminderDirective] {
+        // README promises a code note switches off every directive.
+        let codeKeyword = codeKeyword.trimmingCharacters(in: .whitespaces)
+        if CodeBlock.isCodeMode(text, keyword: codeKeyword.isEmpty ? CodeBlock.defaultKeyword : codeKeyword) {
+            return []
+        }
         let keyword = keyword.trimmingCharacters(in: .whitespaces)
         let effectiveKeyword = keyword.isEmpty ? "remind" : keyword
         guard let regex = lineRegex(keyword: effectiveKeyword) else { return [] }
@@ -183,6 +189,7 @@ extension ReminderDirective {
             isNext = match.range(at: 1).location != NSNotFound
             dayPart = ns0.substring(with: match.range(at: 2))
             remainder = ns0.substring(with: match.range(at: 3))
+            if isNext, dayPart == "today" || dayPart == "tomorrow" { return nil }
         }
 
         let ns1 = remainder as NSString
