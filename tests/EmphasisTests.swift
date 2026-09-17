@@ -153,4 +153,17 @@ func runEmphasisTests() {
         equal(source.substring(with: matches[0].contentRange), "two words",
               "only the characters touching the markers have to be non-whitespace")
     }
+
+    // MARK: - Math lines
+
+    suite("a line with a math result keeps its asterisks") {
+        equal(Emphasis.matches(in: "2*3*4" as NSString).count, 0,
+              "`2*3*4` is multiplication; folding would show `234` beside a result of 24")
+        equal(Emphasis.matches(in: "price = 3\nqty = 4\nprice*qty*2" as NSString).count, 0,
+              "variables defined on earlier lines count too")
+        equal(Emphasis.matches(in: "2*3*4\nan *italic* word" as NSString).count, 1,
+              "only the math line is left alone")
+        equal(Emphasis.matches(in: "I *love* it" as NSString).count, 1,
+              "prose with no margin result keeps its emphasis")
+    }
 }

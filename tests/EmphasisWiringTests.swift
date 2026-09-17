@@ -149,4 +149,9 @@ func runEmphasisWiringTests() {
         equal(background(in: view, at: 2), Highlight.backgroundColor, "the highlight is still painted")
         check(hasTrait(.boldFontMask, font(in: view, at: 19)), "and the bold word is still bold")
     }
+
+    suite("a math line registers no emphasis markers") {
+        let view = makeEmphasisView("2*3*4")
+        equal(view.emphasisMarkers, [], "nothing on a math line folds, so the asterisks stay visible")
+    }
 }

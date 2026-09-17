@@ -43,8 +43,12 @@ struct Emphasis: Equatable {
     /// characters without knowing what line they're on.
     static func matches(in text: NSString) -> [Emphasis] {
         var results: [Emphasis] = []
+        var environment: [String: MathExpression.Value] = [:]
         text.enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: [.byLines]) { line, lineRange, _, _ in
             guard let line else { return }
+            // On a line with something in the margin, `*` is multiplication:
+            // folding `2*3*4` would show `234` next to a result of 24.
+            guard !showsMathResult(line, environment: &environment) else { return }
             let lineNS = line as NSString
             // Code first, and the emphasis pass is told to stay out of what it
             // found: inside backticks an asterisk is a character someone meant
@@ -56,6 +60,16 @@ struct Emphasis: Equatable {
             results.append(contentsOf: spans.map { $0.offset(by: lineRange.location) })
         }
         return results
+    }
+
+    /// Mirrors `ChecklistTextView.recomputeMathResults`, including carrying
+    /// variables down the note, so the two agree on which lines are math.
+    private static func showsMathResult(_ line: String, environment: inout [String: MathExpression.Value]) -> Bool {
+        guard let node = MathExpression.parse(line) else { return false }
+        switch MathExpression.evaluate(node, environment: &environment) {
+        case .success: return true
+        case .failure(let error): return MathExpression.hint(for: error) != nil
+        }
     }
 
     // MARK: - Scanning
