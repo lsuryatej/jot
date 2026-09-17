@@ -16,11 +16,9 @@ no package manager, no runtime dependency. The whole app is one `swiftc`
 invocation compiling straight to a ~950KB binary with zero non-system
 libraries linked in.
 
-![Jot evaluating a pizza dough recipe on Cream paper, variables and running totals included](docs/screenshots/hero.png)
+[![Jot in 21 seconds: inline math, checklists, the Screen Edge sidebar, and timers](docs/demo/jot-demo-poster.jpg)](docs/demo/jot-demo.mp4)
 
-<!-- TODO: a 5-10s GIF here (Option+A summon, a math line, a pasted image,
-     hide) would land faster than the static hero on link-preview-driven
-     traffic like HN/Reddit. -->
+<sup>▶ [Watch the 21-second tour](docs/demo/jot-demo.mp4) — inline math, checklists, Screen Edge, timers.</sup>
 
 ## Install
 
