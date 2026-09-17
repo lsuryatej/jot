@@ -1033,6 +1033,17 @@ func runAllTests() {
         )
     }
 
+    suite("a multi-line paste continues the line the caret is on") {
+        equal(Checklist.pastedAsListItems("eggs\nmilk", into: "list\n- [ ] ", keyword: "list", linePrefix: "- [ ] "),
+              "eggs\n- [ ] milk", "pasting onto a fresh item does not stack a second marker")
+        equal(Checklist.pastedAsListItems("eggs\nmilk", into: "list\n- [ ] buy ", keyword: "list", linePrefix: "- [ ] buy "),
+              "eggs\n- [ ] milk", "mid-item, the first pasted line finishes that item")
+        equal(Checklist.pastedAsListItems("- [x] eggs\nmilk", into: "list\n- [ ] ", keyword: "list", linePrefix: "- [ ] "),
+              "eggs\n- [ ] milk", "a copied marker on the first line is dropped rather than doubled")
+        equal(Checklist.pastedAsListItems("eggs\nmilk", into: "list\n", keyword: "list", linePrefix: ""),
+              "- [ ] eggs\n- [ ] milk", "at the start of a line every pasted line becomes an item")
+    }
+
     suite("a multi-line paste into a list note becomes items") {
         equal(
             Checklist.pastedAsListItems("eggs\nmilk\nbread", into: "list", keyword: "list"),

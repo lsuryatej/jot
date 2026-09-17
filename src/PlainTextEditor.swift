@@ -838,18 +838,28 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             insertImage(image, at: selectedRange().location)
             return
         }
-        if !isCodeMode,
-           let pasted = NSPasteboard.general.string(forType: .string),
-           let converted = Checklist.pastedAsListItems(pasted, into: string, keyword: listKeyword) {
-            let range = clamped(selectedRange())
-            replace(
-                range: range,
-                with: converted,
-                selecting: NSRange(location: range.location + (converted as NSString).length, length: 0)
-            )
+        if let pasted = NSPasteboard.general.string(forType: .string), insertPastedListText(pasted) {
             return
         }
         super.paste(sender)
+    }
+
+    /// The list-note half of `paste(_:)`, split out so it can be driven
+    /// without touching the real clipboard. False means "paste normally".
+    func insertPastedListText(_ pasted: String) -> Bool {
+        guard !isCodeMode else { return false }
+        let range = clamped(selectedRange())
+        let ns = string as NSString
+        let lineStart = ns.lineRange(for: NSRange(location: range.location, length: 0)).location
+        let linePrefix = ns.substring(with: NSRange(location: lineStart, length: range.location - lineStart))
+        guard let converted = Checklist.pastedAsListItems(pasted, into: string, keyword: listKeyword, linePrefix: linePrefix)
+        else { return false }
+        replace(
+            range: range,
+            with: converted,
+            selecting: NSRange(location: range.location + (converted as NSString).length, length: 0)
+        )
+        return true
     }
 
     /// Shift-Cmd-V: read the clipboard image as text instead of inserting it.

@@ -484,6 +484,14 @@ func runUILayerTests() {
         check(true, "recomputeMathResults returned instead of overflowing the stack")
         equal(view.string.contains(String(repeating: "(", count: 4000)), true, "the pasted text itself is left alone")
     }
+
+    suite("pasting several lines onto a fresh checklist item does not double its marker") {
+        let view = makeTextView("list\n- [ ] ")
+        view.listKeyword = "list"
+        view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
+        check(view.insertPastedListText("eggs\nmilk"), "the list-aware paste handled it")
+        equal(view.string, "list\n- [ ] eggs\n- [ ] milk", "one marker per item")
+    }
 }
 
 // MARK: - Background run geometry
