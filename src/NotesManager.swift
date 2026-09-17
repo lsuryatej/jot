@@ -179,6 +179,10 @@ final class NotesManager: ObservableObject {
     func setText(_ newValue: String, at index: Int) {
         guard notes.indices.contains(index) else { return }
         let id = notes[index].id
+        // A card that was never current has never been seeded, so the
+        // directives already in its text must be recorded as seen before the
+        // edit is evaluated, or any keystroke would restart them.
+        seedIfNeeded(noteID: id, text: notes[index].text)
         notes[index].text = newValue
         // Unconditional now, not just for whichever card happens to be
         // `currentIndex`: Screen Edge mode shows every note as its own

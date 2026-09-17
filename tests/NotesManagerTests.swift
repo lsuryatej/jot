@@ -476,6 +476,184 @@ func runAllTests() {
         check(m.activePomodoroPhase == nil, "phase cleared too")
     }
 
+    // MARK: - Screen Edge cards (setText on a note that isn't current)
+
+    // Seeded managers start on the last note, so index 0 below is a card that
+    // was loaded from disk and never made current.
+    suite("an unrelated edit to a non-current card does not restart its old timer") {
+        let m = makeManager(seed: ["5m timer", "plain"])
+        m.setText("5m timer\nbuy milk", at: 0)
+        check(m.activeTimerEnd == nil, "old timer directive in a non-current card stays inert")
+        check(m.activeTimerOwnerID == nil, "and nothing claims the countdown slot")
+    }
+
+    suite("an unrelated edit to a non-current card does not restart its old pomodoro") {
+        let m = makeManager(seed: ["pomodoro 25/5", "plain"])
+        m.setText("pomodoro 25/5\nbuy milk", at: 0)
+        check(m.activeTimerEnd == nil, "old pomodoro directive in a non-current card stays inert")
+        check(m.activePomodoroPhase == nil, "no phase either")
+    }
+
+    suite("an unrelated edit to a non-current card does not reschedule its old reminder") {
+        let scheduler = SpyReminderScheduler()
+        let m = makeManager(seed: ["remind 3pm", "plain"], reminderScheduler: scheduler)
+        m.setText("remind 3pm\nbuy milk", at: 0)
+        equal(scheduler.scheduled.count, 0, "old reminder in a non-current card is not scheduled again")
+        check(m.reminderConfirmation == nil, "and no \"reminder set\" toast for it")
+
+        m.setText("buy milk", at: 0)
+        equal(scheduler.cancelled.count, 1, "deleting that old line still cancels its pending notification")
+    }
+
+    suite("an edit to a non-current card leaves a timer it already started alone") {
+        let m = makeManager(seed: ["plain", "other"])
+        m.setText("plain\n5m timer", at: 0)
+        let endDate = m.activeTimerEnd
+        m.setText("plain\n5m timer\nmore", at: 0)
+        equal(m.activeTimerEnd, endDate, "the running countdown is not reset by a later edit")
+    }
+
+    suite("after a keyword change, an old directive in a non-current card stays inert") {
+        let m = makeManager(seed: ["5m timer", "plain"])
+        m.timerKeywordDidChange(to: "timer")
+        m.setText("5m timer\nbuy milk", at: 0)
+        check(m.activeTimerEnd == nil, "re-parsing after a keyword change is not a fresh directive")
+    }
+
+    suite("a newly typed directive in a non-current card still starts") {
+        let m = makeManager(seed: ["plain", "other"])
+        m.setText("plain\n5m timer", at: 0)
+        check(m.activeTimerEnd != nil, "timer typed into a non-current card starts")
+        equal(m.activeTimerOwnerID, m.notes[0].id, "owned by that card, not the current note")
+
+        let p = makeManager(seed: ["plain", "other"])
+        p.setText("plain\npomodoro 25/5", at: 0)
+        equal(p.activePomodoroPhase, .work, "pomodoro typed into a non-current card starts")
+        equal(p.activeTimerOwnerID, p.notes[0].id, "owned by that card")
+
+        let scheduler = SpyReminderScheduler()
+        let r = makeManager(seed: ["plain", "other"], reminderScheduler: scheduler)
+        r.setText("plain\nremind in 10 minutes", at: 0)
+        equal(scheduler.scheduled.count, 1, "reminder typed into a non-current card is scheduled")
+        check(r.reminderConfirmation?.hasPrefix("Reminder set for") == true, "with its confirmation")
+    }
+
+    suite("a new directive typed next to an old one in a non-current card starts only the new one") {
+        let scheduler = SpyReminderScheduler()
+        let m = makeManager(seed: ["remind 3pm", "plain"], reminderScheduler: scheduler)
+        m.setText("remind 3pm\nremind in 10 minutes", at: 0)
+        equal(scheduler.scheduled.map(\.body), ["remind in 10 minutes"], "only the typed line is scheduled")
+    }
+
+    // MARK: - Keyword changes leave the other countdown kind alone
+
+    suite("changing the timer keyword leaves a running pomodoro alone") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        let endDate = m.activeTimerEnd
+        let owner = m.activeTimerOwnerID
+        m.timerKeywordDidChange(to: "countdown")
+        equal(m.activeTimerEnd, endDate, "cycle keeps its end date")
+        equal(m.activePomodoroPhase, .work, "and its phase")
+        equal(m.activeTimerOwnerID, owner, "and its owner")
+
+        m.currentText = "pomodoro 25/5\nmore"
+        equal(m.activeTimerEnd, endDate, "a later edit to its note does not restart it")
+    }
+
+    suite("changing the pomodoro keyword leaves a running timer alone") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        let endDate = m.activeTimerEnd
+        let owner = m.activeTimerOwnerID
+        m.pomodoroKeywordDidChange(to: "focus")
+        equal(m.activeTimerEnd, endDate, "timer keeps its end date")
+        check(m.activePomodoroPhase == nil, "and is still a plain timer")
+        equal(m.activeTimerOwnerID, owner, "and its owner")
+
+        m.currentText = "5m timer\nmore"
+        equal(m.activeTimerEnd, endDate, "a later edit to its note does not restart it")
+    }
+
+    // MARK: - Deleting a countdown's note
+
+    suite("deleting the note that owns a running pomodoro clears all of it") {
+        let m = makeManager(seed: ["plain"])
+        m.appendNote()
+        m.currentText = "pomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "cycle running on the second note")
+        m.deleteNote(at: 1)
+        check(m.activeTimerEnd == nil, "no countdown left")
+        check(m.activePomodoroPhase == nil, "no phase label left")
+        check(m.activeTimerOwnerID == nil, "no owner left")
+        m.timerDidFire()
+        check(m.activeTimerEnd == nil, "a stray fire afterwards does not revive the old cycle")
+    }
+
+    suite("deleting a non-current card that owns a running countdown clears it") {
+        let m = makeManager(seed: ["plain", "other"])
+        m.setText("plain\n5m timer", at: 0)
+        check(m.activeTimerEnd != nil, "timer running on card 0")
+        m.deleteNote(at: 0)
+        check(m.activeTimerEnd == nil, "cancelled with its card")
+        check(m.activeTimerOwnerID == nil, "owner cleared")
+        equal(m.currentText, "other", "the current note is unchanged")
+    }
+
+    suite("blanking the only note clears a running pomodoro") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        m.deleteNote(at: 0)
+        equal(m.notes.count, 1, "the last note is blanked, not removed")
+        check(m.activeTimerEnd == nil, "countdown cleared")
+        check(m.activePomodoroPhase == nil, "phase cleared")
+        check(m.activeTimerOwnerID == nil, "owner cleared")
+
+        m.currentText = "pomodoro 25/5"
+        equal(m.activePomodoroPhase, .work, "typing the same directive again is a fresh start")
+    }
+
+    // MARK: - Zero-length timer
+
+    // Same per-tick loop as the zero-length pomodoro suite above.
+    suite("a 0m timer fires exactly once") {
+        let m = makeManager()
+        m.currentText = "0m timer"
+        var fires = 0
+        for _ in 0..<12 {
+            guard let end = m.activeTimerEnd else { break }
+            if end.timeIntervalSince(Date()) <= 0 {
+                fires += 1
+                m.timerDidFire()
+            }
+        }
+        equal(fires, 1, "one celebration, then the timer is done")
+        check(m.activeTimerEnd == nil, "nothing left counting down")
+
+        m.currentText = "0m timer\nmore"
+        check(m.activeTimerEnd == nil, "editing around it does not re-arm it")
+    }
+
+    // MARK: - Navigation at the ends
+
+    suite("nextNote on the last note creates a new one, unless the last is blank") {
+        let m = makeManager(seed: ["A", "B"])
+        m.nextNote()
+        equal(m.notes.count, 3, "a blank note is appended")
+        equal(m.currentIndex, 2, "and becomes current")
+        m.nextNote()
+        equal(m.notes.count, 3, "no second blank stacked on the first")
+        equal(m.currentIndex, 2, "still on it")
+    }
+
+    suite("previousNote at index 0 does nothing") {
+        let m = makeManager(seed: ["A", "", "C"])
+        m.currentIndex = 0
+        m.previousNote()
+        equal(m.currentIndex, 0, "stays on the first note")
+        equal(m.notes.count, 3, "and does not purge blanks, since it did not navigate")
+    }
+
     // MARK: - Text statistics
 
     suite("word, character, and line counts") {
