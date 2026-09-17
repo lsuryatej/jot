@@ -9,15 +9,17 @@ enum OrderedMarkerKind: Equatable {
     case number(Int)
     /// `a.` `b.` … a single letter, any case.
     case letter(Character)
-    /// `i.` `ii.` `iii.` … written only with the small roman digits.
-    case roman(Int)
+    /// `i.` `ii.` `iii.` … or `I.` `II.` `III.` …
+    case roman(Int, uppercase: Bool = false)
 
     /// The marker text without the trailing dot, exactly as typed.
     var text: String {
         switch self {
         case .number(let value): return String(value)
         case .letter(let char): return String(char)
-        case .roman(let value): return Self.romanString(value) ?? ""
+        case .roman(let value, let uppercase):
+            let numeral = Self.romanString(value) ?? ""
+            return uppercase ? numeral.uppercased() : numeral
         }
     }
 
@@ -35,17 +37,19 @@ enum OrderedMarkerKind: Equatable {
             // and stepping from `Z` into `[` would be punctuation, not a list.
             guard char.isLowercase ? next.isLowercase : next.isUppercase else { return nil }
             return .letter(next)
-        case .roman(let value):
-            return value >= 3999 ? nil : .roman(value + 1)
+        case .roman(let value, let uppercase):
+            return value >= 3999 ? nil : .roman(value + 1, uppercase: uppercase)
         }
     }
 
     // MARK: Roman numerals
 
-    /// Characters that can make up a roman numeral. A single-letter marker
-    /// drawn from this set reads as roman (`i.`, `v.`, `x.`); anything else
-    /// single-letter reads as an alphabet list (`a.`, `d.`).
+    /// Characters that can make up a roman numeral.
     private static let romanDigits: Set<Character> = ["i", "v", "x", "l", "c", "d", "m"]
+
+    /// A single-letter marker from this set reads as roman (`i.`, `v.`, `x.`);
+    /// any other single letter reads as an alphabet list (`a.`, `d.`).
+    static let singleRomanDigits: Set<Character> = ["i", "v", "x"]
 
     static func isRomanText(_ text: String) -> Bool {
         !text.isEmpty && text.lowercased().allSatisfy { romanDigits.contains($0) }
@@ -157,17 +161,18 @@ enum OrderedList {
 
     private static func classify(_ raw: String) -> OrderedMarkerKind? {
         if let value = Int(raw) { return .number(value) }
+        let uppercase = raw == raw.uppercased()
         if raw.count == 1, let char = raw.first {
-            if OrderedMarkerKind.isRomanText(raw) {
-                guard let value = OrderedMarkerKind.romanValue(raw) else { return nil }
-                return .roman(value)
+            if OrderedMarkerKind.singleRomanDigits.contains(Character(char.lowercased())),
+               let value = OrderedMarkerKind.romanValue(raw) {
+                return .roman(value, uppercase: uppercase)
             }
             return .letter(char)
         }
         guard OrderedMarkerKind.isRomanText(raw),
               let value = OrderedMarkerKind.romanValue(raw)
         else { return nil }
-        return .roman(value)
+        return .roman(value, uppercase: uppercase)
     }
 
     // MARK: - Return key
