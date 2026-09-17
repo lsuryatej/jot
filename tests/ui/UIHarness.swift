@@ -85,6 +85,7 @@ func pump(_ seconds: Double = 0.3) {
 /// click from a human, and a SwiftUI Button underneath it genuinely fires.
 @MainActor
 func click(_ window: NSWindow, at point: NSPoint) {
+    reassertKey(window)
     let app = NSApplication.shared
     let phases: [(NSEvent.EventType, Int, Float)] = [
         (.leftMouseDown, 1, 1),
@@ -116,6 +117,7 @@ func click(_ window: NSWindow, at point: NSPoint) {
 /// question and is stable run to run.
 @MainActor
 func renderHash(_ view: NSView) -> String {
+    if let window = view.window { reassertKey(window) }
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "norep" }
     view.cacheDisplay(in: view.bounds, to: rep)
     guard let data = rep.representation(using: .png, properties: [:]) else { return "nopng" }
@@ -137,6 +139,7 @@ let artifactDirectory: URL = {
 @MainActor
 @discardableResult
 func saveRender(_ view: NSView, named name: String) -> String? {
+    if let window = view.window { reassertKey(window) }
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
     view.cacheDisplay(in: view.bounds, to: rep)
     guard let data = rep.representation(using: .png, properties: [:]) else { return nil }
@@ -199,6 +202,22 @@ func measuredSidebarWidth(_ view: NSView, yFromTop: CGFloat) -> CGFloat? {
 }
 
 // MARK: - Key window
+
+/// Brings `window` back to key only if something took focus since it came up.
+///
+/// Key status can be lost mid-suite to any other app on the machine, and an
+/// inactive window draws its accent-coloured controls (selected radios,
+/// slider fills) in grey. That was the whole of an intermittent
+/// "revisiting a pane renders differently" failure: same layout, grey
+/// accents. Checked before every click and every capture, so the uncontended
+/// case pays nothing.
+@MainActor
+func reassertKey(_ window: NSWindow) {
+    guard !window.isKeyWindow else { return }
+    let thief = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
+    print("         (focus was lost to \(thief); re-activating)")
+    bringUpAndWaitUntilKey(window)
+}
 
 /// Orders `window` front and waits until AppKit actually makes it key,
 /// returning whether it got there.

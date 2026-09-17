@@ -13,6 +13,12 @@ set -euo pipefail
 # separate.
 #
 # Still swiftc only. No Xcode project, no SwiftPM, no XCTest, no dependencies.
+#
+# Hands off the keyboard and mouse while this runs. Its windows become key for
+# real, so a click elsewhere greys their accent colours and a keystroke lands in
+# the text view under test. Both have produced false failures.
+
+echo "test-ui: running real windows, keep hands off the keyboard and mouse (~25s)" >&2
 
 find_developer_dir() {
     for candidate in \
