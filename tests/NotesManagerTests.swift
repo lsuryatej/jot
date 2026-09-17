@@ -1695,6 +1695,40 @@ func runAllTests() {
         let text = "https://www.example.com/one/two/three and https://www.another-example.org/four/five/six"
         equal(LinkShrink.matches(in: text).count, 2, "both links found")
     }
+
+    // MARK: - Directives stay off inside code notes
+
+    suite("a timer or pomodoro inside a code note never starts") {
+        let m = makeManager()
+        m.currentText = "code\n5m timer"
+        check(m.activeTimerEnd == nil, "timer line in a code note is just code")
+        m.currentText = "code\npomodoro 25/5"
+        check(m.activePomodoroPhase == nil, "pomodoro line in a code note is just code")
+    }
+
+    suite("a custom code keyword switches directives off too") {
+        let scheduler = SpyReminderScheduler()
+        let m = makeManager(reminderScheduler: scheduler)
+        m.codeKeywordDidChange(to: "snippet")
+        m.currentText = "snippet\nremind in 10 minutes\n5m timer"
+        equal(scheduler.scheduled.count, 0, "no reminder scheduled from a `snippet` note")
+        check(m.activeTimerEnd == nil, "no timer started from a `snippet` note")
+        m.currentText = "code\n5m timer"
+        check(m.activeTimerEnd != nil, "`code` is an ordinary word once the keyword is `snippet`")
+    }
+
+    suite("turning a note into code stops what its directives started") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        check(m.activeTimerEnd != nil, "sanity: the timer is running")
+        m.currentText = "code\n5m timer"
+        check(m.activeTimerEnd == nil, "the timer stops once its line is code")
+
+        m.currentText = "pomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "sanity: the pomodoro is running")
+        m.currentText = "code\npomodoro 25/5"
+        check(m.activePomodoroPhase == nil, "the pomodoro stops once its line is code")
+    }
 }
 
 // Deleting a note below the one on screen used to leave `currentIndex`
