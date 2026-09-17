@@ -29,7 +29,7 @@ func runOrderedListTests() {
         equal(OrderedList.item(in: "v. x")?.kind, .roman(5), "v was never an alphabet item here")
         equal(OrderedList.item(in: "x. x")?.kind, .roman(10), "x is roman as well — the third stolen letter")
         equal(OrderedList.item(in: "iv. x")?.kind, .roman(4), "the classic subtractive pair")
-        equal(OrderedList.item(in: "IV. x")?.kind, .roman(4), "uppercase romans classify too")
+        equal(OrderedList.item(in: "IV. x")?.kind, .roman(4, uppercase: true), "uppercase romans classify and keep their case")
     }
 
     suite("rejects prose that merely looks numeric") {
@@ -93,7 +93,31 @@ func runOrderedListTests() {
         )
     }
 
+    suite("single c, d, l and m continue as letters, not numerals") {
+        equal(OrderedList.newline(inLine: "c. milk"), .continueList("\nd. "), "c is the third letter, not 100")
+        equal(OrderedList.newline(inLine: "d. x"), .continueList("\ne. "), "d reads as a letter, as the parser says")
+        equal(OrderedList.newline(inLine: "l. x"), .continueList("\nm. "), "l is a letter")
+        equal(OrderedList.newline(inLine: "m. x"), .continueList("\nn. "), "m is a letter")
+        equal(OrderedList.newline(inLine: "C. x"), .continueList("\nD. "), "uppercase C too")
+        equal(OrderedList.item(in: "d. x")?.kind, .letter("d"), "d classifies as a letter")
+        equal(OrderedList.newline(inLine: "i. x"), .continueList("\nii. "), "single i stays roman by the documented rule")
+        equal(OrderedList.newline(inLine: "v. x"), .continueList("\nvi. "), "single v stays roman")
+        equal(OrderedList.newline(inLine: "x. x"), .continueList("\nxi. "), "single x stays roman")
+        equal(OrderedList.newline(inLine: "cd. x"), .continueList("\ncdi. "), "multi-letter runs of c/d are still roman")
+    }
+
+    suite("roman continuation keeps the typed case") {
+        equal(OrderedList.newline(inLine: "IV. x"), .continueList("\nV. "), "uppercase roman continues uppercase")
+        equal(OrderedList.newline(inLine: "VIII. x"), .continueList("\nIX. "), "uppercase through a subtractive step")
+        equal(OrderedList.newline(inLine: "I. x"), .continueList("\nII. "), "a single uppercase I")
+        equal(OrderedList.newline(inLine: "iii. x"), .continueList("\niv. "), "lowercase stays lowercase")
+        equal(OrderedList.newline(inLine: "viii. x"), .continueList("\nix. "), "lowercase subtractive step")
+        equal(OrderedList.newline(inLine: "B. x"), .continueList("\nC. "), "uppercase letters advance within case")
+    }
+
     suite("newline exits on empty items and passes prose through") {
+        equal(OrderedList.newline(inLine: "iv. "), .exitList(""), "an empty roman item exits")
+        equal(OrderedList.newline(inLine: "  b.   "), .exitList(""), "an empty indented letter item exits")
         equal(OrderedList.newline(inLine: "3. "), OrderedList.Newline.exitList(""), "an empty item exits")
         equal(OrderedList.newline(inLine: "3."), OrderedList.Newline.exitList(""), "even with the space missing")
         check(OrderedList.newline(inLine: "z. done") == nil, "after z Return inserts an ordinary newline")
@@ -161,6 +185,31 @@ func runOrderedListTests() {
         view.insertNewline(nil)
 
         equal(view.string, "", "no stacked empty markers; the line empties out")
+    }
+
+    suite("Return on an emptied continuation ends the list through the real editor") {
+        let view = makeTextView("1. eggs")
+        view.setSelectedRange(NSRange(location: 7, length: 0))
+        view.insertNewline(nil)
+        view.insertNewline(nil)
+
+        equal(view.string, "1. eggs\n", "the second Return clears the generated marker instead of adding 3.")
+    }
+
+    suite("the stored text keeps exactly what was typed") {
+        let view = makeTextView("5. eggs\n2. flour\nc. milk")
+        view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
+        view.insertNewline(nil)
+
+        equal(view.string, "5. eggs\n2. flour\nc. milk\nd. ", "earlier markers are never renumbered")
+    }
+
+    suite("Return on an uppercase roman item through the real editor") {
+        let view = makeTextView("IV. x")
+        view.setSelectedRange(NSRange(location: 5, length: 0))
+        view.insertNewline(nil)
+
+        equal(view.string, "IV. x\nV. ", "the generated marker keeps the uppercase")
     }
 
     suite("Return after z falls through to an ordinary newline") {
