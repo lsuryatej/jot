@@ -360,19 +360,20 @@ apply at all, a normal Xcode install should just work.
 
 ### Continuous verification
 
-Both install paths above are checked by CI, not just by hand:
+Both install paths above are checked by CI, not just by hand. Every release
+in [`release.yml`](.github/workflows/release.yml):
 
-- **`smoke-test-install-sh`** runs on every release, as a second job in
-  [`release.yml`](.github/workflows/release.yml), on its own fresh runner.
-  Installs via `install.sh` against the release that job just published, then
-  checks the app exists, is executable, matches the tagged version, carries a
-  valid ad-hoc signature, and is not quarantined.
-- **[`brew-smoke-test.yml`](.github/workflows/brew-smoke-test.yml)** runs
-  daily, plus on demand, instead of per-release. The Homebrew cask is bumped
-  by hand after each release, so there's always a window where it's briefly
-  out of sync with the latest tag. Installs via the exact published
-  `brew install lsuryatej/jot/jot` command on a throwaway runner, checks the
-  same things, cleans up with `brew uninstall --cask jot`.
+- refuses to build if the tag and `Info.plist` versions disagree,
+- **`bump-homebrew-cask`** points the
+  [Homebrew tap](https://github.com/lsuryatej/homebrew-jot) at the new
+  version and checksum, so the in-app updater's `brew upgrade` can see it,
+- **`smoke-test-install-sh`** and **`smoke-test-brew`** each install the
+  release on a fresh runner, the way a user would, and check the version,
+  the ad-hoc signature, and that the app is not quarantined.
+
+[`brew-smoke-test.yml`](.github/workflows/brew-smoke-test.yml) repeats the
+Homebrew check daily and fails if the cask installs anything older than the
+latest release.
 
 Both ran through a genuinely fresh machine before the quarantine fix was
 trusted, not just the machine it was written on.

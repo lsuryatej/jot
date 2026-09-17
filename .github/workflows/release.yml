@@ -22,8 +22,19 @@ jobs:
     runs-on: macos-14
     outputs:
       version: ${{ steps.package.outputs.version }}
+      sha256: ${{ steps.package.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
+
+      # A tag ahead of Info.plist ships an app that always sees the release
+      # as newer than itself, so "Update Available" never goes away.
+      - name: Check tag matches Info.plist
+        run: |
+          VERSION="$(plutil -extract CFBundleShortVersionString raw resources/Info.plist)"
+          [ "v$VERSION" = "${{ github.ref_name }}" ] || {
+            echo "::error::tag ${{ github.ref_name }} does not match Info.plist version $VERSION"
+            exit 1
+          }
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
@@ -39,6 +50,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Jot.app "dist/Jot-$VERSION.zip"
           shasum -a 256 "dist/Jot-$VERSION.zip" > "dist/Jot-$VERSION.zip.sha256"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d' ' -f1 "dist/Jot-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         env:
@@ -49,10 +61,6 @@ jobs:
             "dist/Jot-${{ steps.package.outputs.version }}.zip.sha256" \
             --title "Jot ${{ steps.package.outputs.version }}" \
             --generate-notes
-
-      - name: Reminder
-        run: |
-          echo "::notice::Release published. The Homebrew cask at lsuryatej/homebrew-jot still needs its version and sha256 bumped by hand (or via a follow-up automation) — this workflow does not touch that repo."
 
   smoke-test-install-sh:
     needs: build-and-release
@@ -89,3 +97,73 @@ jobs:
           fi
 
           echo "install.sh installed Jot $VERSION correctly, unsigned-but-unquarantined, as intended."
+
+  # The in-app updater runs `brew upgrade --cask jot`, which only sees what the
+  # tap says. A tap left on the previous version makes every "Update
+  # Available" click a silent no-op, which is exactly what 1.3.0 shipped with.
+  bump-homebrew-cask:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the tap token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || {
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. Add a fine-grained token with Contents: read and write on lsuryatej/homebrew-jot as a repository secret, then re-run this job."
+            exit 1
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          repository: lsuryatej/homebrew-jot
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Point the cask at this release
+        env:
+          VERSION: ${{ needs.build-and-release.outputs.version }}
+          SHA256: ${{ needs.build-and-release.outputs.sha256 }}
+        working-directory: tap
+        run: |
+          sed -i -E "s/^  version \".*\"$/  version \"$VERSION\"/" Casks/jot.rb
+          sed -i -E "s/^  sha256 \".*\"$/  sha256 \"$SHA256\"/" Casks/jot.rb
+          grep -q "^  version \"$VERSION\"$" Casks/jot.rb && grep -q "^  sha256 \"$SHA256\"$" Casks/jot.rb || {
+            echo "::error::cask edit did not apply"; cat Casks/jot.rb; exit 1
+          }
+          if git diff --quiet; then
+            echo "Cask already at $VERSION."
+            exit 0
+          fi
+          git diff
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "jot $VERSION"
+          git push
+
+  smoke-test-brew:
+    needs: [build-and-release, bump-homebrew-cask]
+    runs-on: macos-14
+    steps:
+      - name: Install via the real published command
+        run: brew install lsuryatej/jot/jot
+
+      - name: Verify it is this release
+        run: |
+          VERSION="${{ needs.build-and-release.outputs.version }}"
+          APP="/Applications/Jot.app"
+          INSTALLED_VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
+          [ "$INSTALLED_VERSION" = "$VERSION" ] || {
+            echo "::error::brew installed $INSTALLED_VERSION, expected $VERSION"
+            exit 1
+          }
+          if xattr -l "$APP" 2>/dev/null | grep -q com.apple.quarantine; then
+            echo "::error::app is quarantined after brew install"
+            exit 1
+          fi
+          codesign -dv "$APP" 2>&1 | grep -q "Signature=adhoc" || { echo "::error::unexpected code signature"; exit 1; }
+          echo "brew install lsuryatej/jot/jot gives $VERSION."
+
+      - name: Clean up
+        if: always()
+        run: brew uninstall --cask jot || true
