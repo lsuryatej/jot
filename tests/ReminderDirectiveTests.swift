@@ -171,6 +171,67 @@ func runReminderDirectiveTests() {
               "Thu, Sep 3 at 10:00 AM", "anything further out names the weekday and date")
     }
 
+    suite("reminder: 12am is midnight, 12pm is noon") {
+        // now is 14:30, so every one of these has already passed today.
+        equal(describe(ReminderDirective.parseTimePhrase("12am", now: now, calendar: calendar), calendar, [.day, .hour, .minute]),
+              "27 0 0", "12am is 00:00, rolled to tomorrow")
+        equal(describe(ReminderDirective.parseTimePhrase("12:30am", now: now, calendar: calendar), calendar, [.day, .hour, .minute]),
+              "27 0 30", "12:30am is 00:30, not 12:30")
+        equal(describe(ReminderDirective.parseTimePhrase("12pm", now: now, calendar: calendar), calendar, [.day, .hour, .minute]),
+              "27 12 0", "12pm is noon, not midnight")
+        equal(describe(ReminderDirective.parseTimePhrase("12:30pm", now: now, calendar: calendar), calendar, [.day, .hour, .minute]),
+              "27 12 30", "12:30pm is 12:30")
+        equal(describe(ReminderDirective.parseTimePhrase("tomorrow 12am", now: now, calendar: calendar), calendar, [.day, .hour]),
+              "27 0", "tomorrow 12am is the midnight that starts tomorrow")
+        check(ReminderDirective.parseTimePhrase("0am", now: now, calendar: calendar) == nil, "0am is not a 12-hour time")
+    }
+
+    suite("reminder: weeks, bare \"at\", and day words without a time") {
+        equal(ReminderDirective.parseTimePhrase("in 2 weeks", now: now, calendar: calendar),
+              now.addingTimeInterval(14 * 86400), "in 2 weeks")
+        equal(ReminderDirective.parseTimePhrase("in 1w", now: now, calendar: calendar),
+              now.addingTimeInterval(7 * 86400), "compact week unit")
+
+        equal(describe(ReminderDirective.parseTimePhrase("at 3pm", now: now, calendar: calendar), calendar, [.day, .hour]),
+              "26 15", "bare \"at\" with no day word")
+        equal(describe(ReminderDirective.parseTimePhrase("at noon", now: now, calendar: calendar), calendar, [.day, .hour]),
+              "27 12", "\"at noon\" rolls like bare noon")
+        check(ReminderDirective.parseTimePhrase("at", now: now, calendar: calendar) == nil, "\"at\" with no time")
+
+        check(ReminderDirective.parseTimePhrase("tomorrow", now: now, calendar: calendar) == nil,
+              "a day word with no time is rejected, not given a guessed default hour")
+        check(ReminderDirective.parseTimePhrase("friday", now: now, calendar: calendar) == nil, "weekday with no time")
+        check(ReminderDirective.parseTimePhrase("tomorrow at", now: now, calendar: calendar) == nil, "\"tomorrow at\" with no time")
+
+        check(ReminderDirective.parseTimePhrase("next tomorrow 9am", now: now, calendar: calendar) == nil,
+              "\"next\" only makes sense before a weekday")
+        check(ReminderDirective.parseTimePhrase("next today 3pm", now: now, calendar: calendar) == nil,
+              "\"next today\" is refused rather than read as today")
+    }
+
+    suite("reminder: an empty or blank keyword falls back to \"remind\"") {
+        equal(ReminderDirective.directives(in: "remind 3pm", keyword: "", now: now, calendar: calendar).count, 1,
+              "empty keyword")
+        equal(ReminderDirective.directives(in: "remind 3pm", keyword: "   ", now: now, calendar: calendar).count, 1,
+              "whitespace-only keyword")
+        equal(ReminderDirective.directives(in: "remind   ", keyword: "remind", now: now, calendar: calendar).count, 0,
+              "the keyword followed only by spaces is not a directive")
+        equal(ReminderDirective.directives(in: "  ping 3pm", keyword: " ping ", now: now, calendar: calendar).first?.source,
+              "ping 3pm", "a padded keyword is trimmed, and so is the captured source")
+    }
+
+    suite("reminder: code notes switch reminders off") {
+        equal(ReminderDirective.directives(in: "code\nremind 3pm", keyword: "remind", now: now, calendar: calendar).count, 0,
+              "a remind line inside a code note is code, not a directive")
+        equal(ReminderDirective.directives(in: "  CODE \nremind 3pm", keyword: "remind", now: now, calendar: calendar).count, 0,
+              "the code keyword matches the way CodeBlock matches it")
+        equal(ReminderDirective.directives(in: "snippet\nremind 3pm", keyword: "remind", codeKeyword: "snippet",
+                                           now: now, calendar: calendar).count, 0,
+              "a configured code keyword")
+        equal(ReminderDirective.directives(in: "notes\ncode\nremind 3pm", keyword: "remind", now: now, calendar: calendar).count, 1,
+              "\"code\" anywhere but the first line changes nothing")
+    }
+
     suite("reminder: directives(in:keyword:) finds every line, dedupes identical ones") {
         let text = "remind 3pm\nsome other line\nremind tomorrow 9am"
         let found = ReminderDirective.directives(in: text, keyword: "remind", now: now, calendar: calendar)
@@ -275,5 +336,67 @@ func runReminderNotesManagerTests() {
         manager.currentText = "remind in 10 minutes\nping in 5 minutes"
         equal(scheduler.scheduled.count, 2, "\"ping in 5 minutes\" is newly recognized under the new keyword")
         check(scheduler.scheduled.last?.body == "ping in 5 minutes", "the new keyword's directive is the one just scheduled")
+    }
+
+    suite("NotesManager: several new reminders at once get a count, not a date") {
+        let scheduler = SpyReminderScheduler()
+        let manager = makeManager(reminderScheduler: scheduler)
+        manager.currentText = "remind in 10 minutes\nremind in 2 hours\nremind in 3 days"
+        equal(manager.reminderConfirmation, "3 reminders set", "three at once")
+
+        manager.currentText = "remind in 10 minutes\nremind in 2 hours\nremind in 3 days\nremind in 4 days"
+        check(manager.reminderConfirmation?.hasPrefix("Reminder set for") == true,
+              "one more on top counts only the new one: \(manager.reminderConfirmation ?? "nil")")
+    }
+
+    suite("NotesManager: the notification title is the note's title") {
+        let scheduler = SpyReminderScheduler()
+        let manager = makeManager(reminderScheduler: scheduler)
+        manager.currentText = "# Dentist\nremind in 10 minutes"
+        equal(scheduler.scheduled.last?.title, "Dentist", "a heading title, marker stripped")
+
+        manager.currentText = "\n  \nCall the bank\nremind in 15 minutes"
+        equal(scheduler.scheduled.last?.title, "Call the bank", "leading blank lines are skipped")
+
+        manager.currentText = "remind in 20 minutes"
+        equal(scheduler.scheduled.last?.title, "remind in 20 minutes",
+              "a note that is only the directive is titled by the directive line itself")
+
+        manager.currentText = "Untitled note\nremind in 30 minutes"
+        equal(scheduler.scheduled.last?.title, "Reminder", "Note.title's placeholder becomes \"Reminder\"")
+    }
+
+    suite("NotesManager: every reminder identifier carries reminderIdentifierPrefix") {
+        // Jot.swift only celebrates a delivered notification whose identifier
+        // has this prefix; losing it would silently lose the confetti.
+        let scheduler = SpyReminderScheduler()
+        let manager = makeManager(reminderScheduler: scheduler)
+        manager.currentText = "remind in 10 minutes\nremind tomorrow 9am\nremind friday noon"
+        manager.appendNote()
+        manager.currentText = "remind in 5 minutes"
+        manager.setText("remind in 10 minutes\nremind tomorrow 9am\nremind friday noon\nREMIND at 3pm", at: 0)
+        equal(scheduler.scheduled.count, 5, "five scheduled across two notes")
+        check(!scheduler.scheduled.isEmpty && scheduler.scheduled.allSatisfy { $0.identifier.hasPrefix(reminderIdentifierPrefix) },
+              "every scheduled identifier starts with the prefix")
+        equal(Set(scheduler.scheduled.map(\.identifier)).count, 5, "and each is distinct")
+
+        manager.currentText = ""
+        manager.deleteNote(at: 0)
+        check(!scheduler.cancelled.isEmpty && scheduler.cancelled.allSatisfy { $0.hasPrefix(reminderIdentifierPrefix) },
+              "cancelled identifiers carry the prefix too")
+        equal(Set(scheduler.cancelled), Set(scheduler.scheduled.map(\.identifier)), "everything scheduled was cancelled")
+    }
+
+    suite("NotesManager: remind lines in a code note are not scheduled") {
+        let scheduler = SpyReminderScheduler()
+        let manager = makeManager(reminderScheduler: scheduler)
+        manager.currentText = "code\nremind in 10 minutes"
+        equal(scheduler.scheduled.count, 0, "nothing scheduled from inside a code note")
+        check(manager.reminderConfirmation == nil, "and no confirmation toast")
+
+        manager.currentText = "remind in 10 minutes"
+        equal(scheduler.scheduled.count, 1, "dropping the code line makes it a real directive")
+        manager.currentText = "code\nremind in 10 minutes"
+        equal(scheduler.cancelled, scheduler.scheduled.map(\.identifier), "turning the note into code cancels it")
     }
 }
