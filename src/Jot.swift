@@ -593,7 +593,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         menu.addItem(.separator())
 
-        if let version = UpdateChecker.shared.availableVersion {
+        if UpdateChecker.shared.isUpdating {
+            // No action, so the menu auto-disables it and a second run can't start.
+            menu.addItem(NSMenuItem(title: "Updating…", action: nil, keyEquivalent: ""))
+        } else if let version = UpdateChecker.shared.availableVersion {
             let update = NSMenuItem(
                 title: "Update Available (v\(version))…",
                 action: #selector(performUpdate),
