@@ -154,4 +154,29 @@ func runEmphasisWiringTests() {
         let view = makeEmphasisView("2*3*4")
         equal(view.emphasisMarkers, [], "nothing on a math line folds, so the asterisks stay visible")
     }
+
+    // MARK: - An earlier edit can change a later line's classification
+
+    suite("undefining a variable on an earlier line restyles the emphasis it creates downstream") {
+        let view = makeEmphasisView("b = 2\n5*b*5")
+        // While b = 2, "5*b*5" parses and evaluates as math (5*2*5), so it
+        // shows no emphasis at all: no folded markers, "b" in the plain font.
+        check(view.emphasisMarkers.isEmpty, "sanity: 5*b*5 is math, not emphasis, while b is defined")
+        check(!hasTrait(.italicFontMask, font(in: view, at: 8)), "sanity: b starts in the plain font")
+
+        // In place on line 1 only: deletes the "2", leaving "b = " (an
+        // incomplete assignment) without touching line 2 at all or changing
+        // the line count. `didProcessEditing`'s incremental `range` covers
+        // only this edit, not "5*b*5" two characters later.
+        view.replace(range: NSRange(location: 4, length: 1), with: "", selecting: nil)
+        equal(view.string, "b = \n5*b*5", "sanity: only the \"2\" was removed")
+
+        // b is now undefined, so "5*b*5" fails to evaluate as math and *b* is
+        // read as emphasis: its markers fold, so "b" alone becomes visible
+        // between them, and it must be in the italic font to render as
+        // anything other than a plain, unstyled "b" with no asterisks.
+        check(!view.emphasisMarkers.isEmpty, "the two asterisks around b are now markers to fold")
+        check(hasTrait(.italicFontMask, font(in: view, at: 7)),
+              "and b — one character earlier now the line is a character shorter — must pick up italic to match")
+    }
 }

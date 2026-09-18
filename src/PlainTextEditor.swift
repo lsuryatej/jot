@@ -1498,7 +1498,23 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // the extent of, so restyle the whole note when that mode is on. The
         // same goes for the edit that adds or removes the code keyword: every
         // other line has to pick up (or drop) the code treatment.
-        applyChecklistStyling(in: stylesFirstLineAsTitle || codeModeChanged ? nil : editedRange)
+        //
+        // Below the title/code cases, restyling still can't stop at
+        // `editedRange` alone: `Emphasis.matches` threads a math environment
+        // top to bottom, so a variable defined or removed here can flip
+        // whether a LATER line reads as math or as emphasis, and that later
+        // line's font never gets touched unless it's inside this pass's
+        // target too. Emphasis-styled content is the only thing that depends
+        // on an earlier line this way, so the target widens to the rest of
+        // the note — never backward, since nothing here looks upward — rather
+        // than paying for a full-note restyle on every keystroke.
+        let target: NSRange?
+        if stylesFirstLineAsTitle || codeModeChanged {
+            target = nil
+        } else {
+            target = NSRange(location: editedRange.location, length: textStorage.length - editedRange.location)
+        }
+        applyChecklistStyling(in: target)
         recomputeMathResults()
         recomputeLinkMatches()
         // Deferred like `applyListModeIfNeeded`: folding forces glyph
