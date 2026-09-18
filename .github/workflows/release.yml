@@ -1,10 +1,12 @@
 name: Release
 
-# Triggered by pushing a tag like v1.2.3. Builds Jot.app, attaches it zipped
-# to a GitHub release for that tag, then smoke-tests the install.sh path
-# against that exact release on a second, independent runner — the same way
-# a real user would install it, checked automatically on every release
-# rather than relying on someone remembering to do it by hand.
+# Triggered by pushing a tag like v1.2.3. Builds Jot.app, bumps the Homebrew
+# tap to point at it, and only THEN publishes the GitHub release — publishing
+# first and bumping the tap after would leave a public release the in-app
+# updater can't actually install if the tap bump fails partway (token,
+# checkout, push), the same class of bug this whole pipeline exists to catch.
+# Once published, install.sh and brew are each smoke-tested against that
+# exact release on their own fresh runner, the way a real user would install.
 #
 # Verified end to end on a real GitHub-hosted macOS runner (v1.1.0,
 # 2026-08-22): stable Xcode/macOS on the runner never hits the macOS 27 beta
@@ -18,7 +20,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     runs-on: macos-14
     outputs:
       version: ${{ steps.package.outputs.version }}
@@ -52,18 +54,82 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha256=$(cut -d' ' -f1 "dist/Jot-$VERSION.zip.sha256")" >> "$GITHUB_OUTPUT"
 
+      # Held here, not published yet: bump-homebrew-cask has to succeed
+      # first. A different runner publishes it once that's confirmed.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-archive
+          path: dist/
+          retention-days: 1
+
+  # The in-app updater runs `brew upgrade --cask jot`, which only sees what
+  # the tap says. This runs before the release is public, and nothing
+  # publishes it until this succeeds — a tap left on the previous version
+  # made every "Update Available" click a silent no-op, which is exactly
+  # what 1.3.0 shipped with, and publishing first would only have moved that
+  # same failure one step later instead of closing it.
+  bump-homebrew-cask:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the tap token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || {
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. Add a fine-grained token with Contents: read and write on lsuryatej/homebrew-jot as a repository secret, then re-run this job."
+            exit 1
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          repository: lsuryatej/homebrew-jot
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Point the cask at this release
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        working-directory: tap
+        run: |
+          sed -i -E "s/^  version \".*\"$/  version \"$VERSION\"/" Casks/jot.rb
+          sed -i -E "s/^  sha256 \".*\"$/  sha256 \"$SHA256\"/" Casks/jot.rb
+          grep -q "^  version \"$VERSION\"$" Casks/jot.rb && grep -q "^  sha256 \"$SHA256\"$" Casks/jot.rb || {
+            echo "::error::cask edit did not apply"; cat Casks/jot.rb; exit 1
+          }
+          if git diff --quiet; then
+            echo "Cask already at $VERSION."
+            exit 0
+          fi
+          git diff
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "jot $VERSION"
+          git push
+
+  publish-release:
+    needs: [build, bump-homebrew-cask]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-archive
+          path: dist
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            "dist/Jot-${{ steps.package.outputs.version }}.zip" \
-            "dist/Jot-${{ steps.package.outputs.version }}.zip.sha256" \
-            --title "Jot ${{ steps.package.outputs.version }}" \
+            "dist/Jot-${{ needs.build.outputs.version }}.zip" \
+            "dist/Jot-${{ needs.build.outputs.version }}.zip.sha256" \
+            --title "Jot ${{ needs.build.outputs.version }}" \
+            --repo "${{ github.repository }}" \
             --generate-notes
 
   smoke-test-install-sh:
-    needs: build-and-release
+    needs: [build, publish-release]
     runs-on: macos-14
     steps:
       - name: Run install.sh exactly as a real user would
@@ -72,7 +138,7 @@ jobs:
 
       - name: Verify the installed app
         run: |
-          VERSION="${{ needs.build-and-release.outputs.version }}"
+          VERSION="${{ needs.build.outputs.version }}"
           APP="/Applications/Jot.app"
 
           test -d "$APP" || { echo "::error::$APP does not exist after install.sh"; exit 1; }
@@ -98,51 +164,8 @@ jobs:
 
           echo "install.sh installed Jot $VERSION correctly, unsigned-but-unquarantined, as intended."
 
-  # The in-app updater runs `brew upgrade --cask jot`, which only sees what the
-  # tap says. A tap left on the previous version makes every "Update
-  # Available" click a silent no-op, which is exactly what 1.3.0 shipped with.
-  bump-homebrew-cask:
-    needs: build-and-release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the tap token
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          [ -n "$TAP_TOKEN" ] || {
-            echo "::error::HOMEBREW_TAP_TOKEN is not set. Add a fine-grained token with Contents: read and write on lsuryatej/homebrew-jot as a repository secret, then re-run this job."
-            exit 1
-          }
-
-      - uses: actions/checkout@v4
-        with:
-          repository: lsuryatej/homebrew-jot
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: tap
-
-      - name: Point the cask at this release
-        env:
-          VERSION: ${{ needs.build-and-release.outputs.version }}
-          SHA256: ${{ needs.build-and-release.outputs.sha256 }}
-        working-directory: tap
-        run: |
-          sed -i -E "s/^  version \".*\"$/  version \"$VERSION\"/" Casks/jot.rb
-          sed -i -E "s/^  sha256 \".*\"$/  sha256 \"$SHA256\"/" Casks/jot.rb
-          grep -q "^  version \"$VERSION\"$" Casks/jot.rb && grep -q "^  sha256 \"$SHA256\"$" Casks/jot.rb || {
-            echo "::error::cask edit did not apply"; cat Casks/jot.rb; exit 1
-          }
-          if git diff --quiet; then
-            echo "Cask already at $VERSION."
-            exit 0
-          fi
-          git diff
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "jot $VERSION"
-          git push
-
   smoke-test-brew:
-    needs: [build-and-release, bump-homebrew-cask]
+    needs: [build, publish-release]
     runs-on: macos-14
     steps:
       - name: Install via the real published command
@@ -150,7 +173,7 @@ jobs:
 
       - name: Verify it is this release
         run: |
-          VERSION="${{ needs.build-and-release.outputs.version }}"
+          VERSION="${{ needs.build.outputs.version }}"
           APP="/Applications/Jot.app"
           INSTALLED_VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
           [ "$INSTALLED_VERSION" = "$VERSION" ] || {

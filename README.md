@@ -366,10 +366,12 @@ in [`release.yml`](.github/workflows/release.yml):
 - refuses to build if the tag and `Info.plist` versions disagree,
 - **`bump-homebrew-cask`** points the
   [Homebrew tap](https://github.com/lsuryatej/homebrew-jot) at the new
-  version and checksum, so the in-app updater's `brew upgrade` can see it,
+  version and checksum, so the in-app updater's `brew upgrade` can see it —
+  and the GitHub release itself stays unpublished until this succeeds, so a
+  failed tap bump can't leave a public release the updater can't install,
 - **`smoke-test-install-sh`** and **`smoke-test-brew`** each install the
-  release on a fresh runner, the way a user would, and check the version,
-  the ad-hoc signature, and that the app is not quarantined.
+  published release on a fresh runner, the way a user would, and check the
+  version, the ad-hoc signature, and that the app is not quarantined.
 
 [`brew-smoke-test.yml`](.github/workflows/brew-smoke-test.yml) repeats the
 Homebrew check daily and fails if the cask installs anything older than the
