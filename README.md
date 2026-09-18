@@ -16,9 +16,9 @@ no package manager, no runtime dependency. The whole app is one `swiftc`
 invocation compiling straight to a ~950KB binary with zero non-system
 libraries linked in.
 
-[![Jot in 21 seconds: inline math, checklists, the Screen Edge sidebar, and timers](docs/demo/jot-demo-poster.jpg)](docs/demo/jot-demo.mp4)
+https://github.com/user-attachments/assets/ee0bb026-4726-4322-8937-3f7a50abe910
 
-<sup>▶ [Watch the 21-second tour](docs/demo/jot-demo.mp4) — inline math, checklists, Screen Edge, timers.</sup>
+<sup>21 seconds: inline math, checklists, the Screen Edge sidebar, and timers.</sup>
 
 ## Install
 
