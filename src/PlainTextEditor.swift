@@ -87,6 +87,106 @@ final class SwipeScrollView: NSScrollView {
     }
 }
 
+/// Draws `.backgroundColor` runs at the height of the text itself rather than
+/// the height of the line fragment holding it.
+///
+/// Exactly the correction `caretRect` already makes, for exactly the same
+/// reason. A line-height multiple adds its extra leading above the glyphs, and
+/// AppKit fills the whole fragment, so a highlight ends up painted across the
+/// gap above its own words and into the descenders of the line before it. The
+/// effect had always been there on `==highlights==`; inline code made it
+/// impossible to ignore, because pasted output is full of code spans.
+final class TextHeightBackgroundLayoutManager: NSLayoutManager {
+    /// Moves one incoming background rect onto the baseline of the line
+    /// fragment it belongs to, at the height of its own font. Returns nil when
+    /// this fragment is not the rect's fragment.
+    ///
+    /// Pure on purpose, exactly like `caretRect`: the two mistakes below are
+    /// invisible from the drawing code and impossible to catch through an
+    /// AppKit override, so the math lives somewhere a test can reach it
+    /// without a layout manager, a text storage, or a window server.
+    ///
+    /// - Parameters:
+    ///   - rect: the rect AppKit wants filled, in the text view's coordinates.
+    ///   - lineFragment: the fragment, in the text container's coordinates.
+    ///   - baselineOffset: the glyph baseline's y within that fragment.
+    ///   - containerInset: the text view's `textContainerInset`.
+    ///   - font: the font of the run being washed, not the line's first font.
+    static func backgroundRect(
+        for rect: NSRect,
+        lineFragment: NSRect,
+        baselineOffset: CGFloat,
+        containerInset: NSSize,
+        font: NSFont
+    ) -> NSRect? {
+        // Trap one: the rect arrives with the container inset already applied
+        // while fragments are measured from the container's own origin. At
+        // this app's 38pt top inset the two spaces never overlap at all, so an
+        // intersection test against a raw fragment silently matches nothing
+        // and every rect falls through uncorrected.
+        let fragment = lineFragment.offsetBy(dx: containerInset.width, dy: containerInset.height)
+        guard fragment.intersects(rect) else { return nil }
+
+        // Trap two: a line-height multiple does not inflate this rect. It
+        // pushes the glyphs down inside a taller fragment and leaves the rect
+        // behind at the top, so the box is already the right height and simply
+        // in the wrong place. Guarding on height and bailing out therefore
+        // corrects nothing. Always reposition.
+        var corrected = rect
+        corrected.origin.y = fragment.minY + baselineOffset - ceil(font.ascender)
+        corrected.size.height = ceil(font.ascender - font.descender)
+        return corrected
+    }
+
+    override func fillBackgroundRectArray(
+        _ rectArray: UnsafePointer<NSRect>,
+        count rectCount: Int,
+        forCharacterRange charRange: NSRange,
+        color: NSColor
+    ) {
+        guard let textStorage, textStorage.length > 0, rectCount > 0 else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+
+        color.setFill()
+        let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+        let inset = firstTextView?.textContainerInset ?? .zero
+        // The run's own font, not the line's first one. Inline code swaps in a
+        // monospaced face mid-line, and sizing its wash off whatever the line
+        // happened to start with leaves the box floating off the text.
+        let characterIndex = min(max(0, charRange.location), textStorage.length - 1)
+        let font = textStorage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont
+
+        for index in 0..<rectCount {
+            let rect = rectArray[index]
+            var corrected = rect
+            var matched = false
+
+            enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, fragmentGlyphRange, _ in
+                // One rect per line fragment, so the first fragment this rect
+                // overlaps is the one it belongs to.
+                guard !matched, let font else { return }
+                guard let fitted = Self.backgroundRect(
+                    for: rect,
+                    lineFragment: fragmentRect,
+                    baselineOffset: self.location(forGlyphAt: fragmentGlyphRange.location).y,
+                    containerInset: inset,
+                    font: font
+                ) else { return }
+
+                matched = true
+                corrected = fitted
+            }
+
+            // A hair of padding so the wash reads as a surface behind the text
+            // rather than a box clamped to its bounding rect.
+            let padded = corrected.insetBy(dx: -1.5, dy: -1)
+            NSBezierPath(roundedRect: padded, xRadius: 3, yRadius: 3).fill()
+        }
+    }
+}
+
 /// Text view with checklist behaviour.
 ///
 /// The text stays plain markdown on disk. Everything here is presentation and
@@ -738,18 +838,28 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             insertImage(image, at: selectedRange().location)
             return
         }
-        if !isCodeMode,
-           let pasted = NSPasteboard.general.string(forType: .string),
-           let converted = Checklist.pastedAsListItems(pasted, into: string, keyword: listKeyword) {
-            let range = clamped(selectedRange())
-            replace(
-                range: range,
-                with: converted,
-                selecting: NSRange(location: range.location + (converted as NSString).length, length: 0)
-            )
+        if let pasted = NSPasteboard.general.string(forType: .string), insertPastedListText(pasted) {
             return
         }
         super.paste(sender)
+    }
+
+    /// The list-note half of `paste(_:)`, split out so it can be driven
+    /// without touching the real clipboard. False means "paste normally".
+    func insertPastedListText(_ pasted: String) -> Bool {
+        guard !isCodeMode else { return false }
+        let range = clamped(selectedRange())
+        let ns = string as NSString
+        let lineStart = ns.lineRange(for: NSRange(location: range.location, length: 0)).location
+        let linePrefix = ns.substring(with: NSRange(location: lineStart, length: range.location - lineStart))
+        guard let converted = Checklist.pastedAsListItems(pasted, into: string, keyword: listKeyword, linePrefix: linePrefix)
+        else { return false }
+        replace(
+            range: range,
+            with: converted,
+            selecting: NSRange(location: range.location + (converted as NSString).length, length: 0)
+        )
+        return true
     }
 
     /// Shift-Cmd-V: read the clipboard image as text instead of inserting it.
@@ -1212,6 +1322,22 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         linkMatches = LinkShrink.matches(in: textStorage.string)
     }
 
+    /// Swaps in the layout manager that draws backgrounds at text height.
+    ///
+    /// Call this on a freshly constructed view and nowhere else. Replacing a
+    /// layout manager that has already laid text out leaves the new one's idea
+    /// of the string stale, and the typesetter walks off the end of it the next
+    /// time anything asks for a glyph. An empty view has nothing to go stale.
+    ///
+    /// It is a separate call rather than initializer work because overriding a
+    /// designated initializer would take the plain `ChecklistTextView()` every
+    /// other call site relies on down with it, the same trap documented on
+    /// `recomputeLinkMatches`.
+    func installBackgroundLayoutManager() {
+        guard let textContainer, textStorage?.length ?? 0 == 0 else { return }
+        textContainer.replaceLayoutManager(TextHeightBackgroundLayoutManager())
+    }
+
     /// Folds every collapsed link's scheme and path out of the glyph stream
     /// entirely, rather than just coloring them invisible: color alone would
     /// still reserve their full width, leaving a blank gap where the hidden
@@ -1260,6 +1386,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         for range in highlightMarkers where NSLocationInRange(characterIndex, range) {
             return true
         }
+        for range in emphasisMarkers where NSLocationInRange(characterIndex, range) {
+            return true
+        }
         for match in linkMatches {
             guard match.range.location + match.range.length <= text.length else { continue }
             guard characterIndex >= match.range.location, characterIndex < match.range.location + match.range.length else { continue }
@@ -1283,11 +1412,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         font: NSFont,
         forGlyphRange glyphRange: NSRange
     ) -> Int {
-        // The three marker arrays are already emptied for a code block by the
+        // The marker arrays are already emptied for a code block by the
         // styling pass; the explicit guard says so at the point it matters,
         // since folding a character out of code would hide real content.
         guard !isCodeMode else { return 0 }
-        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty, let textStorage else { return 0 }
+        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty || !emphasisMarkers.isEmpty,
+              let textStorage else { return 0 }
         let ns = textStorage.string as NSString
 
         var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
@@ -1368,7 +1498,23 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // the extent of, so restyle the whole note when that mode is on. The
         // same goes for the edit that adds or removes the code keyword: every
         // other line has to pick up (or drop) the code treatment.
-        applyChecklistStyling(in: stylesFirstLineAsTitle || codeModeChanged ? nil : editedRange)
+        //
+        // Below the title/code cases, restyling still can't stop at
+        // `editedRange` alone: `Emphasis.matches` threads a math environment
+        // top to bottom, so a variable defined or removed here can flip
+        // whether a LATER line reads as math or as emphasis, and that later
+        // line's font never gets touched unless it's inside this pass's
+        // target too. Emphasis-styled content is the only thing that depends
+        // on an earlier line this way, so the target widens to the rest of
+        // the note — never backward, since nothing here looks upward — rather
+        // than paying for a full-note restyle on every keystroke.
+        let target: NSRange?
+        if stylesFirstLineAsTitle || codeModeChanged {
+            target = nil
+        } else {
+            target = NSRange(location: editedRange.location, length: textStorage.length - editedRange.location)
+        }
+        applyChecklistStyling(in: target)
         recomputeMathResults()
         recomputeLinkMatches()
         // Deferred like `applyListModeIfNeeded`: folding forces glyph
@@ -1419,6 +1565,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             }
             highlightMarkers = []
             headingMarkers = []
+            emphasisMarkers = []
             return
         }
 
@@ -1454,12 +1601,16 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             guard let line else { return }
 
             if let heading = Heading.parse(line) {
-                var style = NSMutableParagraphStyle()
+                let style = NSMutableParagraphStyle()
                 style.lineHeightMultiple = CGFloat(self.lineHeightMultiple)
                 // Room above a heading so it reads as its own section; the
                 // very first line keeps its inset instead of pushing down.
                 if lineRange.location > 0 {
-                    style.paragraphSpacingBefore = [CGFloat(18), 12, 8][heading.level - 1]
+                    // Shrinking gaps down to a floor: past level 4 the deeper
+                    // levels sit close together on purpose, since a run of
+                    // them is usually one dense subsection rather than four
+                    // separate ones.
+                    style.paragraphSpacingBefore = [CGFloat(18), 12, 8, 6, 6, 6][heading.level - 1]
                 }
                 textStorage.addAttributes(
                     [.font: self.headingFont(heading), .paragraphStyle: style],
@@ -1555,6 +1706,19 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
         highlightMarkers = highlights.flatMap { $0.markerRanges }
 
+        // Emphasis runs after everything above it on purpose: it restyles the
+        // font each run is already carrying rather than deriving one from
+        // `baseFont`, so `## text with **bold**` keeps its heading size and
+        // only gains the weight, and a bold word on the auto-title line stays
+        // title-sized. Whatever painted that font has to have painted it first.
+        let emphases = Emphasis.matches(in: ns)
+        for emphasis in emphases {
+            let content = NSIntersectionRange(emphasis.contentRange, target)
+            guard content.length > 0 else { continue }
+            applyEmphasis(emphasis.kind, to: content, in: textStorage)
+        }
+        emphasisMarkers = emphases.flatMap { $0.markerRanges }
+
         // Fresh positions for the folding pass: glyph generation asks about
         // arbitrary characters and has to fold against where the markers sit
         // *now*, not where they sat before this edit.
@@ -1570,13 +1734,68 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// generation, same as `headingMarkers`.
     private(set) var highlightMarkers: [NSRange] = []
 
+    /// Where the current note's `**`, `*` and `` ` `` markers are, in string
+    /// coordinates. Recomputed by every styling pass; read by glyph
+    /// generation, same as `headingMarkers`.
+    private(set) var emphasisMarkers: [NSRange] = []
+
+    /// Restyles one emphasis span's content in place.
+    ///
+    /// Enumerating the existing `.font` rather than starting from `baseFont`
+    /// is what lets bold inside a heading stay heading-sized: the trait is
+    /// added to whatever is already there. A run that somehow carries no font
+    /// falls back to the body one rather than being skipped.
+    private func applyEmphasis(_ kind: Emphasis.Kind, to range: NSRange, in textStorage: NSTextStorage) {
+        let manager = NSFontManager.shared
+        textStorage.enumerateAttribute(.font, in: range, options: []) { value, runRange, _ in
+            let current = (value as? NSFont) ?? self.baseFont
+            switch kind {
+            case .strong:
+                textStorage.addAttribute(
+                    .font,
+                    value: manager.convert(current, toHaveTrait: .boldFontMask),
+                    range: runRange
+                )
+            case .emphasis:
+                let italic = manager.convert(current, toHaveTrait: .italicFontMask)
+                // Plenty of fixed-pitch faces have no italic cut, SF Mono among
+                // them, and that is the default note font. `convert` hands back
+                // the upright face unchanged in that case, which would fold the
+                // asterisks away and put nothing at all in their place. Colour
+                // carries the emphasis instead rather than losing it.
+                if manager.traits(of: italic).contains(.italicFontMask) {
+                    textStorage.addAttribute(.font, value: italic, range: runRange)
+                } else {
+                    textStorage.addAttribute(.foregroundColor, value: self.ink.accent, range: runRange)
+                }
+            case .code:
+                // The same reasoning as `codeFont`: a note already set in a
+                // fixed-pitch face keeps its own rather than being pushed onto
+                // the system mono, and the wash carries the signal instead.
+                let mono = current.isFixedPitch
+                    ? current
+                    : NSFont.monospacedSystemFont(ofSize: current.pointSize, weight: .regular)
+                textStorage.addAttributes(
+                    [.font: mono, .backgroundColor: Emphasis.codeBackgroundColor],
+                    range: runRange
+                )
+            }
+        }
+    }
+
     /// Headings step up from the note's own font, so a typewriter note gets
     /// bold typewriter headings rather than a system-font intruder.
     private func headingFont(_ heading: Heading) -> NSFont {
-        let lift: CGFloat = [6.0, 3.5, 1.5][heading.level - 1]
+        // Size carries the top of the hierarchy and weight carries the bottom.
+        // Level 3 is the hinge: the last level that gets any lift, and the one
+        // that trades bold away so it cannot be mistaken for a level 2. Below
+        // it nothing grows, because a scratchpad cannot hold six distinct
+        // sizes and a heading that renders smaller than body text looks broken.
+        let lift: CGFloat = [6.0, 3.5, 1.5, 0.0, 0.0, 0.0][heading.level - 1]
         let manager = NSFontManager.shared
         let sized = manager.convert(baseFont, toSize: baseFont.pointSize + lift)
-        return heading.level == 3 ? sized : manager.convert(sized, toHaveTrait: .boldFontMask)
+        guard heading.level != 3 else { return sized }
+        return manager.convert(sized, toHaveTrait: .boldFontMask)
     }
 }
 
@@ -1626,6 +1845,7 @@ struct PlainTextEditor: NSViewRepresentable {
         scrollView.automaticallyAdjustsContentInsets = false
 
         let textView = ChecklistTextView()
+        textView.installBackgroundLayoutManager()
         textView.delegate = context.coordinator
 
         // Plain text, and nothing that rewrites what you typed.

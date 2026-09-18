@@ -14,6 +14,7 @@ final class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
 
     @Published private(set) var availableVersion: String?
+    @Published private(set) var isUpdating = false
 
     /// Update if the project moves to a different owner or repo name.
     private static let repository = "lsuryatej/jot"
@@ -56,88 +57,174 @@ final class UpdateChecker: ObservableObject {
         }
     }
 
-    /// Plain dotted-integer comparison — enough for "1.2.0" vs "1.10.0"
-    /// without pulling in a semver library for three numbers.
+    /// Dotted-integer comparison plus the one semver rule that matters here:
+    /// a pre-release ("1.4.0-beta.1") sorts before its release.
     nonisolated static func isNewer(_ a: String, than b: String) -> Bool {
-        let av = a.split(separator: ".").compactMap { Int($0) }
-        let bv = b.split(separator: ".").compactMap { Int($0) }
-        for i in 0..<max(av.count, bv.count) {
-            let x = i < av.count ? av[i] : 0
-            let y = i < bv.count ? bv[i] : 0
+        func split(_ v: String) -> (core: [Int], pre: [Substring]?) {
+            let parts = v.split(separator: "-", maxSplits: 1)
+            let core = (parts.first ?? "").split(separator: ".").compactMap { Int($0) }
+            return (core, parts.count > 1 ? parts[1].split(separator: ".") : nil)
+        }
+        let (ac, ap) = split(a)
+        let (bc, bp) = split(b)
+        for i in 0..<max(ac.count, bc.count) {
+            let x = i < ac.count ? ac[i] : 0
+            let y = i < bc.count ? bc[i] : 0
             if x != y { return x > y }
         }
-        return false
+        switch (ap, bp) {
+        case (nil, nil), (.some, nil): return false
+        case (nil, .some): return true
+        case let (.some(ap), .some(bp)):
+            for i in 0..<max(ap.count, bp.count) {
+                guard i < ap.count else { return false }
+                guard i < bp.count else { return true }
+                if ap[i] == bp[i] { continue }
+                if let x = Int(ap[i]), let y = Int(bp[i]) { return x > y }
+                return ap[i] > bp[i]
+            }
+            return false
+        }
     }
 
-    /// "Restart to update": if Homebrew installed this copy, upgrade through
-    /// it and relaunch. An ad-hoc-signed app has no safe way to replace its
-    /// own running binary, so without Homebrew the honest fallback is
-    /// sending the user to the release page rather than pretending to update.
-    ///
-    /// Relaunching used to happen unconditionally in the termination handler,
-    /// regardless of whether `brew upgrade` actually changed anything —
-    /// which it does not always do even on a clean, zero-status exit: brew
-    /// treats "already installed" as success, and this project's own
-    /// Homebrew cask is bumped by hand after each release (see BACKLOG.md),
-    /// so a user could click this the moment a new version is announced but
-    /// before the cask itself catches up. The reported bug — click restart,
-    /// the app quits, and the same old version comes back — is exactly what
-    /// that produces: brew "succeeds" at upgrading nothing, and the old
-    /// `/Applications/Jot.app` gets reopened and called done. The same gap
-    /// covers a user who has Homebrew for unrelated tools but installed Jot
-    /// via `install.sh`: `brew upgrade --cask jot` fails fast for a cask
-    /// that was never installed, and the old code ignored that too.
-    ///
-    /// The fix trusts neither the exit status nor brew's own claims: it
-    /// re-reads the actual installed bundle's version from disk after the
-    /// process exits, and only relaunches if that genuinely moved forward.
+    enum UpdateOutcome: Equatable { case relaunch, alreadyCurrent, failed }
+
+    /// brew treats "already installed" as success, so only a version that
+    /// moved forward on disk counts as an update.
+    nonisolated static func outcome(versionBefore: String, installedAfter: String?, exitStatus: Int32) -> UpdateOutcome {
+        if let installedAfter, isNewer(installedAfter, than: versionBefore) { return .relaunch }
+        return exitStatus == 0 ? .alreadyCurrent : .failed
+    }
+
     func performUpdate() {
-        guard let brew = Self.brewPath() else {
-            NSWorkspace.shared.open(Self.releasesPage)
+        guard !isUpdating, let version = availableVersion else { return }
+        guard let brew = Self.brewForCaskInstall() else {
+            // An ad-hoc-signed app can't safely replace itself, and remote
+            // install scripts are deliberately never run from here.
+            let alert = NSAlert()
+            alert.messageText = "Jot \(version) is available"
+            alert.informativeText = "Download the new version and replace Jot in your Applications folder."
+            alert.addButton(withTitle: "Download")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(Self.releasesPage)
+            }
             return
         }
-        let versionBeforeUpgrade = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+
+        let versionBefore = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        let appPath = Bundle.main.bundlePath
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: brew)
         process.arguments = ["upgrade", "--cask", "jot"]
-        process.terminationHandler = { _ in
-            DispatchQueue.main.async {
-                let installedVersion = Self.installedVersion(at: Self.installedAppPath) ?? versionBeforeUpgrade
-                guard Self.isNewer(installedVersion, than: versionBeforeUpgrade) else {
-                    // Nothing on disk actually changed — do not relaunch into
-                    // the exact binary that was just running and call it an
-                    // update. Send the user to a path that definitely works.
-                    NSWorkspace.shared.open(Self.releasesPage)
-                    return
-                }
-                NSWorkspace.shared.open(URL(fileURLWithPath: Self.installedAppPath))
-                NSApp.terminate(nil)
-            }
-        }
+        var environment = ProcessInfo.processInfo.environment
+        // brew refreshes third-party taps only once a day by default, which
+        // would hide a cask bumped minutes ago.
+        environment["HOMEBREW_AUTO_UPDATE_SECS"] = "0"
+        environment["HOMEBREW_NO_ENV_HINTS"] = "1"
+        process.environment = environment
+        let errPipe = Pipe()
+        process.standardError = errPipe
+        process.standardOutput = FileHandle.nullDevice
+
         do {
             try process.run()
         } catch {
+            showUpdateFailed(detail: error.localizedDescription)
+            return
+        }
+        isUpdating = true
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Drained before waiting so a chatty brew can't block on a full pipe.
+            let stderr = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            process.waitUntilExit()
+            let status = process.terminationStatus
+            if status != 0 { NSLog("Jot: brew upgrade exited \(status): \(stderr)") }
+            Task { @MainActor in
+                let checker = UpdateChecker.shared
+                checker.isUpdating = false
+                let installed = Self.installedVersion(at: appPath)
+                switch Self.outcome(versionBefore: versionBefore, installedAfter: installed, exitStatus: status) {
+                case .relaunch:
+                    checker.relaunch(appPath: appPath)
+                case .alreadyCurrent, .failed:
+                    checker.showUpdateFailed(detail: Self.briefError(from: stderr))
+                }
+            }
+        }
+    }
+
+    private func showUpdateFailed(detail: String?) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn't update automatically"
+        var text = "Homebrew didn't install a newer version. You can download it from GitHub instead."
+        if let detail { text += "\n\n\(detail)" }
+        alert.informativeText = text
+        alert.addButton(withTitle: "Open Releases Page")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
             NSWorkspace.shared.open(Self.releasesPage)
         }
     }
 
-    nonisolated static let installedAppPath = "/Applications/Jot.app"
+    /// `NSWorkspace.open` while this instance still runs would only activate
+    /// it, so a detached shell waits for this pid to exit before opening the
+    /// new bundle. Terminating flushes notes before the new instance reads them.
+    private func relaunch(appPath: String) {
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = Self.relaunchArguments(pid: ProcessInfo.processInfo.processIdentifier, appPath: appPath)
+        helper.standardOutput = FileHandle.nullDevice
+        helper.standardError = FileHandle.nullDevice
+        do {
+            try helper.run()
+        } catch {
+            showUpdateFailed(detail: error.localizedDescription)
+            return
+        }
+        NSApp.terminate(nil)
+    }
 
-    /// Reads `CFBundleShortVersionString` straight from the installed app's
-    /// own `Info.plist` on disk — not `Bundle.main`, which would still
-    /// report this (old, currently-running) process's version even after
-    /// the file on disk changed underneath it. `path` is overridable so this
-    /// is testable against a fixture bundle rather than the real install.
+    // pid and path are positional parameters, never spliced into the script.
+    nonisolated static func relaunchArguments(pid: Int32, appPath: String) -> [String] {
+        ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \"$2\"",
+         "sh", String(pid), appPath]
+    }
+
+    /// brew's last `Error:` line, else its last line of any kind.
+    nonisolated static func briefError(from stderr: String) -> String? {
+        let lines = stderr.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard let line = lines.last(where: { $0.hasPrefix("Error:") }) ?? lines.last else { return nil }
+        return line.count > 200 ? String(line.prefix(200)) + "…" : line
+    }
+
+    /// Read from disk because `Bundle.main` keeps reporting the running
+    /// process's version after brew has replaced the files.
     nonisolated static func installedVersion(at path: String) -> String? {
         let plistURL = URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")
         guard let dict = NSDictionary(contentsOf: plistURL) else { return nil }
         return dict["CFBundleShortVersionString"] as? String
     }
 
-    private static func brewPath() -> String? {
-        for path in ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"] {
-            if FileManager.default.isExecutableFile(atPath: path) { return path }
+    nonisolated static let defaultCaskroomPaths = ["/opt/homebrew/Caskroom/jot", "/usr/local/Caskroom/jot"]
+
+    /// The brew that installed this cask, if any. Having brew for other tools
+    /// isn't enough: `brew upgrade --cask jot` just fails for an install.sh copy.
+    nonisolated static func brewForCaskInstall(caskroomPaths: [String] = defaultCaskroomPaths) -> String? {
+        let fm = FileManager.default
+        for caskroom in caskroomPaths {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: caskroom, isDirectory: &isDir), isDir.boolValue else { continue }
+            // <prefix>/Caskroom/jot pairs with <prefix>/bin/brew.
+            let prefix = URL(fileURLWithPath: caskroom).deletingLastPathComponent().deletingLastPathComponent()
+            let brew = prefix.appendingPathComponent("bin/brew").path
+            if fm.isExecutableFile(atPath: brew) { return brew }
         }
         return nil
     }

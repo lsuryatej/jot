@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         notesManager.timerKeyword = settings.effectiveTimerKeyword
         notesManager.pomodoroKeyword = settings.effectivePomodoroKeyword
         notesManager.reminderKeyword = settings.effectiveReminderKeyword
+        notesManager.codeKeyword = settings.effectiveCodeKeyword
         notesManager.onPersist = { [weak self] notes in
             self?.scheduleAppleNotesSync(notes)
         }
@@ -219,6 +220,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.notesManager.reminderKeywordDidChange(to: self.settings.effectiveReminderKeyword)
+            }
+            .store(in: &cancellables)
+
+        settings.$codeKeyword
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.notesManager.codeKeywordDidChange(to: self.settings.effectiveCodeKeyword)
             }
             .store(in: &cancellables)
 
@@ -584,7 +593,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         menu.addItem(.separator())
 
-        if let version = UpdateChecker.shared.availableVersion {
+        if UpdateChecker.shared.isUpdating {
+            // No action, so the menu auto-disables it and a second run can't start.
+            menu.addItem(NSMenuItem(title: "Updating…", action: nil, keyEquivalent: ""))
+        } else if let version = UpdateChecker.shared.availableVersion {
             let update = NSMenuItem(
                 title: "Update Available (v\(version))…",
                 action: #selector(performUpdate),

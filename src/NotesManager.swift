@@ -108,6 +108,10 @@ final class NotesManager: ObservableObject {
     /// reminder.
     var reminderKeyword: String = "remind"
 
+    /// Configurable via Preferences; a note whose first line is this keyword
+    /// is code, and none of the directives above apply inside it.
+    var codeKeyword: String = CodeBlock.defaultKeyword
+
     private let store: NoteStore
     private var pendingSave: DispatchWorkItem?
     private let saveDebounce: TimeInterval
@@ -179,6 +183,10 @@ final class NotesManager: ObservableObject {
     func setText(_ newValue: String, at index: Int) {
         guard notes.indices.contains(index) else { return }
         let id = notes[index].id
+        // A card that was never current has never been seeded, so the
+        // directives already in its text must be recorded as seen before the
+        // edit is evaluated, or any keystroke would restart them.
+        seedIfNeeded(noteID: id, text: notes[index].text)
         notes[index].text = newValue
         // Unconditional now, not just for whichever card happens to be
         // `currentIndex`: Screen Edge mode shows every note as its own
@@ -470,7 +478,8 @@ final class NotesManager: ObservableObject {
     /// before, by design (multiple independent, simultaneous timers is a
     /// bigger feature, tracked separately in BACKLOG.md).
     private func evaluateTimer(in text: String, noteID: UUID) {
-        if let cycle = Self.firstPomodoroDirective(in: text, keyword: pomodoroKeyword) {
+        let isCode = CodeBlock.isCodeMode(text, keyword: codeKeyword)
+        if !isCode, let cycle = Self.firstPomodoroDirective(in: text, keyword: pomodoroKeyword) {
             seenTimerSource[noteID] = nil
             // Already running, or already fired, this exact directive.
             guard cycle.source != seenPomodoroSource[noteID] else { return }
@@ -495,7 +504,7 @@ final class NotesManager: ObservableObject {
             }
         }
 
-        guard let directive = Self.firstTimerDirective(in: text, keyword: timerKeyword) else {
+        guard !isCode, let directive = Self.firstTimerDirective(in: text, keyword: timerKeyword) else {
             if seenTimerSource[noteID] != nil {
                 seenTimerSource[noteID] = nil
                 if activeTimerOwnerID == noteID, activePomodoroPhase == nil {
@@ -531,7 +540,7 @@ final class NotesManager: ObservableObject {
     /// there and no longer is — so retyping the exact same directive text
     /// (nothing changed) never touches the scheduler at all.
     private func evaluateReminders(in text: String, noteID: UUID) {
-        let directives = ReminderDirective.directives(in: text, keyword: reminderKeyword)
+        let directives = ReminderDirective.directives(in: text, keyword: reminderKeyword, codeKeyword: codeKeyword)
         let currentSources = Set(directives.map(\.source))
         let previousSources = seenReminderSources[noteID] ?? []
 
@@ -575,14 +584,15 @@ final class NotesManager: ObservableObject {
     private func seedIfNeeded(noteID: UUID, text: String) {
         guard !seededNoteIDs.contains(noteID) else { return }
         seededNoteIDs.insert(noteID)
-        seenTimerSource[noteID] = Self.firstTimerDirective(in: text, keyword: timerKeyword)?.source
-        seenPomodoroSource[noteID] = Self.firstPomodoroDirective(in: text, keyword: pomodoroKeyword)?.source
+        let isCode = CodeBlock.isCodeMode(text, keyword: codeKeyword)
+        seenTimerSource[noteID] = isCode ? nil : Self.firstTimerDirective(in: text, keyword: timerKeyword)?.source
+        seenPomodoroSource[noteID] = isCode ? nil : Self.firstPomodoroDirective(in: text, keyword: pomodoroKeyword)?.source
         // Deliberately not scheduled here, only recorded as already seen:
         // if this text came from a previous session, whatever it already
         // scheduled either already fired or is still pending with the OS
         // under the same deterministic identifier — either way, re-adding it
         // now would be redundant at best. See `evaluateReminders`.
-        let sources = ReminderDirective.directives(in: text, keyword: reminderKeyword).map(\.source)
+        let sources = ReminderDirective.directives(in: text, keyword: reminderKeyword, codeKeyword: codeKeyword).map(\.source)
         seenReminderSources[noteID] = sources.isEmpty ? nil : Set(sources)
     }
 
@@ -635,6 +645,31 @@ final class NotesManager: ObservableObject {
     /// original schedule after the keyword changes.
     func reminderKeywordDidChange(to keyword: String) {
         reminderKeyword = keyword
+        seenReminderSources.removeAll()
+        seededNoteIDs.removeAll()
+        if notes.indices.contains(currentIndex) {
+            seedIfNeeded(noteID: notes[currentIndex].id, text: notes[currentIndex].text)
+        }
+    }
+
+    /// Which notes count as code can flip either way, so every "already
+    /// seen" record is rebuilt under the new keyword, same as the others.
+    /// Unlike them, a note whose classification flips to code under the new
+    /// keyword can be the one actually holding the running countdown — so
+    /// that has to be cancelled here too, the same as `timerKeywordDidChange`
+    /// and `pomodoroKeywordDidChange` already do for their own keyword.
+    func codeKeywordDidChange(to keyword: String) {
+        codeKeyword = keyword
+        if let ownerID = activeTimerOwnerID,
+           let owner = notes.first(where: { $0.id == ownerID }),
+           CodeBlock.isCodeMode(owner.text, keyword: codeKeyword) {
+            activeTimerEnd = nil
+            activePomodoroPhase = nil
+            pomodoroCycle = nil
+            activeTimerOwnerID = nil
+        }
+        seenTimerSource.removeAll()
+        seenPomodoroSource.removeAll()
         seenReminderSources.removeAll()
         seededNoteIDs.removeAll()
         if notes.indices.contains(currentIndex) {

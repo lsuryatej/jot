@@ -365,6 +365,8 @@ enum MathExpression {
         /// be used. Carries which of the two reasons applies, so the editor can
         /// say which one rather than just going blank.
         case currencyRatesUnavailable(CurrencyRates.Availability)
+        /// Overflowed to infinity or NaN; shown as nothing rather than `inf`.
+        case notFinite
     }
 
     /// A few failures are worth a word in the margin instead of silence: a
@@ -386,6 +388,14 @@ enum MathExpression {
     }
 
     static func evaluate(_ node: Node, environment: inout [String: Value]) -> Result<Value, EvalError> {
+        let result = evaluateNode(node, environment: &environment)
+        if case .success(let value) = result, !value.amount.isFinite {
+            return .failure(.notFinite)
+        }
+        return result
+    }
+
+    private static func evaluateNode(_ node: Node, environment: inout [String: Value]) -> Result<Value, EvalError> {
         switch node {
         case .number(let value, let unit):
             return .success(Value(amount: value, unit: unit))
@@ -516,15 +526,12 @@ enum MathExpression {
     /// Compact display form: trims trailing zeros, and appends the unit
     /// unless it is the internal "%" marker, which gets a bare "%" instead.
     static func format(_ value: Value) -> String {
-        let rounded = (value.amount * 10000).rounded() / 10000
-        var text: String
-        if rounded == rounded.rounded(), abs(rounded) < 1e15 {
-            text = String(Int(rounded))
-        } else {
-            text = String(format: "%.4f", rounded)
-            while text.hasSuffix("0") { text.removeLast() }
-            if text.hasSuffix(".") { text.removeLast() }
-        }
+        // "%.4f" rounds on its own. Scaling by 10000 first, as this used to,
+        // pushes values near 1e15 past double precision and invents digits.
+        var text = String(format: "%.4f", value.amount)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        if text == "-0" { text = "0" }
         if let unit = value.unit {
             text += unit == "%" ? "%" : " \(unit)"
         }

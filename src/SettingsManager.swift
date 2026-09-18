@@ -553,7 +553,11 @@ final class SettingsManager: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        Self.migrateFromPreviousBundleIDIfNeeded(into: defaults)
+        // Only the app's own defaults: an injected suite (every test) would
+        // otherwise start from whatever the old domain holds on this machine.
+        if defaults === UserDefaults.standard {
+            Self.migrateFromPreviousBundleIDIfNeeded(into: defaults)
+        }
 
         let rawMode = defaults.string(forKey: Key.displayMode) ?? DisplayMode.floating.rawValue
         self.displayMode = DisplayMode(rawValue: rawMode) ?? .floating

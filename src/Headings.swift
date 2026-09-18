@@ -1,14 +1,16 @@
 import Foundation
 
-/// A markdown heading at the start of a line: one to three `#`s, then a
+/// A markdown heading at the start of a line: one to six `#`s, then a
 /// space, then the heading text.
 ///
 /// Same trade as the checkbox markers: the hashes stay in the file, so it
 /// stays readable in `cat` and renders as real headings everywhere else, and
-/// the app styles only lines that genuinely carry them. Strict on input —
-/// four or more hashes has no level here and neither does a hash with no
-/// space, so `####` and `#hashtag` are ordinary text. Leading whitespace
-/// disqualifies too, matching markdown.
+/// the app styles only lines that genuinely carry them. All six levels are
+/// here because pasted AI output reaches for `####` and `#####` constantly,
+/// and a note full of literal hashes is the thing this feature exists to
+/// prevent. Still strict on input: seven or more hashes has no level, and
+/// neither does a hash with no space, so `#######` and `#hashtag` are
+/// ordinary text. Leading whitespace disqualifies too, matching markdown.
 struct Heading: Equatable {
     let level: Int
     /// Hashes plus the single space after them: the exact span the display
@@ -21,10 +23,10 @@ struct Heading: Equatable {
         for character in line {
             if character == "#" {
                 // Hashes must lead the line; anything before them, or past
-                // the third, means this was never a heading.
+                // the sixth, means this was never a heading.
                 if offset != depth { return nil }
                 depth += 1
-                if depth > 3 { return nil }
+                if depth > 6 { return nil }
             } else if character == " ", depth > 0 {
                 // The space closes the marker; whatever follows is the text
                 // and is none of the parser's business.
@@ -34,7 +36,7 @@ struct Heading: Equatable {
             }
             offset += 1
         }
-        // Hashes with no trailing space (`#` alone, or `###`): not a heading.
+        // Hashes with no trailing space (`#` alone, or `######`): not a heading.
         return nil
     }
 

@@ -10,6 +10,19 @@ import Foundation
 
 MainActor.assumeIsolated { startApplication() }
 
+// Nothing here can pass without key status: a locked screen leaves
+// loginwindow frontmost, every window stays inactive, and each check then
+// waits out its own activation timeout. Say so once and stop, rather than
+// grinding into the runner's watchdog.
+MainActor.assumeIsolated {
+    guard !canBecomeKeyWindow() else { return }
+    let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
+    FileHandle.standardError.write(Data(
+        "error: no window can become key (\(front) is frontmost). UI tests need an unlocked, interactive session.\n".utf8
+    ))
+    exit(2)
+}
+
 runSettingsWindowTests()
 runHeaderDispatchTests()
 runUndoAcrossNoteSwitchTests()

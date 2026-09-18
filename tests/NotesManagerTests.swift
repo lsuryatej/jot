@@ -476,6 +476,184 @@ func runAllTests() {
         check(m.activePomodoroPhase == nil, "phase cleared too")
     }
 
+    // MARK: - Screen Edge cards (setText on a note that isn't current)
+
+    // Seeded managers start on the last note, so index 0 below is a card that
+    // was loaded from disk and never made current.
+    suite("an unrelated edit to a non-current card does not restart its old timer") {
+        let m = makeManager(seed: ["5m timer", "plain"])
+        m.setText("5m timer\nbuy milk", at: 0)
+        check(m.activeTimerEnd == nil, "old timer directive in a non-current card stays inert")
+        check(m.activeTimerOwnerID == nil, "and nothing claims the countdown slot")
+    }
+
+    suite("an unrelated edit to a non-current card does not restart its old pomodoro") {
+        let m = makeManager(seed: ["pomodoro 25/5", "plain"])
+        m.setText("pomodoro 25/5\nbuy milk", at: 0)
+        check(m.activeTimerEnd == nil, "old pomodoro directive in a non-current card stays inert")
+        check(m.activePomodoroPhase == nil, "no phase either")
+    }
+
+    suite("an unrelated edit to a non-current card does not reschedule its old reminder") {
+        let scheduler = SpyReminderScheduler()
+        let m = makeManager(seed: ["remind 3pm", "plain"], reminderScheduler: scheduler)
+        m.setText("remind 3pm\nbuy milk", at: 0)
+        equal(scheduler.scheduled.count, 0, "old reminder in a non-current card is not scheduled again")
+        check(m.reminderConfirmation == nil, "and no \"reminder set\" toast for it")
+
+        m.setText("buy milk", at: 0)
+        equal(scheduler.cancelled.count, 1, "deleting that old line still cancels its pending notification")
+    }
+
+    suite("an edit to a non-current card leaves a timer it already started alone") {
+        let m = makeManager(seed: ["plain", "other"])
+        m.setText("plain\n5m timer", at: 0)
+        let endDate = m.activeTimerEnd
+        m.setText("plain\n5m timer\nmore", at: 0)
+        equal(m.activeTimerEnd, endDate, "the running countdown is not reset by a later edit")
+    }
+
+    suite("after a keyword change, an old directive in a non-current card stays inert") {
+        let m = makeManager(seed: ["5m timer", "plain"])
+        m.timerKeywordDidChange(to: "timer")
+        m.setText("5m timer\nbuy milk", at: 0)
+        check(m.activeTimerEnd == nil, "re-parsing after a keyword change is not a fresh directive")
+    }
+
+    suite("a newly typed directive in a non-current card still starts") {
+        let m = makeManager(seed: ["plain", "other"])
+        m.setText("plain\n5m timer", at: 0)
+        check(m.activeTimerEnd != nil, "timer typed into a non-current card starts")
+        equal(m.activeTimerOwnerID, m.notes[0].id, "owned by that card, not the current note")
+
+        let p = makeManager(seed: ["plain", "other"])
+        p.setText("plain\npomodoro 25/5", at: 0)
+        equal(p.activePomodoroPhase, .work, "pomodoro typed into a non-current card starts")
+        equal(p.activeTimerOwnerID, p.notes[0].id, "owned by that card")
+
+        let scheduler = SpyReminderScheduler()
+        let r = makeManager(seed: ["plain", "other"], reminderScheduler: scheduler)
+        r.setText("plain\nremind in 10 minutes", at: 0)
+        equal(scheduler.scheduled.count, 1, "reminder typed into a non-current card is scheduled")
+        check(r.reminderConfirmation?.hasPrefix("Reminder set for") == true, "with its confirmation")
+    }
+
+    suite("a new directive typed next to an old one in a non-current card starts only the new one") {
+        let scheduler = SpyReminderScheduler()
+        let m = makeManager(seed: ["remind 3pm", "plain"], reminderScheduler: scheduler)
+        m.setText("remind 3pm\nremind in 10 minutes", at: 0)
+        equal(scheduler.scheduled.map(\.body), ["remind in 10 minutes"], "only the typed line is scheduled")
+    }
+
+    // MARK: - Keyword changes leave the other countdown kind alone
+
+    suite("changing the timer keyword leaves a running pomodoro alone") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        let endDate = m.activeTimerEnd
+        let owner = m.activeTimerOwnerID
+        m.timerKeywordDidChange(to: "countdown")
+        equal(m.activeTimerEnd, endDate, "cycle keeps its end date")
+        equal(m.activePomodoroPhase, .work, "and its phase")
+        equal(m.activeTimerOwnerID, owner, "and its owner")
+
+        m.currentText = "pomodoro 25/5\nmore"
+        equal(m.activeTimerEnd, endDate, "a later edit to its note does not restart it")
+    }
+
+    suite("changing the pomodoro keyword leaves a running timer alone") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        let endDate = m.activeTimerEnd
+        let owner = m.activeTimerOwnerID
+        m.pomodoroKeywordDidChange(to: "focus")
+        equal(m.activeTimerEnd, endDate, "timer keeps its end date")
+        check(m.activePomodoroPhase == nil, "and is still a plain timer")
+        equal(m.activeTimerOwnerID, owner, "and its owner")
+
+        m.currentText = "5m timer\nmore"
+        equal(m.activeTimerEnd, endDate, "a later edit to its note does not restart it")
+    }
+
+    // MARK: - Deleting a countdown's note
+
+    suite("deleting the note that owns a running pomodoro clears all of it") {
+        let m = makeManager(seed: ["plain"])
+        m.appendNote()
+        m.currentText = "pomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "cycle running on the second note")
+        m.deleteNote(at: 1)
+        check(m.activeTimerEnd == nil, "no countdown left")
+        check(m.activePomodoroPhase == nil, "no phase label left")
+        check(m.activeTimerOwnerID == nil, "no owner left")
+        m.timerDidFire()
+        check(m.activeTimerEnd == nil, "a stray fire afterwards does not revive the old cycle")
+    }
+
+    suite("deleting a non-current card that owns a running countdown clears it") {
+        let m = makeManager(seed: ["plain", "other"])
+        m.setText("plain\n5m timer", at: 0)
+        check(m.activeTimerEnd != nil, "timer running on card 0")
+        m.deleteNote(at: 0)
+        check(m.activeTimerEnd == nil, "cancelled with its card")
+        check(m.activeTimerOwnerID == nil, "owner cleared")
+        equal(m.currentText, "other", "the current note is unchanged")
+    }
+
+    suite("blanking the only note clears a running pomodoro") {
+        let m = makeManager()
+        m.currentText = "pomodoro 25/5"
+        m.deleteNote(at: 0)
+        equal(m.notes.count, 1, "the last note is blanked, not removed")
+        check(m.activeTimerEnd == nil, "countdown cleared")
+        check(m.activePomodoroPhase == nil, "phase cleared")
+        check(m.activeTimerOwnerID == nil, "owner cleared")
+
+        m.currentText = "pomodoro 25/5"
+        equal(m.activePomodoroPhase, .work, "typing the same directive again is a fresh start")
+    }
+
+    // MARK: - Zero-length timer
+
+    // Same per-tick loop as the zero-length pomodoro suite above.
+    suite("a 0m timer fires exactly once") {
+        let m = makeManager()
+        m.currentText = "0m timer"
+        var fires = 0
+        for _ in 0..<12 {
+            guard let end = m.activeTimerEnd else { break }
+            if end.timeIntervalSince(Date()) <= 0 {
+                fires += 1
+                m.timerDidFire()
+            }
+        }
+        equal(fires, 1, "one celebration, then the timer is done")
+        check(m.activeTimerEnd == nil, "nothing left counting down")
+
+        m.currentText = "0m timer\nmore"
+        check(m.activeTimerEnd == nil, "editing around it does not re-arm it")
+    }
+
+    // MARK: - Navigation at the ends
+
+    suite("nextNote on the last note creates a new one, unless the last is blank") {
+        let m = makeManager(seed: ["A", "B"])
+        m.nextNote()
+        equal(m.notes.count, 3, "a blank note is appended")
+        equal(m.currentIndex, 2, "and becomes current")
+        m.nextNote()
+        equal(m.notes.count, 3, "no second blank stacked on the first")
+        equal(m.currentIndex, 2, "still on it")
+    }
+
+    suite("previousNote at index 0 does nothing") {
+        let m = makeManager(seed: ["A", "", "C"])
+        m.currentIndex = 0
+        m.previousNote()
+        equal(m.currentIndex, 0, "stays on the first note")
+        equal(m.notes.count, 3, "and does not purge blanks, since it did not navigate")
+    }
+
     // MARK: - Text statistics
 
     suite("word, character, and line counts") {
@@ -736,19 +914,32 @@ func runAllTests() {
 
     // MARK: - Headings
 
-    suite("heading parsing takes one to three hashes and a space") {
+    suite("heading parsing takes one to six hashes and a space") {
         equal(Heading.parse("# Title"), Heading(level: 1, markerLength: 2), "level one")
         equal(Heading.parse("## Title"), Heading(level: 2, markerLength: 3), "level two")
         equal(Heading.parse("### Title"), Heading(level: 3, markerLength: 4), "level three")
-        check(Heading.parse("#### Title") == nil, "four hashes has no level here")
+        // Levels four to six exist because pasted AI output reaches for them
+        // constantly, and literal hashes in the note are the whole complaint.
+        equal(Heading.parse("#### Title"), Heading(level: 4, markerLength: 5), "level four")
+        equal(Heading.parse("##### Title"), Heading(level: 5, markerLength: 6), "level five")
+        equal(Heading.parse("###### Title"), Heading(level: 6, markerLength: 7), "level six")
+        check(Heading.parse("####### Title") == nil, "seven hashes runs past the ceiling")
         check(Heading.parse("#hashtag") == nil, "no space is ordinary text")
         check(Heading.parse("#") == nil, "a lone hash is ordinary text")
         check(Heading.parse("###") == nil, "hashes with no space are ordinary text")
-        check(Heading.parse(" # Title") == nil, "leading whitespace disqualifies")
-        check(Heading.parse("#NoSpace") == nil, "glued text disqualifies")
+        check(Heading.parse("######") == nil, "six hashes with no space are ordinary text too")
+        check(Heading.parse("####nospace") == nil, "a deep marker still needs its space")
+        check(Heading.parse("######nospace") == nil, "the deepest marker needs it as well")
         check(Heading.parse("plain words") == nil, "prose is not a heading")
         check(Heading.parse("- [ ] # inside an item") == nil,
               "a hash mid-line means nothing to the heading parser")
+
+        for level in 1...6 {
+            let hashes = String(repeating: "#", count: level)
+            check(Heading.parse(" \(hashes) Title") == nil,
+                  "leading whitespace disqualifies \(hashes)")
+            check(Heading.parse("\(hashes)Glued") == nil, "glued text disqualifies \(hashes)")
+        }
     }
 
     suite("heading markers map into whole-string coordinates") {
@@ -759,6 +950,20 @@ func runAllTests() {
             "both markers found at their lines"
         )
         equal(Heading.markerRanges(in: "no headings here" as NSString), [], "none in plain prose")
+
+        // A note shaped like pasted chat output: mixed depths, with a
+        // seven-hash line in the middle that the parser must step over
+        // without disturbing the offsets of what follows.
+        let mixed = "## Notes\nbody\n#### Deeper\n####### not a heading\n###### Deepest" as NSString
+        equal(
+            Heading.markerRanges(in: mixed),
+            [
+                NSRange(location: 0, length: 3),
+                NSRange(location: 14, length: 5),
+                NSRange(location: 48, length: 7),
+            ],
+            "deep markers land at their true whole-string offsets"
+        )
     }
 
     suite("headings never become list items") {
@@ -826,6 +1031,17 @@ func runAllTests() {
             "groceries\nmilk",
             "a note not in list mode is untouched"
         )
+    }
+
+    suite("a multi-line paste continues the line the caret is on") {
+        equal(Checklist.pastedAsListItems("eggs\nmilk", into: "list\n- [ ] ", keyword: "list", linePrefix: "- [ ] "),
+              "eggs\n- [ ] milk", "pasting onto a fresh item does not stack a second marker")
+        equal(Checklist.pastedAsListItems("eggs\nmilk", into: "list\n- [ ] buy ", keyword: "list", linePrefix: "- [ ] buy "),
+              "eggs\n- [ ] milk", "mid-item, the first pasted line finishes that item")
+        equal(Checklist.pastedAsListItems("- [x] eggs\nmilk", into: "list\n- [ ] ", keyword: "list", linePrefix: "- [ ] "),
+              "eggs\n- [ ] milk", "a copied marker on the first line is dropped rather than doubled")
+        equal(Checklist.pastedAsListItems("eggs\nmilk", into: "list\n", keyword: "list", linePrefix: ""),
+              "- [ ] eggs\n- [ ] milk", "at the start of a line every pasted line becomes an item")
     }
 
     suite("a multi-line paste into a list note becomes items") {
@@ -1489,6 +1705,67 @@ func runAllTests() {
     suite("multiple links in one note are all found") {
         let text = "https://www.example.com/one/two/three and https://www.another-example.org/four/five/six"
         equal(LinkShrink.matches(in: text).count, 2, "both links found")
+    }
+
+    // MARK: - Directives stay off inside code notes
+
+    suite("a timer or pomodoro inside a code note never starts") {
+        let m = makeManager()
+        m.currentText = "code\n5m timer"
+        check(m.activeTimerEnd == nil, "timer line in a code note is just code")
+        m.currentText = "code\npomodoro 25/5"
+        check(m.activePomodoroPhase == nil, "pomodoro line in a code note is just code")
+    }
+
+    suite("a custom code keyword switches directives off too") {
+        let scheduler = SpyReminderScheduler()
+        let m = makeManager(reminderScheduler: scheduler)
+        m.codeKeywordDidChange(to: "snippet")
+        m.currentText = "snippet\nremind in 10 minutes\n5m timer"
+        equal(scheduler.scheduled.count, 0, "no reminder scheduled from a `snippet` note")
+        check(m.activeTimerEnd == nil, "no timer started from a `snippet` note")
+        m.currentText = "code\n5m timer"
+        check(m.activeTimerEnd != nil, "`code` is an ordinary word once the keyword is `snippet`")
+    }
+
+    suite("renaming the code keyword to match a running timer's note stops that timer") {
+        let m = makeManager()
+        m.currentText = "snippet\n5m timer"
+        check(m.activeTimerEnd != nil, "sanity: the timer started, since \"snippet\" is not code yet")
+        m.codeKeywordDidChange(to: "snippet")
+        check(m.activeTimerEnd == nil, "the timer's own note is now code, so the countdown stops")
+        check(m.activeTimerOwnerID == nil, "and releases ownership")
+    }
+
+    suite("renaming the code keyword to match a running pomodoro's note stops it") {
+        let m = makeManager()
+        m.currentText = "snippet\npomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "sanity: the pomodoro started")
+        m.codeKeywordDidChange(to: "snippet")
+        check(m.activePomodoroPhase == nil, "the pomodoro's own note is now code, so it stops")
+        check(m.activeTimerEnd == nil, "and its countdown clears too")
+    }
+
+    suite("renaming the code keyword leaves an unrelated running timer alone") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        let end = m.activeTimerEnd
+        check(end != nil, "sanity: the timer started")
+        m.codeKeywordDidChange(to: "snippet")
+        equal(m.activeTimerEnd, end, "this note's first line was never \"snippet\", so nothing changes")
+    }
+
+    suite("turning a note into code stops what its directives started") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        check(m.activeTimerEnd != nil, "sanity: the timer is running")
+        m.currentText = "code\n5m timer"
+        check(m.activeTimerEnd == nil, "the timer stops once its line is code")
+
+        m.currentText = "pomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "sanity: the pomodoro is running")
+        m.currentText = "code\npomodoro 25/5"
+        check(m.activePomodoroPhase == nil, "the pomodoro stops once its line is code")
     }
 }
 

@@ -181,9 +181,19 @@ enum Checklist {
     /// one raw block that would sit un-itemised until each line was
     /// individually left with Return. Single-line pastes and pastes into
     /// ordinary notes are none of this business.
-    static func pastedAsListItems(_ block: String, into target: String, keyword: String) -> String? {
+    ///
+    /// `linePrefix` is whatever already sits before the caret on its line. When
+    /// that holds a marker or text, the first pasted line finishes that line
+    /// instead of opening a second item on it.
+    static func pastedAsListItems(_ block: String, into target: String, keyword: String, linePrefix: String = "") -> String? {
         guard block.contains("\n"), isListMode(target, keyword: keyword) else { return nil }
-        return block.components(separatedBy: "\n").map { itemized(line: $0) }.joined(separator: "\n")
+        var lines = block.components(separatedBy: "\n")
+        guard !linePrefix.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return lines.map { itemized(line: $0) }.joined(separator: "\n")
+        }
+        let first = lines.removeFirst()
+        let head = item(in: first)?.body ?? first.trimmingCharacters(in: .whitespaces)
+        return ([head] + lines.map { itemized(line: $0) }).joined(separator: "\n")
     }
 
     /// The text a fresh, empty item is made of.
