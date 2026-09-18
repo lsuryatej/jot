@@ -203,6 +203,13 @@ func measuredSidebarWidth(_ view: NSView, yFromTop: CGFloat) -> CGFloat? {
 
 // MARK: - Key window
 
+/// Set once the machine has refused to hand this process key status at all —
+/// a locked screen being the usual reason. Without this, every later click
+/// pays the full activation timeout and a suite that should fail in seconds
+/// wedges past the runner's watchdog instead.
+@MainActor
+private var activationRefused = false
+
 /// Brings `window` back to key only if something took focus since it came up.
 ///
 /// Key status can be lost mid-suite to any other app on the machine, and an
@@ -213,10 +220,16 @@ func measuredSidebarWidth(_ view: NSView, yFromTop: CGFloat) -> CGFloat? {
 /// case pays nothing.
 @MainActor
 func reassertKey(_ window: NSWindow) {
-    guard !window.isKeyWindow else { return }
+    guard !window.isKeyWindow, !activationRefused else { return }
     let thief = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown"
-    print("         (focus was lost to \(thief); re-activating)")
-    bringUpAndWaitUntilKey(window)
+    // Short, unlike the first activation: this is the recovery path, and a
+    // machine that will not activate us now will not in five seconds either.
+    if bringUpAndWaitUntilKey(window, timeout: 0.8) {
+        print("         (focus was lost to \(thief); re-activated)")
+        return
+    }
+    activationRefused = true
+    print("         (\(thief) holds focus and will not yield; the checks below are unreliable)")
 }
 
 /// Orders `window` front and waits until AppKit actually makes it key,
@@ -272,4 +285,18 @@ func waitForStableFrame(_ window: NSWindow, timeout: Double = 3.0) {
         if current == previous { return }
         previous = current
     }
+}
+
+/// Whether this process can take key status at all right now, decided with a
+/// throwaway window so a locked screen is caught before any suite runs.
+@MainActor
+func canBecomeKeyWindow() -> Bool {
+    let probe = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 80, height: 60),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    defer { probe.close() }
+    return bringUpAndWaitUntilKey(probe, timeout: 2.0)
 }
