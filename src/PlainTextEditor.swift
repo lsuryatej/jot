@@ -1585,7 +1585,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             guard let line else { return }
 
             if let heading = Heading.parse(line) {
-                var style = NSMutableParagraphStyle()
+                let style = NSMutableParagraphStyle()
                 style.lineHeightMultiple = CGFloat(self.lineHeightMultiple)
                 // Room above a heading so it reads as its own section; the
                 // very first line keeps its inset instead of pushing down.
