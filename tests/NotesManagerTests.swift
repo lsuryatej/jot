@@ -1728,6 +1728,33 @@ func runAllTests() {
         check(m.activeTimerEnd != nil, "`code` is an ordinary word once the keyword is `snippet`")
     }
 
+    suite("renaming the code keyword to match a running timer's note stops that timer") {
+        let m = makeManager()
+        m.currentText = "snippet\n5m timer"
+        check(m.activeTimerEnd != nil, "sanity: the timer started, since \"snippet\" is not code yet")
+        m.codeKeywordDidChange(to: "snippet")
+        check(m.activeTimerEnd == nil, "the timer's own note is now code, so the countdown stops")
+        check(m.activeTimerOwnerID == nil, "and releases ownership")
+    }
+
+    suite("renaming the code keyword to match a running pomodoro's note stops it") {
+        let m = makeManager()
+        m.currentText = "snippet\npomodoro 25/5"
+        check(m.activePomodoroPhase != nil, "sanity: the pomodoro started")
+        m.codeKeywordDidChange(to: "snippet")
+        check(m.activePomodoroPhase == nil, "the pomodoro's own note is now code, so it stops")
+        check(m.activeTimerEnd == nil, "and its countdown clears too")
+    }
+
+    suite("renaming the code keyword leaves an unrelated running timer alone") {
+        let m = makeManager()
+        m.currentText = "5m timer"
+        let end = m.activeTimerEnd
+        check(end != nil, "sanity: the timer started")
+        m.codeKeywordDidChange(to: "snippet")
+        equal(m.activeTimerEnd, end, "this note's first line was never \"snippet\", so nothing changes")
+    }
+
     suite("turning a note into code stops what its directives started") {
         let m = makeManager()
         m.currentText = "5m timer"

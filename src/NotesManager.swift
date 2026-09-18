@@ -654,8 +654,20 @@ final class NotesManager: ObservableObject {
 
     /// Which notes count as code can flip either way, so every "already
     /// seen" record is rebuilt under the new keyword, same as the others.
+    /// Unlike them, a note whose classification flips to code under the new
+    /// keyword can be the one actually holding the running countdown — so
+    /// that has to be cancelled here too, the same as `timerKeywordDidChange`
+    /// and `pomodoroKeywordDidChange` already do for their own keyword.
     func codeKeywordDidChange(to keyword: String) {
         codeKeyword = keyword
+        if let ownerID = activeTimerOwnerID,
+           let owner = notes.first(where: { $0.id == ownerID }),
+           CodeBlock.isCodeMode(owner.text, keyword: codeKeyword) {
+            activeTimerEnd = nil
+            activePomodoroPhase = nil
+            pomodoroCycle = nil
+            activeTimerOwnerID = nil
+        }
         seenTimerSource.removeAll()
         seenPomodoroSource.removeAll()
         seenReminderSources.removeAll()
