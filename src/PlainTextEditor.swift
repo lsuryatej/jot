@@ -740,6 +740,33 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return
         }
 
+        // A plain `- ` bullet continues itself the way the two markers above
+        // do. It sits below list-mode conversion rather than above it like the
+        // ordered branch: inside a checklist note the mode's promise is that
+        // every line becomes an item, and `1.` has no checkbox equivalent to
+        // be wrapped into while a dash does. End-of-line only, for both
+        // outcomes — mid-line the ordered branch leaves the text alone, and
+        // emptying a marker the caret is standing inside of is the surprising
+        // half of the two behaviours, not the one worth copying.
+        if selection.location == lineRange.location + lineRange.length,
+           let outcome = Bullet.newline(inLine: line) {
+            switch outcome {
+            case .exitList(let replacement):
+                replace(
+                    range: lineRange,
+                    with: replacement,
+                    selecting: NSRange(location: lineRange.location + (replacement as NSString).length, length: 0)
+                )
+            case .continueList(let insertion):
+                replace(
+                    range: selection,
+                    with: insertion,
+                    selecting: NSRange(location: selection.location + (insertion as NSString).length, length: 0)
+                )
+            }
+            return
+        }
+
         guard let outcome = Checklist.newline(inLine: line) else {
             super.insertNewline(sender)
             return

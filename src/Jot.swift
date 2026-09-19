@@ -382,12 +382,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel?.isVisible ?? false
     }
 
+    /// On screen is not the same as in front of you.
+    ///
+    /// The panel spends most of its life visible without the keyboard:
+    /// Floating mode is a non-activating panel that deliberately never steals
+    /// focus, Menu Bar mode is an ordinary window that ends up behind whatever
+    /// the user clicked next, and every mode loses the keyboard the moment the
+    /// user goes back to the app they were working in. Keying a toggle off
+    /// `isInterfaceVisible` alone therefore took the hide branch on a note the
+    /// user could not type in and, in Floating mode, could barely see over the
+    /// window it was behind — which read as the press doing nothing, and made
+    /// the second press look like the one that worked. Issue #8.
+    ///
+    /// Deliberately not `NSApp.isActive` as well. In Floating and Screen Edge
+    /// modes the panel carries `.nonactivatingPanel`, which is exactly the
+    /// style mask that lets it hold the keyboard while the app is not
+    /// frontmost, so demanding app activation here would break the deliberate
+    /// dismiss in the two modes that need it most.
+    private var isInterfaceFocused: Bool {
+        guard let panel, panel.isVisible else { return false }
+        return panel.isKeyWindow
+    }
+
+    enum ToggleAction {
+        case show
+        case hide
+    }
+
+    /// Split out as a pure function so the rule itself is checkable without a
+    /// window server; `tests/ui/PanelToggleTests.swift` covers both this table
+    /// and the real panel state it is fed.
+    static func toggleAction(isVisible: Bool, isFocused: Bool) -> ToggleAction {
+        isVisible && isFocused ? .hide : .show
+    }
+
+    /// The hot key and a left click on the menu bar icon both land here.
     func toggleVisibility() {
-        isInterfaceVisible ? hideInterface() : showInterface()
+        switch Self.toggleAction(isVisible: isInterfaceVisible, isFocused: isInterfaceFocused) {
+        case .hide: hideInterface()
+        case .show: showInterface()
+        }
     }
 
     private func showInterface() {
         if settings.displayMode.isEdgeDocked {
+            // Already out, focus elsewhere: hand it the keyboard rather than
+            // sliding it in from off screen a second time. Same distinction
+            // the edge strip's own click handler makes in `installEdgeTrigger`.
+            if panel.isVisible {
+                focusPanel()
+                return
+            }
             // Reached here from the hot key or the menu bar, both deliberate.
             revealFromEdge(activating: true)
             return
@@ -623,8 +668,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         statusItem?.menu = nil
     }
 
+    /// Not `toggleVisibility`: this item is a labelled command rather than a
+    /// blind toggle, and its title was decided from `isInterfaceVisible` when
+    /// the menu was built. An item reading "Hide Jot" that brought the note
+    /// forward instead would be worse than the two-press bug it comes from.
     @objc private func toggleFromMenu() {
-        toggleVisibility()
+        isInterfaceVisible ? hideInterface() : showInterface()
     }
 
     @objc private func quit() {
@@ -823,6 +872,51 @@ final class FloatingPanel: NSPanel {
     // close would leave the app running and reachable only by hot key.
     override func close() {
         orderOut(nil)
+    }
+
+    /// Cmd+. must not take the note away.
+    ///
+    /// Nothing here binds that chord. It is AppKit's second binding for
+    /// `cancelOperation:`, and NSPanel answers that selector by closing
+    /// itself, so a chord that means Cancel in half the apps on the machine
+    /// silently dismissed the window. Recoverable from the hot key or the menu
+    /// bar icon, but surprising and documented nowhere. Issue #11.
+    ///
+    /// Escape arrives at that same selector and, measured rather than assumed,
+    /// dismisses the panel today wherever nothing claims it earlier (the
+    /// global search overlay takes it through `.onExitCommand`, and the hot-key
+    /// recorder in PreferencesView takes it to abandon a recording). By the
+    /// time `cancelOperation:` is called the two are indistinguishable by
+    /// selector, so the chord is caught one step earlier instead, here, where
+    /// the event itself is in hand. Escape carries no Command modifier and is
+    /// never offered as a key equivalent at all, so it is untouched by this.
+    ///
+    /// Nothing else in the app wants Cmd+. — `PlainTextEditor` claims a list of
+    /// chords and this is not one of them — so returning true simply swallows
+    /// it rather than shadowing an existing binding.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if Self.isCommandPeriod(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// The backstop for the same chord, for any route to `cancelOperation:`
+    /// that does not pass a key equivalent through the window first. Kept
+    /// deliberately: the override above is what the tests can observe, since
+    /// `NSApp.currentEvent` is only the keystroke when AppKit's own run loop
+    /// dequeued it, but in the running app this is the layer that matches
+    /// Apple's own description of where the chord ends up.
+    override func cancelOperation(_ sender: Any?) {
+        guard !Self.isCommandPeriod(NSApp.currentEvent) else { return }
+        super.cancelOperation(sender)
+    }
+
+    /// The chord as an event. `charactersIgnoringModifiers` rather than the
+    /// key code, so a layout that puts the period somewhere else is still
+    /// matched by the character the user actually typed.
+    static func isCommandPeriod(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .keyDown || event.type == .keyUp else { return false }
+        guard event.modifierFlags.contains(.command) else { return false }
+        return event.charactersIgnoringModifiers == "."
     }
 
     override var canBecomeKey: Bool { true }

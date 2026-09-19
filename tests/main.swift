@@ -6,6 +6,7 @@ import Foundation
 runAllTests()
 runGlassTintTests()
 runOrderedListTests()
+runBulletListTests()
 runThemeNoteTests()
 runCelebrationTests()
 runInteractionTests()
