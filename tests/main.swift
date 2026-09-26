@@ -31,6 +31,7 @@ runFormattingShortcutTests()
 runLinkClickTests()
 runBoldWeightTests()
 runMotionTests()
+runEdgeRevealTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
