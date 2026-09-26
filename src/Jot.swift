@@ -266,6 +266,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .receive(on: RunLoop.main)
             .sink { [weak self] theme in self?.settings.themeOverride = theme }
             .store(in: &cancellables)
+
+        // The panel is the only window that shows a note (Screen Edge cards,
+        // the dropdown, and the global search overlay all live inside it),
+        // so pinning its appearance to the paper covers every surface.
+        // Computed from the published values rather than read back from
+        // settings: @Published emits before the stored property changes.
+        settings.$appearance
+            .combineLatest(settings.$themeOverride)
+            .map { SettingsManager.windowAppearanceName(for: $0, theme: $1) }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] name in self?.panel.adoptPaperAppearance(name) }
+            .store(in: &cancellables)
     }
 
     // MARK: - Reordering

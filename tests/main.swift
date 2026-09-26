@@ -33,6 +33,7 @@ runLinkClickTests()
 runBoldWeightTests()
 runSelectionResidueTests()
 runHeadingBoldTests()
+runAppearanceContrastTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
