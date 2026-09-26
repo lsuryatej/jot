@@ -55,7 +55,10 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/GlassTint.swift \
     src/ThemeNote.swift \
     src/Celebration.swift \
+    src/Motion.swift \
+    src/EdgeReveal.swift \
     src/PlainTextEditor.swift \
+    src/EditorAccessibility.swift \
     src/PreferencesView.swift \
     src/MainMenu.swift \
     tests/NotesManagerTests.swift \
@@ -84,6 +87,9 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/SelectionResidueTests.swift \
     tests/HeadingBoldTests.swift \
     tests/AppearanceContrastTests.swift \
+    tests/MotionTests.swift \
+    tests/EdgeRevealTests.swift \
+    tests/VoiceOverTests.swift \
     tests/main.swift \
     -o "$OUT"
 

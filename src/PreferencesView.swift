@@ -184,6 +184,7 @@ struct PreferencesView: View {
             HStack(spacing: 8) {
                 Image(systemName: item.icon)
                     .frame(width: 16)
+                    .accessibilityHidden(true)
                 Text(item.title)
                 Spacer(minLength: 0)
             }
@@ -197,6 +198,8 @@ struct PreferencesView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // The selected pane is shown only by colour.
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -628,6 +631,7 @@ struct PreferencesView: View {
         .buttonStyle(.plain)
         .help(tint.title)
         .accessibilityLabel(tint.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

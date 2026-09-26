@@ -17,15 +17,30 @@ final class CelebrationWindowController {
     nonisolated(unsafe) private static var current: CelebrationWindowController?
     private var stopEmittingItem: DispatchWorkItem?
     private var dismissItem: DispatchWorkItem?
+    private var reduceMotionObserver: NSObjectProtocol?
 
     /// Plays the sound and shows the confetti. The sound fires even when the
     /// style is "sound only"; the confetti does not.
-    static func fire(style: CelebrationStyle, sound: CelebrationSound) {
+    ///
+    /// Under Reduce Motion there is no confetti at all: full-screen particles
+    /// at screen-saver level, repeated at every Pomodoro phase, are exactly
+    /// the peripheral, repetitive motion the setting exists to stop. A small
+    /// still badge near the note marks the moment instead, fading in and out
+    /// by opacity alone. `title` is what that badge says.
+    static func fire(style: CelebrationStyle, sound: CelebrationSound, title: String = Celebration.badgeTitle(endingPhase: nil)) {
         Celebration.play(sound: sound)
-        guard style != .none, let screen = NSScreen.main else { return }
-        current?.dismiss()
-        current = CelebrationWindowController(style: style, screen: screen)
-        current?.run()
+        switch Celebration.presentation(for: style, reduceMotion: ReduceMotion.isEnabled) {
+        case .soundOnly:
+            return
+        case .badge:
+            current?.dismiss()
+            CelebrationBadgeController.show(title: title)
+        case .particles:
+            guard let screen = NSScreen.main else { return }
+            current?.dismiss()
+            current = CelebrationWindowController(style: style, screen: screen)
+            current?.run()
+        }
     }
 
     private init(style: CelebrationStyle, screen: NSScreen) {
@@ -53,6 +68,15 @@ final class CelebrationWindowController {
     private func run() {
         window.orderFrontRegardless()
 
+        // Reduce Motion switched on mid-celebration takes the confetti down
+        // at once rather than letting it finish flying.
+        reduceMotionObserver = NotificationCenter.default.addObserver(
+            forName: .jotReduceMotionDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard ReduceMotion.isEnabled else { return }
+            self?.dismiss()
+        }
+
         // Stop emitting halfway so the tail of the celebration tapers instead
         // of being cut off by the dismiss.
         let stop = DispatchWorkItem { [weak self] in
@@ -69,13 +93,136 @@ final class CelebrationWindowController {
     func dismiss() {
         stopEmittingItem?.cancel()
         dismissItem?.cancel()
+        if let reduceMotionObserver {
+            NotificationCenter.default.removeObserver(reduceMotionObserver)
+            self.reduceMotionObserver = nil
+        }
         window.orderOut(nil)
-        Self.current = nil
+        if Self.current === self { Self.current = nil }
     }
 
     private var emitterLayers: [CAEmitterLayer] {
         (window.contentView as? EmitterView)?.emitterLayers ?? []
     }
+}
+
+/// Reduce Motion's celebration: a small HUD badge with a checkmark and a few
+/// words, placed near the note, that fades in, holds, and fades out. Nothing
+/// on it moves; only its opacity changes. Like the confetti window it takes no
+/// clicks and never becomes key, so it cannot steal focus or a keystroke.
+final class CelebrationBadgeController {
+    nonisolated(unsafe) private static var current: CelebrationBadgeController?
+
+    private let window: NSPanel
+    private var holdItem: DispatchWorkItem?
+    /// Bumped by every fade, so a fade-out that finishes after a newer badge
+    /// has taken over does not order that newer badge out.
+    private var generation = 0
+
+    static func show(title: String) {
+        current?.window.orderOut(nil)
+        current?.holdItem?.cancel()
+        let badge = CelebrationBadgeController(title: title)
+        current = badge
+        badge.run()
+    }
+
+    private init(title: String) {
+        let content = BadgeView(title: title)
+        let size = content.fittingSize
+        let panel = NSApp.windows.first { $0 is FloatingPanel && $0.isVisible && $0.alphaValue > 0 }
+        let panelFrame = panel?.frame
+        let screen = panel?.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let frame = Celebration.badgeFrame(size: size, panelFrame: panelFrame, visibleFrame: visible)
+
+        window = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        // Above the note's own floating panel, below the menu bar's menus.
+        window.level = .statusBar
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        window.contentView = content
+        window.alphaValue = 0
+    }
+
+    private func run() {
+        window.orderFrontRegardless()
+        let timing = Celebration.badgeTiming
+        fade(to: 1, duration: timing.fadeIn) { [weak self] in
+            guard let self else { return }
+            let hold = DispatchWorkItem { [weak self] in
+                self?.fade(to: 0, duration: timing.fadeOut) { [weak self] in
+                    guard let self else { return }
+                    self.window.orderOut(nil)
+                    if Self.current === self { Self.current = nil }
+                }
+            }
+            self.holdItem = hold
+            DispatchQueue.main.asyncAfter(deadline: .now() + timing.hold, execute: hold)
+        }
+    }
+
+    private func fade(to alpha: CGFloat, duration: TimeInterval, then completion: @escaping () -> Void) {
+        generation += 1
+        let mine = generation
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().alphaValue = alpha
+        } completionHandler: { [weak self] in
+            guard let self, self.generation == mine else { return }
+            completion()
+        }
+    }
+}
+
+/// The badge's content: SF Symbol checkmark and a short title on HUD glass.
+private final class BadgeView: NSVisualEffectView {
+    init(title: String) {
+        super.init(frame: .zero)
+        material = .hudWindow
+        blendingMode = .behindWindow
+        state = .active
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+        icon.contentTintColor = .labelColor
+        icon.setAccessibilityElement(false)
+
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .labelColor
+
+        let stack = NSStackView(views: [icon, label])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        layoutSubtreeIfNeeded()
+        setFrameSize(fittingSize)
+    }
+
+    required init?(coder: NSCoder) { nil }
 }
 
 /// One view holding every emitter layer the style needs — two for Cannons

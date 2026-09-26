@@ -21,6 +21,10 @@ struct ContentView: View {
     @State private var swipeFeedbackDismiss: DispatchWorkItem?
     @State private var reminderToastDismiss: DispatchWorkItem?
 
+    /// System Settings › Accessibility › Display › Reduce motion, kept live
+    /// by SwiftUI. The toast chips fade in place instead of dropping in.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     /// Chrome text follows the paper's ink, not SwiftUI's semantic colors:
@@ -227,6 +231,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .help("Share this note")
+            .accessibilityLabel("Share note")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -352,10 +357,25 @@ struct ContentView: View {
         )))
         .foregroundStyle(Color(nsColor: TimerChipPalette.text))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        // One element that reads as a sentence, not three fragments.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(timerAccessibilityLabel)
         .padding(.top, 50)
         .padding(.trailing, 20)
         .onAppear { updateTimer() }
         .onReceive(tick) { _ in updateTimer() }
+    }
+
+    private var timerAccessibilityLabel: String {
+        var parts: [String] = []
+        if let phase = notesManager.activePomodoroPhase {
+            parts.append(phase == .work ? "Pomodoro work" : "Pomodoro break")
+        } else {
+            parts.append("Timer")
+        }
+        if let owner = timerOwnerLabel { parts.append("for \(owner)") }
+        parts.append(timeRemaining.isEmpty ? "starting" : "\(timeRemaining) remaining")
+        return parts.joined(separator: ", ")
     }
 
     private func updateTimer() {
@@ -368,7 +388,8 @@ struct ContentView: View {
             // a burst of confetti over everything else on screen.
             CelebrationWindowController.fire(
                 style: settings.celebrationStyle,
-                sound: settings.timerSound
+                sound: settings.timerSound,
+                title: Celebration.badgeTitle(endingPhase: notesManager.activePomodoroPhase)
             )
             notesManager.timerDidFire()
             return
@@ -402,7 +423,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 44)
                 .allowsHitTesting(false)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.jotToast(reduceMotion: reduceMotion))
         }
     }
 
@@ -456,7 +477,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, settings.showsHeader ? 44 : 10)
                 .allowsHitTesting(false)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.jotToast(reduceMotion: reduceMotion))
         }
     }
 

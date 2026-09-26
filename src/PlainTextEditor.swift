@@ -1721,7 +1721,17 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// on every draw, since the text under it moves as the note is edited.
     private var mathHintRects: [NSRect] = []
 
+    /// Speaks the caret line's result to VoiceOver when it changes, since the
+    /// results are only ever drawn. See EditorAccessibility.swift.
+    let mathSpeech = MathResultSpeech()
+
+    /// The drawn results in the form accessibility reads them.
+    var spokenMathResults: [SpokenMathResult] {
+        mathResults.map { SpokenMathResult(lineRange: $0.lineRange, text: $0.text, isHint: $0.isHint) }
+    }
+
     func recomputeMathResults() {
+        defer { mathSpeech.resultsUpdated(spokenMathResults) }
         // Math results are a parse of the text, so they stay out of a code
         // block like every other parser.
         guard let textStorage, !isCodeMode else { mathResults = []; return }
@@ -1872,6 +1882,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// only reaching it on a genuine divergence between the model and the view.
     func loadNoteText(_ text: String) {
         let caret = selectedRange().location
+        // Another note's results are a starting point, not a change to speak.
+        mathSpeech.rebase()
         string = text
         // The stack that was just built up belongs to the note being left. Its
         // actions are recorded against that note's ranges, and the text view

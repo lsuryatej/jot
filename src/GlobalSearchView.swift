@@ -28,6 +28,7 @@ struct GlobalSearchView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             TextField("Search all notes", text: $query)
                 .textFieldStyle(.plain)
                 .focused($fieldFocused)
@@ -42,6 +43,7 @@ struct GlobalSearchView: View {
             }
             .buttonStyle(.plain)
             .help("Close (Esc)")
+            .accessibilityLabel("Close search")
         }
         .padding(10)
     }
@@ -62,6 +64,7 @@ struct GlobalSearchView: View {
                             resultRow(result)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("\(title(for: result)): \(result.snippet)")
                         Divider()
                     }
                 }
