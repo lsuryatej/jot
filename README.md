@@ -193,6 +193,13 @@ painted text behind; hit Shift-Cmd-H again on the highlighted text to strip
 them back off. With nothing selected it drops an empty pair and puts the
 caret between them, ready to type straight into a new highlight.
 
+**Bold and italic.** `**bold**`, `*italic*` and `` `code` `` render with
+their markers folded away. Cmd+B and Cmd+I write the markers for you: with a
+selection they wrap it, and pressed on text that is already bold (or italic)
+they take the markers back off. With no selection, a caret inside a word
+wraps that word; anywhere else they drop an empty pair with the caret
+between. Each press is one Cmd+Z.
+
 **Images.** Paste or drop an image and it stays an image, drawn inline. It's
 written to `Attachments/` beside your notes, referenced from the text as
 `![width](Attachments/<id>.png)`, so a note with a picture in it is still
@@ -293,6 +300,7 @@ one long scroll.)*
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Cmd+C** (nothing selected, in a `code` note) | Copy the whole code block |
 | **Shift+Cmd+H** | Highlight the selection (`==like this==`), or start one at the caret |
+| **Cmd+B** / **Cmd+I** | Bold / italicise the selection or the word at the caret (`**…**` / `*…*`), again to remove |
 | **Cmd+/** | Toggle the header and footer together |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+F** | Find in the current note |

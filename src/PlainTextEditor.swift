@@ -541,6 +541,34 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         applyLinkFolding()
     }
 
+    // MARK: - Bold / italic
+
+    /// Cmd+B. See `Emphasis.toggle` for exactly what it does to the text.
+    @objc func toggleBold(_ sender: Any?) {
+        toggleEmphasis(.strong, actionName: "Bold")
+    }
+
+    /// Cmd+I. See `Emphasis.toggle` for exactly what it does to the text.
+    @objc func toggleItalic(_ sender: Any?) {
+        toggleEmphasis(.emphasis, actionName: "Italic")
+    }
+
+    private func toggleEmphasis(_ kind: Emphasis.Kind, actionName: String) {
+        // Asterisks are literal inside a code block, same as `==`.
+        guard !isCodeMode,
+              let edit = Emphasis.toggle(kind, in: string as NSString, selection: selectedRange())
+        else { return }
+        // One `replace` is one replaceCharacters, so one undo step. Breaking
+        // coalescing first keeps it from merging into the typing before it,
+        // so Cmd+Z takes back the markers and nothing else.
+        breakUndoCoalescing()
+        replace(range: edit.range, with: edit.replacement, selecting: edit.selection)
+        undoManager?.setActionName(actionName)
+        // Same reason as the end of `toggleHighlight`: fold the new markers
+        // now rather than one run-loop tick later.
+        applyLinkFolding()
+    }
+
     /// Whether this view is already observing the header buttons' toggle
     /// notifications, so `enableHeaderToggleButtons()` can be called
     /// idempotently from every construction site — matching the same
@@ -636,6 +664,17 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             toggleHighlight(nil)
             return true
         }
+        // Markdown markers, not font traits: the note is plain text, and
+        // `usesFontPanel` is off, so there is no Font menu competing for
+        // these. First-responder check for the same reason as Cmd+C above.
+        if flags == [.command], key == "b", window == nil || window?.firstResponder === self {
+            toggleBold(nil)
+            return true
+        }
+        if flags == [.command], key == "i", window == nil || window?.firstResponder === self {
+            toggleItalic(nil)
+            return true
+        }
         if flags == [.command], key == "n" {
             NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
             return true
@@ -656,6 +695,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // offering a command that would do nothing.
         if item.action == #selector(toggleChecklist(_:)) { return !isCodeMode }
         if item.action == #selector(toggleHighlight(_:)) { return !isCodeMode }
+        if item.action == #selector(toggleBold(_:)) { return !isCodeMode }
+        if item.action == #selector(toggleItalic(_:)) { return !isCodeMode }
         if item.action == #selector(extractTextFromClipboardImage(_:)) { return true }
         return super.validateUserInterfaceItem(item)
     }

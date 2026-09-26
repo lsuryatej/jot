@@ -25,6 +25,7 @@ runResizableCardTests()
 runUpdateCheckerTests()
 runImageMarkdownVisibilityTests()
 runCoverageGapTests()
+runFormattingShortcutTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
