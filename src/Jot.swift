@@ -905,8 +905,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if identifier.hasPrefix(reminderIdentifierPrefix) {
                 CelebrationWindowController.fire(
                     style: self.settings.celebrationStyle,
-                    sound: self.settings.timerSound,
-                    title: Celebration.reminderBadgeTitle
+                    sound: self.settings.timerSound
                 )
             }
         }

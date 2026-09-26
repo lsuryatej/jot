@@ -27,7 +27,7 @@ finding where a given piece of behaviour lives.
 | `src/ThemeNote.swift` | Theme-as-note parsing and derived palettes |
 | `src/GlassTint.swift` | Tint choices for the translucent papers |
 | `src/Celebration.swift` | Timer celebration configuration: styles and sounds |
-| `src/CelebrationWindow.swift` | The confetti window itself, and its Reduce Motion badge |
+| `src/CelebrationWindow.swift` | The confetti window itself |
 | `src/Motion.swift` | Reduce Motion: the injectable setting and what each animation becomes |
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
 | `src/EdgeReveal.swift` | Edge sidebar show/hide: generation guard and slide geometry |

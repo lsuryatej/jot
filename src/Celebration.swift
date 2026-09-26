@@ -156,53 +156,20 @@ enum Celebration {
         return life.base + life.range + 0.4
     }
 
-    // MARK: - Reduce Motion
-
     /// What actually goes on screen when a celebration fires.
+    ///
+    /// Reduce Motion deliberately plays no part here: the confetti is a rare,
+    /// user-chosen moment (and "Sound only" is one click away in Settings),
+    /// so it fires the same either way.
     enum Presentation: Equatable {
         /// The sound and nothing else.
         case soundOnly
         /// The sound plus the style's full-screen confetti.
         case particles
-        /// The sound plus a small, still badge near the note that fades in
-        /// and out. Reduce Motion's replacement for confetti: the moment is
-        /// still marked, without anything flying across the screen.
-        case badge
     }
 
-    static func presentation(for style: CelebrationStyle, reduceMotion: Bool) -> Presentation {
-        guard style != .none else { return .soundOnly }
-        return reduceMotion ? .badge : .particles
-    }
-
-    /// The badge's words, which the confetti never needed: without the
-    /// motion, a plain checkmark alone does not say which timer just ended.
-    /// `endingPhase` is the Pomodoro phase that ran out, nil for a plain timer.
-    static func badgeTitle(endingPhase: PomodoroPhase?) -> String {
-        switch endingPhase {
-        case .work: return "Time for a break"
-        case .rest: return "Back to work"
-        case nil:   return "Time's up"
-        }
-    }
-
-    static let reminderBadgeTitle = "Reminder"
-
-    /// Seconds for each part of the badge's life: fade in, hold, fade out.
-    static let badgeTiming: (fadeIn: TimeInterval, hold: TimeInterval, fadeOut: TimeInterval) = (0.2, 1.8, 0.35)
-
-    /// Where the badge sits: centred across the note's panel, a little below
-    /// its top edge, when the panel is on screen; otherwise centred near the
-    /// top of the screen. Always clamped inside the visible frame, so a panel
-    /// pushed half off screen never takes the badge with it.
-    static func badgeFrame(size: CGSize, panelFrame: CGRect?, visibleFrame: CGRect) -> CGRect {
-        let anchorMidX = panelFrame?.midX ?? visibleFrame.midX
-        let topY = panelFrame.map { $0.maxY - 52 } ?? (visibleFrame.maxY - 80)
-        var x = anchorMidX - size.width / 2
-        var y = topY - size.height
-        x = min(max(x, visibleFrame.minX + 8), visibleFrame.maxX - size.width - 8)
-        y = min(max(y, visibleFrame.minY + 8), visibleFrame.maxY - size.height - 8)
-        return CGRect(origin: CGPoint(x: x, y: y), size: size)
+    static func presentation(for style: CelebrationStyle) -> Presentation {
+        style == .none ? .soundOnly : .particles
     }
 
     /// Plays the chosen sound. Safe to call with any style; only the sound is
