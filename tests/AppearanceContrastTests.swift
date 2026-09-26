@@ -110,6 +110,7 @@ func runAppearanceContrastTests() {
     }
 
     runInkContrastTests()
+    runTimerChipContrastTests()
 }
 
 /// Every surface a paper's ink lands on: the page, the header and footer
@@ -230,3 +231,24 @@ func runInkContrastTests() {
     }
 }
 
+
+func runTimerChipContrastTests() {
+    suite("every text in the timer chip passes 4.5:1") {
+        // Owner title (caption2), phase (caption semibold), clock (13pt
+        // headline): none reaches the 18pt / 14pt-bold large-text bar, so the
+        // whole chip is held to 4.5:1.
+        for state in TimerChipPalette.State.allCases {
+            let background = TimerChipPalette.background(for: state)
+            check(background.alphaComponent == 1,
+                  "\(state): the chip is opaque, so its contrast does not depend on the paper")
+            for paperName in ["white", "true dark"] {
+                let paper = paperName == "white" ? Appearance.white.paperColor! : Appearance.trueDark.paperColor!
+                let flattened = Contrast.composite(background, over: paper)
+                let r = Contrast.ratio(TimerChipPalette.text, flattened)
+                check(r >= 4.5, "\(state) on \(paperName): \(ratioText(r)):1")
+            }
+        }
+        check(TimerChipPalette.background(for: .rest) != TimerChipPalette.background(for: .work),
+              "work and break stay distinguishable at a glance")
+    }
+}

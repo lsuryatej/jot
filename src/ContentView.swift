@@ -347,8 +347,10 @@ struct ContentView: View {
                 .font(.system(.headline, design: .monospaced))
         }
         .padding(8)
-        .background((notesManager.activePomodoroPhase == .rest ? Color.green : Color.red).opacity(0.8))
-        .foregroundStyle(.white)
+        .background(Color(nsColor: TimerChipPalette.background(
+            for: notesManager.activePomodoroPhase == .rest ? .rest : .work
+        )))
+        .foregroundStyle(Color(nsColor: TimerChipPalette.text))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.top, 50)
         .padding(.trailing, 20)

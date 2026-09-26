@@ -138,6 +138,32 @@ enum Contrast {
     }
 }
 
+/// The countdown chip's colours.
+///
+/// Opaque, so the chip reads the same on every paper, and dark enough that
+/// white text clears 4.5:1: none of the chip's text (10pt title and phase,
+/// 13pt clock) is large enough for the 3:1 allowance. The old
+/// `green.opacity(0.8)` measured 1.8:1 over White and red 2.8:1. #248A3D,
+/// Apple's high-contrast green, is 4.4:1 with white, just short, so Break
+/// takes a step deeper.
+enum TimerChipPalette {
+    enum State: CaseIterable {
+        /// A plain timer, or a Pomodoro work phase.
+        case work
+        /// A Pomodoro break.
+        case rest
+    }
+
+    static let text = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+
+    static func background(for state: State) -> NSColor {
+        switch state {
+        case .work: return NSColor(srgbRed: 0xD7 / 255, green: 0x00 / 255, blue: 0x15 / 255, alpha: 1) // #D70015, 5.4:1
+        case .rest: return NSColor(srgbRed: 0x1F / 255, green: 0x7A / 255, blue: 0x35 / 255, alpha: 1) // #1F7A35, 5.4:1
+        }
+    }
+}
+
 /// An ink with a stronger variant for Increase Contrast, and separate light
 /// and dark variants where the surface follows the system mode.
 ///
