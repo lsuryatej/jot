@@ -2019,10 +2019,19 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // only gains the weight, and a bold word on the auto-title line stays
         // title-sized. Whatever painted that font has to have painted it first.
         let emphases = Emphasis.matches(in: ns)
+        var boldLines: [NSRange] = []
         for emphasis in emphases {
             let content = NSIntersectionRange(emphasis.contentRange, target)
             guard content.length > 0 else { continue }
+            if emphasis.kind == .strong {
+                let line = ns.lineRange(for: content)
+                if boldLines.last != line { boldLines.append(line) }
+            }
             applyEmphasis(emphasis.kind, to: content, in: textStorage)
+        }
+        let boldSpans = emphases.filter { $0.kind == .strong }.map(\.contentRange)
+        for line in boldLines {
+            holdLineHeight(of: line, boldSpans: boldSpans, in: textStorage)
         }
         emphasisMarkers = emphases.flatMap { $0.markerRanges }
 
@@ -2058,11 +2067,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let current = (value as? NSFont) ?? self.baseFont
             switch kind {
             case .strong:
-                textStorage.addAttribute(
-                    .font,
-                    value: manager.convert(current, toHaveTrait: .boldFontMask),
-                    range: runRange
-                )
+                // See `NoteFont.bold(of:)` for why this is not the font
+                // manager's own bold conversion.
+                let bold = NoteFont.bold(of: current)
+                textStorage.addAttribute(.font, value: bold.font, range: runRange)
+                if bold.needsSyntheticStroke {
+                    textStorage.addAttribute(.strokeWidth, value: NoteFont.syntheticBoldStrokeWidth, range: runRange)
+                }
             case .emphasis:
                 let italic = manager.convert(current, toHaveTrait: .italicFontMask)
                 // Plenty of fixed-pitch faces have no italic cut, SF Mono among
@@ -2088,6 +2099,48 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 )
             }
         }
+    }
+
+    /// Keeps a line holding bold text exactly as tall as it would be
+    /// without it.
+    ///
+    /// A few families draw their Bold with taller vertical metrics than
+    /// their Regular (Helvetica Neue and American Typewriter Bold are a point
+    /// taller at 13pt), so a word turning bold would push every line below
+    /// it down. Capping the paragraph's maximum line height at the natural
+    /// height the line had before (each bold run measured as the face it was
+    /// derived from) takes that jump away and leaves only the glyphs' own
+    /// width change. Lines that already carry a fixed height (images) are
+    /// left alone, and a line whose bold is no taller gets no cap at all.
+    private static let lineHeightMeasure = NSLayoutManager()
+
+    private func holdLineHeight(of line: NSRange, boldSpans: [NSRange], in textStorage: NSTextStorage) {
+        let measure = Self.lineHeightMeasure
+        var natural: CGFloat = 0
+        var bolded: CGFloat = 0
+        textStorage.enumerateAttribute(.font, in: line, options: []) { value, runRange, _ in
+            let font = (value as? NSFont) ?? self.baseFont
+            let height = measure.defaultLineHeight(for: font)
+            bolded = max(bolded, height)
+            let isBold = boldSpans.contains { NSIntersectionRange($0, runRange).length > 0 }
+            // A bold run is measured as its family's non-bold face, standing
+            // in for the font it carried before `applyEmphasis` ran.
+            natural = max(natural, isBold ? measure.defaultLineHeight(for: self.unbolded(font)) : height)
+        }
+        guard bolded > natural + 0.01 else { return }
+        let existing = (textStorage.attribute(.paragraphStyle, at: line.location, effectiveRange: nil) as? NSParagraphStyle)
+            ?? paragraphStyle
+        guard existing.maximumLineHeight == 0 else { return }
+        let style = (existing.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        let multiple = style.lineHeightMultiple > 0 ? style.lineHeightMultiple : 1
+        style.maximumLineHeight = natural * multiple
+        textStorage.addAttribute(.paragraphStyle, value: style, range: line)
+    }
+
+    /// The same family and size at the weight a note's text would carry if
+    /// it were not bold: regular for body text, or the heading weight.
+    private func unbolded(_ font: NSFont) -> NSFont {
+        NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
     }
 
     /// Headings step up from the note's own font, so a typewriter note gets
