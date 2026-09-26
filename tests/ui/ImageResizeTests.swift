@@ -135,5 +135,38 @@ func runImageResizeTests() {
                       "recorded width (\(widenedWidth)) grew from the rendered width (\(before.rect.width)), matching the rightward drag")
             }
         }
+
+        // Maintainer hand-test: the caret could be put inside the hidden
+        // `![](Attachments/...)` and typing went into the file name. A real
+        // click is the path that test took, so it is driven for real here.
+        suite("clicking an image without dragging puts the caret before or after it, by half") {
+            _ = writeTestImage(width: 200, height: 100)
+            let text = "before\n![](Attachments/test.png)\nafter"
+            let (window, view) = makeHostedImageView(text)
+            defer { window.close() }
+            guard let placed = view.placedImages().first else {
+                check(false, "the image is found on layout")
+                return
+            }
+            let start = placed.markdownRange.location
+            let end = NSMaxRange(placed.markdownRange)
+
+            let left = view.convert(NSPoint(x: placed.rect.minX + 12, y: placed.rect.midY), to: nil)
+            drag(window, from: left, to: left, steps: 1)
+            equal(view.string, text, "a click is not a resize")
+            equal(view.selectedRange(), NSRange(location: start, length: 0), "left half: caret before the image")
+
+            let right = view.convert(NSPoint(x: placed.rect.maxX - 12, y: placed.rect.midY), to: nil)
+            drag(window, from: right, to: right, steps: 1)
+            equal(view.selectedRange(), NSRange(location: end, length: 0), "right half: caret after the image")
+
+            let beside = view.convert(NSPoint(x: placed.rect.maxX + 40, y: placed.rect.midY), to: nil)
+            click(window, at: beside)
+            equal(view.selectedRange(), NSRange(location: end, length: 0), "beside the image: caret after it")
+
+            view.insertText("12345", replacementRange: NSRange(location: NSNotFound, length: 0))
+            equal(Attachments.references(in: view.string).first?.path, "Attachments/test.png",
+                  "typing after a click never lands in the file name")
+        }
     }
 }

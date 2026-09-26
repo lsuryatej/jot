@@ -140,3 +140,235 @@ func runImageLineLayoutTests() {
         check(fragments.count > 1, "text that is not an image reference keeps wrapping (\(fragments.count) lines)")
     }
 }
+
+// Maintainer hand-test on the image fix: "I'm able to go back to the line
+// covered by the image and type into the name of the image, thus changing the
+// intended effect altogether." The caret could sit anywhere inside the hidden
+// `![320](Attachments/<uuid>.png)`, so typing `12345` produced
+// `...41FB.p12345ng)`, the image broke and the raw markdown showed. A loaded
+// reference now behaves like one attachment character: the caret sits before
+// it or after it, never inside, and deleting it removes it whole.
+
+/// Supplies an undo manager to a text view with no window, through the
+/// delegate hook NSTextView consults first.
+private final class AtomicUndoProvider: NSObject, NSTextViewDelegate {
+    let manager: UndoManager = {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        return manager
+    }()
+    func undoManager(for view: NSTextView) -> UndoManager? { manager }
+}
+
+func runImageAtomicReferenceTests() {
+    func fixture(above: String = "before line") -> (view: ChecklistTextView, text: String, s: Int, e: Int)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let text = "\(above)\n\(markdown)\nafter line"
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            check(false, "sanity: the reference is in the note")
+            return nil
+        }
+        return (view, text, range.location, NSMaxRange(range))
+    }
+
+    func caret(_ view: ChecklistTextView) -> Int { view.selectedRange().location }
+
+    suite("image atomic: Right arrow from before the image jumps over the whole reference") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        view.moveRight(nil)
+        equal(view.selectedRange(), NSRange(location: e, length: 0), "one Right lands after the image")
+        view.moveRight(nil)
+        equal(caret(view), e + 1, "the next Right goes on to the following line")
+    }
+
+    suite("image atomic: Left arrow from after the image jumps back over it") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: e + 1, length: 0))
+        view.moveLeft(nil)
+        equal(caret(view), e, "Left from the next line stops just after the image")
+        view.moveLeft(nil)
+        equal(view.selectedRange(), NSRange(location: s, length: 0), "one more Left lands before the image")
+    }
+
+    suite("image atomic: Option-arrow word moves also treat the reference as one unit") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        view.moveWordRight(nil)
+        equal(caret(view), e, "Option-Right from before the image lands after it")
+        view.moveWordLeft(nil)
+        equal(caret(view), s, "Option-Left from after the image lands before it")
+    }
+
+    suite("image atomic: a caret placed inside the reference snaps to the nearer edge") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.setSelectedRange(NSRange(location: s + 3, length: 0))
+        equal(caret(view), s, "a caret under the left of the image goes before it")
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.setSelectedRange(NSRange(location: e - 3, length: 0))
+        equal(caret(view), e, "a caret past the image's middle goes after it")
+    }
+
+    suite("image atomic: Down from the right half of the line above lands after the image, never inside") {
+        guard let (view, _, s, e) = fixture(above: String(repeating: "x", count: 40)) else { return }
+        // 40 characters fit on one line of the 400pt test view; column 35
+        // sits well to the right of the 240pt image's middle.
+        view.setSelectedRange(NSRange(location: 35, length: 0))
+        view.moveDown(nil)
+        equal(caret(view), e, "Down under the right half of the image lands after it (s=\(s))")
+
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        view.moveDown(nil)
+        equal(caret(view), s, "Down under the left half of the image lands before it")
+    }
+
+    suite("image atomic: Up from the line below never leaves the caret inside the reference") {
+        guard let (view, text, s, e) = fixture() else { return }
+        let after = (text as NSString).range(of: "after line")
+        view.setSelectedRange(NSRange(location: after.location + 8, length: 0))
+        view.moveUp(nil)
+        let landed = caret(view)
+        check(landed == s || landed == e, "Up lands on an edge of the reference (caret \(landed), s=\(s), e=\(e))")
+    }
+
+    suite("image atomic: clicking an image places the caret by which half was clicked") {
+        guard let (view, _, s, e) = fixture() else { return }
+        guard let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return
+        }
+        equal(view.caretLocation(forClickOn: placed, at: NSPoint(x: placed.rect.minX + 10, y: placed.rect.midY)), s,
+              "the left half puts the caret before the image")
+        equal(view.caretLocation(forClickOn: placed, at: NSPoint(x: placed.rect.maxX - 10, y: placed.rect.midY)), e,
+              "the right half puts the caret after the image")
+    }
+
+    suite("image atomic: clicking the image line to the right of the image puts the caret after it") {
+        guard let (view, _, _, e) = fixture() else { return }
+        guard let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return
+        }
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        let index = view.characterIndexForInsertion(at: NSPoint(x: placed.rect.maxX + 60, y: placed.rect.midY))
+        view.setSelectedRange(NSRange(location: index, length: 0))
+        equal(caret(view), e, "the empty space beside the image belongs to its end (hit index \(index))")
+    }
+
+    suite("image atomic: typing before the image goes on a new line above it") {
+        guard let (view, text, s, _) = fixture() else { return }
+        let markdown = (text as NSString).substring(with: NSRange(location: s, length: (text as NSString).range(of: "\nafter").location - s))
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        view.insertText("12345", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "before line\n12345\n\(markdown)\nafter line", "the reference is untouched, alone on its line")
+        equal(view.selectedRange(), NSRange(location: s + 5, length: 0), "the caret follows the typed text")
+        view.insertText("6", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "before line\n123456\n\(markdown)\nafter line", "and typing carries on on that line")
+        equal(Attachments.references(in: view.string).count, 1, "the reference still parses")
+    }
+
+    suite("image atomic: typing after the image goes on a new line below it") {
+        guard let (view, text, s, e) = fixture() else { return }
+        let markdown = (text as NSString).substring(with: NSRange(location: s, length: e - s))
+        view.setSelectedRange(NSRange(location: e, length: 0))
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "before line\n\(markdown)\nx\nafter line", "the typed text starts its own line")
+        equal(caret(view), e + 2, "the caret follows it")
+    }
+
+    suite("image atomic: a paste before the image also keeps the image alone on its line") {
+        guard let (view, text, s, e) = fixture() else { return }
+        let markdown = (text as NSString).substring(with: NSRange(location: s, length: e - s))
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        check(view.insertAtImageEdge("pasted"), "an insertion at the image's edge is handled")
+        equal(view.string, "before line\npasted\n\(markdown)\nafter line", "pasted text lands on its own line")
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+        check(!view.insertAtImageEdge("plain"), "anywhere else inserts normally")
+    }
+
+    suite("image atomic: Return after the image opens a new line below it") {
+        guard let (view, text, s, e) = fixture() else { return }
+        let markdown = (text as NSString).substring(with: NSRange(location: s, length: e - s))
+        view.setSelectedRange(NSRange(location: e, length: 0))
+        view.insertNewline(nil)
+        equal(view.string, "before line\n\(markdown)\n\nafter line", "one empty line below the image")
+        equal(caret(view), e + 1, "the caret is on it")
+    }
+
+    suite("image atomic: Backspace after the image deletes the whole reference in one undo step") {
+        guard let (view, text, s, e) = fixture() else { return }
+        let provider = AtomicUndoProvider()
+        view.delegate = provider
+        view.allowsUndo = true
+        view.setSelectedRange(NSRange(location: e, length: 0))
+        provider.manager.beginUndoGrouping()
+        view.deleteBackward(nil)
+        provider.manager.endUndoGrouping()
+        equal(view.string, "before line\n\nafter line", "the reference is gone, not one character of it")
+        equal(view.selectedRange(), NSRange(location: s, length: 0), "the caret sits where the image was")
+        provider.manager.undo()
+        equal(view.string, text, "one undo brings the image back")
+        check(!provider.manager.canUndo, "and that was the only step")
+        view.delegate = nil
+    }
+
+    suite("image atomic: Forward-delete before the image deletes the whole reference") {
+        guard let (view, _, s, _) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        view.deleteForward(nil)
+        equal(view.string, "before line\n\nafter line", "the whole reference goes")
+        equal(caret(view), s, "the caret stays put")
+    }
+
+    suite("image atomic: Option-Backspace after the image deletes the whole reference") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: e, length: 0))
+        view.deleteWordBackward(nil)
+        equal(view.string, "before line\n\nafter line", "no fragment of the path is left behind")
+        equal(caret(view), s, "the caret sits where the image was")
+    }
+
+    suite("image atomic: a selection that half-covers the reference grows to cover all of it") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: 3, length: s + 5 - 3))
+        equal(view.selectedRange(), NSRange(location: 3, length: e - 3), "the end moves out to the image's end")
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.setSelectedRange(NSRange(location: s + 4, length: e + 3 - (s + 4)))
+        equal(view.selectedRange(), NSRange(location: s, length: e + 3 - s), "the start moves back to the image's start")
+    }
+
+    suite("image atomic: Shift-arrows select the image as one unit, and deselect it the same way") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        view.moveRightAndModifySelection(nil)
+        equal(view.selectedRange(), NSRange(location: s, length: e - s), "Shift-Right selects the whole image")
+        view.moveLeftAndModifySelection(nil)
+        equal(view.selectedRange(), NSRange(location: s, length: 0), "Shift-Left deselects it whole")
+    }
+
+    suite("image atomic: typing over a selected image replaces all of it") {
+        guard let (view, _, s, e) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: s, length: e - s))
+        view.insertText("gone", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "before line\ngone\nafter line", "no half-reference survives")
+    }
+
+    suite("image atomic: a reference that does not load stays ordinary, editable text") {
+        let broken = "![240](Attachments/does-not-exist-\(UUID().uuidString).png)"
+        let text = "before line\n\(broken)\nafter line"
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: broken)
+        view.setSelectedRange(NSRange(location: range.location + 3, length: 0))
+        equal(caret(view), range.location + 3, "the caret may sit inside a broken reference to fix it")
+        view.setSelectedRange(NSRange(location: NSMaxRange(range), length: 0))
+        view.deleteBackward(nil)
+        equal((view.string as NSString).length, (text as NSString).length - 1, "Backspace removes one character")
+        view.setSelectedRange(NSRange(location: range.location, length: 0))
+        view.moveRight(nil)
+        equal(caret(view), range.location + 1, "Right moves one character")
+    }
+}
