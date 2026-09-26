@@ -138,35 +138,78 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
         return corrected
     }
 
-    override func fillBackgroundRectArray(
-        _ rectArray: UnsafePointer<NSRect>,
-        count rectCount: Int,
-        forCharacterRange charRange: NSRange,
-        color: NSColor
-    ) {
-        guard let textStorage, textStorage.length > 0, rectCount > 0 else {
-            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
-            return
-        }
+    /// Whether one background call is a `.backgroundColor` attribute run —
+    /// this class's entire reason to exist — rather than the text selection,
+    /// which AppKit fills through the very same method.
+    ///
+    /// Issue #9. Selection rectangles arrive here as one call carrying one rect
+    /// per line fragment, and a selection is supposed to fill its fragment:
+    /// pulling it onto the baseline at text height collapses every selected
+    /// line and repositions it, which is what the report described. Screen Edge
+    /// looked right only because it never installs this layout manager.
+    ///
+    /// The test is "do the characters carry this colour", not "is this colour
+    /// the selection colour", and the asymmetry is deliberate. A colour
+    /// comparison fails from both ends: an unfocused view selects in
+    /// `unemphasizedSelectedContentBackgroundColor` rather than
+    /// `selectedTextBackgroundColor`, so the comparison misses real selections,
+    /// and the system selection colour moves with the accent colour, so a
+    /// highlight can coincide with it and lose its correction. Asking the text
+    /// storage answers the question that actually matters and is immune to
+    /// both: a selection's characters carry no `.backgroundColor` of their own.
+    ///
+    /// The whole range must carry it, not just the first character. A selection
+    /// dragged out of a highlighted word starts inside that run, and reading
+    /// only `charRange.location` would call it a wash and collapse it.
+    static func isAttributeWash(charRange: NSRange, color: NSColor, textStorage: NSTextStorage) -> Bool {
+        guard charRange.length > 0,
+              charRange.location >= 0,
+              charRange.location + charRange.length <= textStorage.length else { return false }
 
-        color.setFill()
+        var washed = true
+        textStorage.enumerateAttribute(.backgroundColor, in: charRange) { value, _, stop in
+            guard let runColor = value as? NSColor, runColor == color else {
+                washed = false
+                stop.pointee = true
+                return
+            }
+        }
+        return washed
+    }
+
+    /// The rects this manager will actually paint for one background call, or
+    /// nil when the call is none of its business and belongs to `super`
+    /// untouched.
+    ///
+    /// Split out of the override so a test can drive the real layout manager,
+    /// over real laid-out text, and read back the decision. Everything the
+    /// override does after this is `setFill` and a bezier path, which no test
+    /// can see and no test needs to.
+    func correctedBackgroundRects(for rects: [NSRect], charRange: NSRange, color: NSColor) -> [NSRect]? {
+        guard let textStorage, textStorage.length > 0, !rects.isEmpty,
+              Self.isAttributeWash(charRange: charRange, color: color, textStorage: textStorage) else { return nil }
+
         let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
         let inset = firstTextView?.textContainerInset ?? .zero
-        // The run's own font, not the line's first one. Inline code swaps in a
-        // monospaced face mid-line, and sizing its wash off whatever the line
-        // happened to start with leaves the box floating off the text.
-        let characterIndex = min(max(0, charRange.location), textStorage.length - 1)
-        let font = textStorage.attribute(.font, at: characterIndex, effectiveRange: nil) as? NSFont
 
-        for index in 0..<rectCount {
-            let rect = rectArray[index]
+        var output: [NSRect] = []
+        for rect in rects {
             var corrected = rect
             var matched = false
 
             enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, fragmentGlyphRange, _ in
                 // One rect per line fragment, so the first fragment this rect
                 // overlaps is the one it belongs to.
-                guard !matched, let font else { return }
+                guard !matched else { return }
+                // The font of the run on *this* line, not one font read once
+                // for the whole call. A wash reaching a second line — a wrapped
+                // span, or a run crossing from a heading into body text — used
+                // to be sized everywhere off the first selected character, so
+                // the later lines were painted at the first line's metrics.
+                // Inline code makes the same mistake within a single line,
+                // which is why the font was already being read per run rather
+                // than per fragment.
+                guard let font = self.font(forGlyphRange: fragmentGlyphRange, clampedTo: charRange) else { return }
                 guard let fitted = Self.backgroundRect(
                     for: rect,
                     lineFragment: fragmentRect,
@@ -179,9 +222,45 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
                 corrected = fitted
             }
 
+            output.append(corrected)
+        }
+        return output
+    }
+
+    /// The font of the washed run where it enters one line fragment.
+    ///
+    /// A fragment can start before the washed range does — the run may begin
+    /// mid-line — so the lookup is clamped into `charRange`, which is the span
+    /// actually being painted.
+    private func font(forGlyphRange fragmentGlyphRange: NSRange, clampedTo charRange: NSRange) -> NSFont? {
+        guard let textStorage, textStorage.length > 0 else { return nil }
+        let fragmentStart = characterIndexForGlyph(at: fragmentGlyphRange.location)
+        let lower = max(charRange.location, fragmentStart)
+        let upper = max(charRange.location, charRange.location + charRange.length - 1)
+        let index = min(max(0, min(lower, upper)), textStorage.length - 1)
+        return textStorage.attribute(.font, at: index, effectiveRange: nil) as? NSFont
+    }
+
+    override func fillBackgroundRectArray(
+        _ rectArray: UnsafePointer<NSRect>,
+        count rectCount: Int,
+        forCharacterRange charRange: NSRange,
+        color: NSColor
+    ) {
+        var incoming: [NSRect] = []
+        incoming.reserveCapacity(rectCount)
+        for index in 0..<rectCount { incoming.append(rectArray[index]) }
+
+        guard let corrected = correctedBackgroundRects(for: incoming, charRange: charRange, color: color) else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+
+        color.setFill()
+        for rect in corrected {
             // A hair of padding so the wash reads as a surface behind the text
             // rather than a box clamped to its bounding rect.
-            let padded = corrected.insetBy(dx: -1.5, dy: -1)
+            let padded = rect.insetBy(dx: -1.5, dy: -1)
             NSBezierPath(roundedRect: padded, xRadius: 3, yRadius: 3).fill()
         }
     }
