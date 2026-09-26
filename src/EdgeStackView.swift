@@ -79,6 +79,7 @@ struct EdgeStackView: View {
             }
             .buttonStyle(.plain)
             .help("New note")
+            .accessibilityLabel("New note")
         }
         .padding(.horizontal, 16)
         .padding(.top, 30)
@@ -147,6 +148,7 @@ struct NoteCard: View {
                 .buttonStyle(.plain)
                 .padding(7)
                 .help("Delete this note")
+                .accessibilityLabel("Delete note")
                 .transition(.opacity)
             }
         }
@@ -176,6 +178,21 @@ struct NoteCard: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }
+        // The delete button, grip and resize handle only exist under the
+        // pointer, which VoiceOver never moves. The same actions live on the
+        // card itself so they are reachable from the Actions menu (VO-Cmd-Space).
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Note \(index + 1) of \(notesManager.notes.count)")
+        .accessibilityAction(named: "Delete note") { notesManager.deleteNote(at: index) }
+        .accessibilityAction(named: "Move up") {
+            guard index > 0 else { return }
+            notesManager.moveNote(from: index, to: index - 1)
+        }
+        .accessibilityAction(named: "Move down") {
+            guard index < notesManager.notes.count - 1 else { return }
+            notesManager.moveNote(from: index, to: index + 2)
+        }
+        .accessibilityAction(named: "Fit height to content") { notesManager.setCardHeight(nil, at: index) }
         .animation(.easeOut(duration: 0.15), value: isCarried)
     }
 
@@ -198,6 +215,8 @@ struct NoteCard: View {
                     return NSItemProvider(object: noteID.uuidString as NSString)
                 }
                 .help("Drag to reorder")
+                .accessibilityLabel("Reorder note")
+                .accessibilityHint("Drag to move this note in the stack")
                 .transition(.opacity)
         }
     }
@@ -229,6 +248,7 @@ struct NoteCard: View {
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .help("Drag to resize, double-click to fit content")
+                .accessibilityLabel("Resize note")
                 .gesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .global)
                         .onChanged { value in

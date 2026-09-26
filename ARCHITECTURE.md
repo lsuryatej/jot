@@ -41,6 +41,7 @@ finding where a given piece of behaviour lives.
 | `src/AppleNotesSync.swift` | One-way push into Apple Notes |
 | `src/ContentView.swift` | Panel UI: header, editor, timer overlay, share |
 | `src/PlainTextEditor.swift` | `NSTextView` wrapper: swipe, images, math rendering |
+| `src/EditorAccessibility.swift` | VoiceOver for the editor: spoken math results, Results rotor, images as "Image" |
 | `src/NotesManager.swift` | Note state, navigation, timer parsing |
 | `src/NoteStore.swift` | Atomic file persistence, backups, and migrations |
 | `tests/` | Logic tests, run by `./test.sh` |

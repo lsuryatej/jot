@@ -231,6 +231,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .help("Share this note")
+            .accessibilityLabel("Share note")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -354,10 +355,25 @@ struct ContentView: View {
         .background((notesManager.activePomodoroPhase == .rest ? Color.green : Color.red).opacity(0.8))
         .foregroundStyle(.white)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        // One element that reads as a sentence, not three fragments.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(timerAccessibilityLabel)
         .padding(.top, 50)
         .padding(.trailing, 20)
         .onAppear { updateTimer() }
         .onReceive(tick) { _ in updateTimer() }
+    }
+
+    private var timerAccessibilityLabel: String {
+        var parts: [String] = []
+        if let phase = notesManager.activePomodoroPhase {
+            parts.append(phase == .work ? "Pomodoro work" : "Pomodoro break")
+        } else {
+            parts.append("Timer")
+        }
+        if let owner = timerOwnerLabel { parts.append("for \(owner)") }
+        parts.append(timeRemaining.isEmpty ? "starting" : "\(timeRemaining) remaining")
+        return parts.joined(separator: ", ")
     }
 
     private func updateTimer() {
