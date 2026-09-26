@@ -27,6 +27,9 @@ runImageMarkdownVisibilityTests()
 runImageLineLayoutTests()
 runCoverageGapTests()
 runFoldedMarkerLayoutTests()
+runFormattingShortcutTests()
+runLinkClickTests()
+runBoldWeightTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

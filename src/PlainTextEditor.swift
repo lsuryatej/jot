@@ -541,6 +541,36 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         applyLinkFolding()
     }
 
+    // MARK: - Bold / italic
+
+    /// Cmd+B. See `Emphasis.toggle` for exactly what it does to the text.
+    @objc func toggleBold(_ sender: Any?) {
+        toggleEmphasis(.strong, actionName: "Bold")
+    }
+
+    /// Cmd+I. See `Emphasis.toggle` for exactly what it does to the text.
+    @objc func toggleItalic(_ sender: Any?) {
+        toggleEmphasis(.emphasis, actionName: "Italic")
+    }
+
+    private func toggleEmphasis(_ kind: Emphasis.Kind, actionName: String) {
+        // Asterisks are literal inside a code block, same as `==`.
+        guard !isCodeMode,
+              let edit = Emphasis.toggle(kind, in: string as NSString, selection: selectedRange())
+        else { return }
+        // One `replace` is one replaceCharacters, so one undo step. Breaking
+        // coalescing first keeps it from merging into the typing before it,
+        // so Cmd+Z takes back the markers and nothing else.
+        breakUndoCoalescing()
+        replace(range: edit.range, with: edit.replacement, selecting: edit.selection)
+        undoManager?.setActionName(actionName)
+        // Same reason as the end of `toggleHighlight`: fold the new markers
+        // now rather than one run-loop tick later. Only the edited line,
+        // since that is the only place markers appeared or went.
+        let edited = NSRange(location: edit.range.location, length: (edit.replacement as NSString).length)
+        applyLinkFolding(in: (string as NSString).lineRange(for: edited))
+    }
+
     /// Whether this view is already observing the header buttons' toggle
     /// notifications, so `enableHeaderToggleButtons()` can be called
     /// idempotently from every construction site — matching the same
@@ -636,6 +666,17 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             toggleHighlight(nil)
             return true
         }
+        // Markdown markers, not font traits: the note is plain text, and
+        // `usesFontPanel` is off, so there is no Font menu competing for
+        // these. First-responder check for the same reason as Cmd+C above.
+        if flags == [.command], key == "b", window == nil || window?.firstResponder === self {
+            toggleBold(nil)
+            return true
+        }
+        if flags == [.command], key == "i", window == nil || window?.firstResponder === self {
+            toggleItalic(nil)
+            return true
+        }
         if flags == [.command], key == "n" {
             NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
             return true
@@ -656,6 +697,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // offering a command that would do nothing.
         if item.action == #selector(toggleChecklist(_:)) { return !isCodeMode }
         if item.action == #selector(toggleHighlight(_:)) { return !isCodeMode }
+        if item.action == #selector(toggleBold(_:)) { return !isCodeMode }
+        if item.action == #selector(toggleItalic(_:)) { return !isCodeMode }
         if item.action == #selector(extractTextFromClipboardImage(_:)) { return true }
         return super.validateUserInterfaceItem(item)
     }
@@ -1028,7 +1071,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
 
         let point = convert(event.locationInWindow, from: nil)
-        guard handleSpecialClick(at: point) else {
+        guard handleSpecialClick(at: point, modifiers: event.modifierFlags) else {
             super.mouseDown(with: event)
             return
         }
@@ -1046,8 +1089,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// process with no window server session, which this project's
     /// swiftc-only test binary is. Testing this method directly sidesteps
     /// that entirely, rather than fighting it.
+    ///
+    /// `modifiers` comes from the click event itself rather than the live
+    /// `NSEvent.modifierFlags`, so a test can say whether Cmd was down.
     @discardableResult
-    func handleSpecialClick(at point: NSPoint) -> Bool {
+    func handleSpecialClick(at point: NSPoint, modifiers: NSEvent.ModifierFlags = []) -> Bool {
         if let placed = image(at: point) {
             beginResize(placed, from: point)
             return true
@@ -1061,8 +1107,32 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return true
         }
 
-        if NSEvent.modifierFlags.contains(.command), let match = linkMatch(at: point) {
-            toggleLinkExpansion(match)
+        // Cmd+click opens, the Zed / VS Code convention. Any link counts, not
+        // only the long ones that get shrunk. A Cmd+click anywhere else falls
+        // through to NSTextView's own Cmd+click (discontiguous selection).
+        if modifiers.contains(.command), let url = openableLink(at: point) {
+            if LinkShrink.isSafeToOpen(url) {
+                linkOpener(url)
+            } else {
+                NSSound.beep()
+            }
+            return true
+        }
+
+        // A plain click on a collapsed link opens it up for editing. Claimed
+        // rather than passed on, because unfolding moves the text under the
+        // pointer: the caret goes on the character that was clicked, placed
+        // here before the layout shifts, not whatever ends up under the
+        // pointer afterwards.
+        if !modifiers.contains(.command), let match = linkMatch(at: point), !isExpanded(match) {
+            let index = min(
+                max(characterIndexForInsertion(at: point), match.displayRange.location),
+                NSMaxRange(match.displayRange)
+            )
+            window?.makeFirstResponder(self)
+            setSelectedRange(NSRange(location: index, length: 0))
+            revealsLinkAtSelection = true
+            applyLinkFolding(in: match.range)
             return true
         }
 
@@ -1412,11 +1482,67 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// which lines changed, matching `recomputeMathResults`.
     private var linkMatches: [LinkMatch] = []
 
-    /// Cmd-clicked open, keyed by the URL text itself rather than its range,
-    /// since ranges shift as you type elsewhere in the note. Session-only:
-    /// like everything else in this file, it's presentation, not something
-    /// written to disk.
-    private var expandedLinks: Set<String> = []
+    /// Set by a plain click on a collapsed link: while it is set, whichever
+    /// shrunk link the selection touches is drawn in full so it can be
+    /// edited. Cleared the moment the selection leaves every link, which
+    /// folds it back. Tied to the selection rather than to the URL's text
+    /// (the old Cmd+click model keyed a set by the URL string), because
+    /// editing the URL changes that string, and a link that folded itself
+    /// away on the first keystroke inside it could not be edited at all.
+    /// Session-only presentation state, never written to disk.
+    private var revealsLinkAtSelection = false
+
+    /// Where Cmd+click sends a link. NSWorkspace in the app; a spy in tests,
+    /// so a test run never launches a browser.
+    var linkOpener: (URL) -> Void = { NSWorkspace.shared.open($0) }
+
+    /// Whether `match` is currently drawn in full.
+    func isExpanded(_ match: LinkMatch) -> Bool {
+        revealsLinkAtSelection && selectionTouches(match.range)
+    }
+
+    /// The caret counts as touching a link from its first character through
+    /// the position just past its last, so End on a link keeps it open for
+    /// appending.
+    private func selectionTouches(_ range: NSRange) -> Bool {
+        let selection = selectedRange()
+        if selection.length == 0 {
+            return selection.location >= range.location && selection.location <= NSMaxRange(range)
+        }
+        return NSIntersectionRange(selection, range).length > 0
+    }
+
+    private var expandedLinkRanges: [NSRange] {
+        linkMatches.filter(isExpanded).map(\.range)
+    }
+
+    override func setSelectedRanges(
+        _ ranges: [NSValue],
+        affinity: NSSelectionAffinity,
+        stillSelecting: Bool
+    ) {
+        let before = expandedLinkRanges
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        guard revealsLinkAtSelection else { return }
+        if !linkMatches.contains(where: { selectionTouches($0.range) }) {
+            revealsLinkAtSelection = false
+        }
+        let after = expandedLinkRanges
+        guard after != before else { return }
+        // Only the links that opened or folded are re-laid out, and at once:
+        // no animation, nothing else in the note moves.
+        let changed = (before + after).reduce(nil as NSRange?) { union, range in
+            union.map { NSUnionRange($0, range) } ?? range
+        }
+        // Refolding forces glyph generation, which AppKit refuses while the
+        // text storage is mid-edit (a selection change can arrive from inside
+        // one); defer in that case only, same as `didProcessEditing` does.
+        if textStorage?.editedMask.isEmpty ?? true {
+            applyLinkFolding(in: changed)
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.applyLinkFolding(in: changed) }
+        }
+    }
 
     /// Swaps the document for a different note's text and restyles it.
     ///
@@ -1485,13 +1611,20 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// pass silently regenerates those glyphs from scratch and the flag is
     /// gone, since nothing else tells AppKit which glyphs should stay hidden
     /// once it decides to rebuild them.
-    func applyLinkFolding() {
+    ///
+    /// `range` limits both the restyle and the glyph invalidation to the
+    /// characters that changed (a link opening or folding, one edited line),
+    /// so the rest of the note is not re-laid out; nil means the whole note.
+    func applyLinkFolding(in range: NSRange? = nil) {
         guard let layoutManager, let textStorage else { return }
         let ns = textStorage.string as NSString
+        let whole = NSRange(location: 0, length: ns.length)
+        let target = range.map { NSIntersectionRange($0, whole) } ?? whole
 
         for match in linkMatches {
             guard match.range.location + match.range.length <= ns.length else { continue }
-            let isExpanded = expandedLinks.contains(ns.substring(with: match.range))
+            guard range == nil || NSIntersectionRange(match.range, target).length > 0 else { continue }
+            let isExpanded = self.isExpanded(match)
 
             textStorage.addAttributes(
                 [
@@ -1503,9 +1636,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             )
         }
 
-        let whole = NSRange(location: 0, length: ns.length)
-        layoutManager.invalidateGlyphs(forCharacterRange: whole, changeInLength: 0, actualCharacterRange: nil)
-        layoutManager.invalidateLayout(forCharacterRange: whole, actualCharacterRange: nil)
+        layoutManager.invalidateGlyphs(forCharacterRange: target, changeInLength: 0, actualCharacterRange: nil)
+        layoutManager.invalidateLayout(forCharacterRange: target, actualCharacterRange: nil)
     }
 
     /// Whether `characterIndex` falls inside a currently-collapsed link's
@@ -1526,7 +1658,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         for match in linkMatches {
             guard match.range.location + match.range.length <= text.length else { continue }
             guard characterIndex >= match.range.location, characterIndex < match.range.location + match.range.length else { continue }
-            if expandedLinks.contains(text.substring(with: match.range)) { return false }
+            if isExpanded(match) { return false }
             let displayStart = match.displayRange.location
             let displayEnd = displayStart + match.displayRange.length
             return characterIndex < displayStart || characterIndex >= displayEnd
@@ -1614,7 +1746,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
         for match in linkMatches {
             guard match.range.location + match.range.length <= ns.length else { continue }
-            let isExpanded = expandedLinks.contains(ns.substring(with: match.range))
+            let isExpanded = self.isExpanded(match)
             let hitRange = isExpanded ? match.range : match.displayRange
 
             let glyphRange = layoutManager.glyphRange(forCharacterRange: hitRange, actualCharacterRange: nil)
@@ -1627,21 +1759,90 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         return nil
     }
 
-    /// Not private, matching `handleSpecialClick`: the Cmd-click gating in
-    /// `handleSpecialClick` reads live global keyboard state, which a test
-    /// can't fake, so tests call this directly to exercise the actual
-    /// expand/collapse behaviour instead.
-    func toggleLinkExpansion(_ match: LinkMatch) {
+    /// The URL of whatever link is drawn under `point`, shrunk or not, or nil.
+    /// Hit-tests the glyphs actually on screen, so the empty margin past the
+    /// end of a line that happens to end in a link is not the link.
+    func openableLink(at point: NSPoint) -> URL? {
+        guard !isCodeMode, let layoutManager, let textContainer else { return nil }
         let ns = string as NSString
-        guard match.range.location + match.range.length <= ns.length else { return }
-        let key = ns.substring(with: match.range)
-        if expandedLinks.contains(key) {
-            expandedLinks.remove(key)
+        guard ns.length > 0 else { return nil }
+
+        // A collapsed link's hidden characters have no glyph width, so its
+        // visible domain is the part to hit-test; `linkMatch` does exactly that.
+        let index: Int
+        if let match = linkMatch(at: point) {
+            index = match.displayRange.location
         } else {
-            expandedLinks.insert(key)
+            let inContainer = NSPoint(
+                x: point.x - textContainerInset.width,
+                y: point.y - textContainerInset.height
+            )
+            let glyph = layoutManager.glyphIndex(for: inContainer, in: textContainer)
+            guard glyph < layoutManager.numberOfGlyphs else { return nil }
+            let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+            guard glyphRect.contains(inContainer) else { return nil }
+            index = layoutManager.characterIndexForGlyph(at: glyph)
         }
-        applyLinkFolding()
-        needsDisplay = true
+        return LinkShrink.link(containing: index, in: string)?.url
+    }
+
+    /// Whether the pointer should be the pointing hand: Cmd held over a link
+    /// Cmd+click would actually open.
+    func wantsLinkCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard modifiers.contains(.command), let url = openableLink(at: point) else { return false }
+        return LinkShrink.isSafeToOpen(url)
+    }
+
+    private var showsLinkCursor = false
+    private var linkCursorTrackingArea: NSTrackingArea?
+
+    /// NSTextView's own tracking only reports what it needs for the I-beam,
+    /// so this view asks for mouse-moved events of its own.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let linkCursorTrackingArea { removeTrackingArea(linkCursorTrackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        linkCursorTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateLinkCursor(at: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
+    }
+
+    /// Pressing or releasing Cmd with the pointer already resting on a link
+    /// changes the cursor without waiting for the mouse to move.
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        guard let window else { return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        updateLinkCursor(at: point, modifiers: event.modifierFlags)
+    }
+
+    /// Leaving the view drops the hand at once rather than leaving it
+    /// stuck on whatever the pointer moves over next.
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        if showsLinkCursor {
+            NSCursor.arrow.set()
+            showsLinkCursor = false
+        }
+    }
+
+    private func updateLinkCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) {
+        if wantsLinkCursor(at: point, modifiers: modifiers) {
+            NSCursor.pointingHand.set()
+            showsLinkCursor = true
+        } else if showsLinkCursor {
+            NSCursor.iBeam.set()
+            showsLinkCursor = false
+        }
     }
 
     // MARK: - Styling
@@ -1885,10 +2086,19 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // only gains the weight, and a bold word on the auto-title line stays
         // title-sized. Whatever painted that font has to have painted it first.
         let emphases = Emphasis.matches(in: ns)
+        var boldLines: [NSRange] = []
         for emphasis in emphases {
             let content = NSIntersectionRange(emphasis.contentRange, target)
             guard content.length > 0 else { continue }
+            if emphasis.kind == .strong {
+                let line = ns.lineRange(for: content)
+                if boldLines.last != line { boldLines.append(line) }
+            }
             applyEmphasis(emphasis.kind, to: content, in: textStorage)
+        }
+        let boldSpans = emphases.filter { $0.kind == .strong }.map(\.contentRange)
+        for line in boldLines {
+            holdLineHeight(of: line, boldSpans: boldSpans, in: textStorage)
         }
         emphasisMarkers = emphases.flatMap { $0.markerRanges }
 
@@ -1924,11 +2134,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let current = (value as? NSFont) ?? self.baseFont
             switch kind {
             case .strong:
-                textStorage.addAttribute(
-                    .font,
-                    value: manager.convert(current, toHaveTrait: .boldFontMask),
-                    range: runRange
-                )
+                // See `NoteFont.bold(of:)` for why this is not the font
+                // manager's own bold conversion.
+                let bold = NoteFont.bold(of: current)
+                textStorage.addAttribute(.font, value: bold.font, range: runRange)
+                if bold.needsSyntheticStroke {
+                    textStorage.addAttribute(.strokeWidth, value: NoteFont.syntheticBoldStrokeWidth, range: runRange)
+                }
             case .emphasis:
                 let italic = manager.convert(current, toHaveTrait: .italicFontMask)
                 // Plenty of fixed-pitch faces have no italic cut, SF Mono among
@@ -1954,6 +2166,48 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 )
             }
         }
+    }
+
+    /// Keeps a line holding bold text exactly as tall as it would be
+    /// without it.
+    ///
+    /// A few families draw their Bold with taller vertical metrics than
+    /// their Regular (Helvetica Neue and American Typewriter Bold are a point
+    /// taller at 13pt), so a word turning bold would push every line below
+    /// it down. Capping the paragraph's maximum line height at the natural
+    /// height the line had before (each bold run measured as the face it was
+    /// derived from) takes that jump away and leaves only the glyphs' own
+    /// width change. Lines that already carry a fixed height (images) are
+    /// left alone, and a line whose bold is no taller gets no cap at all.
+    private static let lineHeightMeasure = NSLayoutManager()
+
+    private func holdLineHeight(of line: NSRange, boldSpans: [NSRange], in textStorage: NSTextStorage) {
+        let measure = Self.lineHeightMeasure
+        var natural: CGFloat = 0
+        var bolded: CGFloat = 0
+        textStorage.enumerateAttribute(.font, in: line, options: []) { value, runRange, _ in
+            let font = (value as? NSFont) ?? self.baseFont
+            let height = measure.defaultLineHeight(for: font)
+            bolded = max(bolded, height)
+            let isBold = boldSpans.contains { NSIntersectionRange($0, runRange).length > 0 }
+            // A bold run is measured as its family's non-bold face, standing
+            // in for the font it carried before `applyEmphasis` ran.
+            natural = max(natural, isBold ? measure.defaultLineHeight(for: self.unbolded(font)) : height)
+        }
+        guard bolded > natural + 0.01 else { return }
+        let existing = (textStorage.attribute(.paragraphStyle, at: line.location, effectiveRange: nil) as? NSParagraphStyle)
+            ?? paragraphStyle
+        guard existing.maximumLineHeight == 0 else { return }
+        let style = (existing.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        let multiple = style.lineHeightMultiple > 0 ? style.lineHeightMultiple : 1
+        style.maximumLineHeight = natural * multiple
+        textStorage.addAttribute(.paragraphStyle, value: style, range: line)
+    }
+
+    /// The same family and size at the weight a note's text would carry if
+    /// it were not bold: regular for body text, or the heading weight.
+    private func unbolded(_ font: NSFont) -> NSFont {
+        NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
     }
 
     /// Headings step up from the note's own font, so a typewriter note gets

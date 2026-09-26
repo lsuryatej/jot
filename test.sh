@@ -57,6 +57,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/Celebration.swift \
     src/PlainTextEditor.swift \
     src/PreferencesView.swift \
+    src/MainMenu.swift \
     tests/NotesManagerTests.swift \
     tests/ReminderDirectiveTests.swift \
     tests/ResizableCardTests.swift \
@@ -77,6 +78,9 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/CodeBlockTests.swift \
     tests/CoverageGapTests.swift \
     tests/FoldedMarkerLayoutTests.swift \
+    tests/FormattingShortcutTests.swift \
+    tests/LinkClickTests.swift \
+    tests/BoldWeightTests.swift \
     tests/main.swift \
     -o "$OUT"
 

@@ -193,6 +193,13 @@ painted text behind; hit Shift-Cmd-H again on the highlighted text to strip
 them back off. With nothing selected it drops an empty pair and puts the
 caret between them, ready to type straight into a new highlight.
 
+**Bold and italic.** `**bold**`, `*italic*` and `` `code` `` render with
+their markers folded away. Cmd+B and Cmd+I write the markers for you: with a
+selection they wrap it, and pressed on text that is already bold (or italic)
+they take the markers back off. With no selection, a caret inside a word
+wraps that word; anywhere else they drop an empty pair with the caret
+between. Each press is one Cmd+Z.
+
 **Images.** Paste or drop an image and it stays an image, drawn inline. It's
 written to `Attachments/` beside your notes, referenced from the text as
 `![width](Attachments/<id>.png)`, so a note with a picture in it is still
@@ -205,8 +212,10 @@ Neural Engine, no cloud OCR service involved.
 
 **Link shrink.** A long URL collapses to just its domain, `example.com`
 instead of the full `https://www.example.com/some/very/long/path?query=1`.
-Cmd-click the domain to expand it back to the full link, Cmd-click again to
-collapse it. The file on disk always has the whole URL; only the display
+Cmd-click any link to open it in your browser (or mail client, for an email
+address); only http, https and mailto links open. Click the domain without
+Cmd to expand it back to the full link for editing; it folds again once the
+caret leaves it. The file on disk always has the whole URL; only the display
 folds it away, so exporting or reading the note in `cat` shows every
 character you typed.
 
@@ -293,6 +302,7 @@ one long scroll.)*
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Cmd+C** (nothing selected, in a `code` note) | Copy the whole code block |
 | **Shift+Cmd+H** | Highlight the selection (`==like this==`), or start one at the caret |
+| **Cmd+B** / **Cmd+I** | Bold / italicise the selection or the word at the caret (`**…**` / `*…*`), again to remove |
 | **Cmd+/** | Toggle the header and footer together |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+F** | Find in the current note |
@@ -307,7 +317,8 @@ one long scroll.)*
 | Drag a card's grip (hover, Screen Edge mode) | Reorder notes in the sidebar |
 | Two-finger swipe | Move between notes (single-note display modes); with the header hidden, a brief badge names the note you landed on |
 | Drag an image's edge | Resize it in place (currently unreliable, see [BACKLOG.md](BACKLOG.md)) |
-| Cmd-click a shrunk link | Expand it to the full URL, click again to collapse |
+| Cmd-click a link | Open it (http, https and mailto only) |
+| Click a shrunk link | Expand it to the full URL for editing; it folds again when the caret leaves |
 
 Cut/Copy/Paste/Select All/Undo/Redo are the standard Cmd+X/C/V/A/Z/Shift+Cmd+Z
 you'd expect anywhere on macOS.

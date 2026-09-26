@@ -42,13 +42,20 @@ struct Emphasis: Equatable {
     /// `Highlight.matches`, because glyph generation asks about arbitrary
     /// characters without knowing what line they're on.
     static func matches(in text: NSString) -> [Emphasis] {
+        matches(in: text, respectingMath: true)
+    }
+
+    /// `respectingMath: false` is only for checking that a marker pair the
+    /// Cmd+B / Cmd+I shortcut is about to write is well formed. Rendering
+    /// always respects math.
+    private static func matches(in text: NSString, respectingMath: Bool) -> [Emphasis] {
         var results: [Emphasis] = []
         var environment: [String: MathExpression.Value] = [:]
         text.enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: [.byLines]) { line, lineRange, _, _ in
             guard let line else { return }
             // On a line with something in the margin, `*` is multiplication:
             // folding `2*3*4` would show `234` next to a result of 24.
-            guard !showsMathResult(line, environment: &environment) else { return }
+            guard !respectingMath || !showsMathResult(line, environment: &environment) else { return }
             let lineNS = line as NSString
             // Code first, and the emphasis pass is told to stay out of what it
             // found: inside backticks an asterisk is a character someone meant
@@ -60,6 +67,151 @@ struct Emphasis: Equatable {
             results.append(contentsOf: spans.map { $0.offset(by: lineRange.location) })
         }
         return results
+    }
+
+    // MARK: - Cmd+B / Cmd+I
+
+    /// One replacement that toggles a marker pair: apply `replacement` over
+    /// `range` in a single edit (so it is one undo step), then select
+    /// `selection`.
+    struct ToggleEdit: Equatable {
+        let range: NSRange
+        let replacement: String
+        let selection: NSRange
+    }
+
+    /// What Cmd+B (`.strong`) or Cmd+I (`.emphasis`) does to `text` given the
+    /// current `selection`, or nil when it should do nothing.
+    ///
+    /// - A selection, or a caret, inside a rendered span of the same kind
+    ///   unwraps that span. "Inside" includes the markers, so selecting just
+    ///   the bold word and selecting `**word**` whole both unwrap.
+    /// - A selection is otherwise wrapped, after trimming whitespace off both
+    ///   ends: the parser needs a non-space character just inside each
+    ///   marker, so `** two **` would never render as bold.
+    /// - A caret strictly inside a word wraps that word, the way Typora and
+    ///   VS Code's Markdown All in One behave. Anywhere else an empty pair is
+    ///   inserted with the caret between, and pressing again on that empty
+    ///   pair takes it back out.
+    ///
+    /// Like `toggleHighlight`, a wrap is only committed when the parser would
+    /// read the result back as exactly that span; otherwise nothing changes.
+    /// That refuses selections crossing a line, reaching into inline code, or
+    /// italic inside bold (`***word***` has no reading here). The check
+    /// ignores math, so a word on a math line can still be wrapped on
+    /// request, but unwrapping only ever acts on spans that actually render,
+    /// which keeps the `*` operators in `2*3*4` out of reach.
+    static func toggle(_ kind: Kind, in text: NSString, selection: NSRange) -> ToggleEdit? {
+        guard kind != .code else { return nil }
+        let marker = kind == .strong ? "**" : "*"
+        let markerLength = (marker as NSString).length
+        guard selection.location >= 0, NSMaxRange(selection) <= text.length else { return nil }
+
+        var target = selection
+        if target.length > 0 {
+            target = trimmingWhitespace(target, in: text)
+            guard target.length > 0 else { return nil }
+        }
+
+        // Unwrap.
+        let rendered = matches(in: text).filter { $0.kind == kind }
+        let enclosing = rendered.first { span in
+            if target.length == 0 {
+                return target.location > span.range.location && target.location < NSMaxRange(span.range)
+            }
+            return target.location >= span.range.location && NSMaxRange(target) <= NSMaxRange(span.range)
+        }
+        if let span = enclosing {
+            let content = text.substring(with: span.contentRange)
+            let contentLength = span.contentRange.length
+            let newSelection: NSRange
+            if target.length == 0 {
+                let shifted = target.location - (span.contentRange.location - span.range.location)
+                newSelection = NSRange(
+                    location: min(max(span.range.location, shifted), span.range.location + contentLength),
+                    length: 0
+                )
+            } else {
+                newSelection = NSRange(location: span.range.location, length: contentLength)
+            }
+            return ToggleEdit(range: span.range, replacement: content, selection: newSelection)
+        }
+
+        if target.length == 0 {
+            let caret = target.location
+            // An empty pair the caret is sitting in, most likely the one the
+            // last press inserted: remove it.
+            if starRun(endingAt: caret, in: text) == markerLength,
+               starRun(in: text, from: caret) == markerLength {
+                return ToggleEdit(
+                    range: NSRange(location: caret - markerLength, length: markerLength * 2),
+                    replacement: "",
+                    selection: NSRange(location: caret - markerLength, length: 0)
+                )
+            }
+            if let word = word(around: caret, in: text) {
+                return wrapped(word, with: marker, kind: kind, in: text,
+                               selection: NSRange(location: caret + markerLength, length: 0))
+            }
+            return ToggleEdit(
+                range: target,
+                replacement: marker + marker,
+                selection: NSRange(location: caret + markerLength, length: 0)
+            )
+        }
+
+        return wrapped(target, with: marker, kind: kind, in: text,
+                       selection: NSRange(location: target.location + markerLength, length: target.length))
+    }
+
+    /// Wraps `range`, but only if the parser would read the result back as a
+    /// span of `kind` over exactly `range`'s text.
+    private static func wrapped(_ range: NSRange, with marker: String, kind: Kind, in text: NSString, selection: NSRange) -> ToggleEdit? {
+        let markerLength = (marker as NSString).length
+        let replacement = marker + text.substring(with: range) + marker
+        let result = text.replacingCharacters(in: range, with: replacement) as NSString
+        let expected = NSRange(location: range.location + markerLength, length: range.length)
+        guard matches(in: result, respectingMath: false).contains(where: { $0.kind == kind && $0.contentRange == expected })
+        else { return nil }
+        return ToggleEdit(range: range, replacement: replacement, selection: selection)
+    }
+
+    private static func trimmingWhitespace(_ range: NSRange, in text: NSString) -> NSRange {
+        var start = range.location
+        var end = NSMaxRange(range)
+        while start < end, isWhitespace(text.character(at: start)) { start += 1 }
+        while end > start, isWhitespace(text.character(at: end - 1)) { end -= 1 }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func isWhitespace(_ character: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(character) else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
+    }
+
+    private static func isWordCharacter(_ character: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(character) else { return false }
+        return CharacterSet.alphanumerics.contains(scalar)
+    }
+
+    /// The word the caret is strictly inside, or nil when the caret is at a
+    /// word's edge or not touching one.
+    private static func word(around caret: Int, in text: NSString) -> NSRange? {
+        guard caret > 0, caret < text.length,
+              isWordCharacter(text.character(at: caret - 1)),
+              isWordCharacter(text.character(at: caret))
+        else { return nil }
+        var start = caret
+        while start > 0, isWordCharacter(text.character(at: start - 1)) { start -= 1 }
+        var end = caret
+        while end < text.length, isWordCharacter(text.character(at: end)) { end += 1 }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func starRun(endingAt end: Int, in text: NSString) -> Int {
+        var index = end
+        while index > 0, text.character(at: index - 1) == star { index -= 1 }
+        return end - index
     }
 
     /// Mirrors `ChecklistTextView.recomputeMathResults`, including carrying

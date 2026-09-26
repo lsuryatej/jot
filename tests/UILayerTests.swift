@@ -334,11 +334,12 @@ func runUILayerTests() {
         equal(LinkShrink.matches(in: view.string).count, 0, "nothing worth collapsing")
     }
 
-    suite("a plain click on a collapsed link's domain does not expand it") {
+    suite("a plain click on a collapsed link's domain expands it without editing the text") {
         let url = "https://www.example.com/some/very/long/path?query=1"
         let view = makeTextView(url)
         view.recomputeLinkMatches()
         view.applyLinkFolding()
+        view.linkOpener = { _ in check(false, "a plain click must never open the link") }
 
         guard let match = LinkShrink.matches(in: view.string).first,
               let domainRect = viewRect(for: match.displayRange, in: view)
@@ -347,12 +348,13 @@ func runUILayerTests() {
             return
         }
         click(at: NSPoint(x: domainRect.midX, y: domainRect.midY), on: view)
-        equal(view.string, url, "no command modifier — this is a real click test elsewhere, not an expand")
+        equal(view.string, url, "the click changes presentation only, never the text")
+        check(view.isExpanded(match), "since issue #12, a plain click expands (Cmd+click opens)")
     }
 
     suite("expanding a link and collapsing it again round-trips the hidden glyphs") {
         let url = "https://www.example.com/some/very/long/path?query=1"
-        let view = makeTextView(url)
+        let view = makeTextView(url + " end")
         view.recomputeLinkMatches()
         view.applyLinkFolding()
 
@@ -367,14 +369,16 @@ func runUILayerTests() {
         let hit = view.linkMatch(at: NSPoint(x: domainRect.midX, y: domainRect.midY))
         check(hit?.range.location == match.range.location, "the collapsed domain's own rect is what's hit-testable while folded")
 
-        view.toggleLinkExpansion(match)
+        // Clicking into it expands it (issue #12; this used to be Cmd+click).
+        click(at: NSPoint(x: domainRect.midX, y: domainRect.midY), on: view)
         let wholeGlyphs = lm.glyphRange(forCharacterRange: match.range, actualCharacterRange: nil)
         check(
             (0..<wholeGlyphs.length).allSatisfy { !lm.notShownAttribute(forGlyphAt: wholeGlyphs.location + $0) },
             "expanded — every glyph in the URL is visible again"
         )
 
-        view.toggleLinkExpansion(match)
+        // Moving the caret off the link folds it again.
+        view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
         let schemeRange = NSRange(location: match.range.location, length: match.displayRange.location - match.range.location)
         let hiddenGlyphs = lm.glyphRange(forCharacterRange: schemeRange, actualCharacterRange: nil)
         check(
