@@ -1,5 +1,4 @@
-import Foundation
-import CoreGraphics
+import AppKit
 
 /// Which of the Screen Edge sidebar's show/hide animations is still in charge.
 ///
@@ -94,6 +93,104 @@ enum EdgeRevealGeometry {
     static func fadeDuration(fromAlpha: CGFloat, toAlpha: CGFloat) -> TimeInterval {
         duration * Double(min(1, abs(toAlpha - fromAlpha)))
     }
+
+    // MARK: - One motion, two directions
+
+    /// A frame and alpha the panel sits at, before or after a slide or fade.
+    struct Pose: Equatable {
+        var frame: CGRect
+        var alpha: CGFloat
+    }
+
+    /// Where a hide leaves the panel: just past the edge at full alpha for a
+    /// slide, docked and transparent for the Reduce Motion fade.
+    static func concealTarget(style: MotionPolicy.EdgeReveal, frames: (docked: CGRect, hidden: CGRect)) -> Pose {
+        switch style {
+        case .slide: return Pose(frame: frames.hidden, alpha: 1)
+        case .fade:  return Pose(frame: frames.docked, alpha: 0)
+        }
+    }
+
+    /// Where a reveal lands: docked, fully opaque, whichever style.
+    static func revealTarget(frames: (docked: CGRect, hidden: CGRect)) -> Pose {
+        Pose(frame: frames.docked, alpha: 1)
+    }
+
+    /// Where a reveal starts. A fresh one starts exactly where a hide ends,
+    /// so in and out are one path; one that reverses a hide still under way
+    /// starts from wherever that hide has got to. A slide always runs at
+    /// full alpha and a fade always stays docked, whatever an earlier,
+    /// interrupted animation of the other style left behind.
+    static func revealStart(
+        style: MotionPolicy.EdgeReveal, interrupting: Bool,
+        currentFrame: CGRect, currentAlpha: CGFloat,
+        frames: (docked: CGRect, hidden: CGRect)
+    ) -> Pose {
+        let fresh = concealTarget(style: style, frames: frames)
+        guard interrupting else { return fresh }
+        switch style {
+        case .slide: return Pose(frame: currentFrame, alpha: 1)
+        case .fade:  return Pose(frame: frames.docked, alpha: currentAlpha)
+        }
+    }
+
+    enum Direction {
+        case reveal
+        case conceal
+    }
+
+    /// The timing curve's two control points. The hide eases in (the
+    /// system ease-in: slow to leave, then gone); the reveal is that exact
+    /// curve reversed in time, so the sidebar arrives the way it leaves,
+    /// played backwards, rather than on an unrelated curve.
+    static func timing(_ direction: Direction) -> (c1: CGPoint, c2: CGPoint) {
+        let hide = (c1: CGPoint(x: 0.42, y: 0), c2: CGPoint(x: 1, y: 1))
+        switch direction {
+        case .conceal:
+            return hide
+        case .reveal:
+            return (c1: CGPoint(x: 1 - hide.c2.x, y: 1 - hide.c2.y),
+                    c2: CGPoint(x: 1 - hide.c1.x, y: 1 - hide.c1.y))
+        }
+    }
+
+    static func timingFunction(_ direction: Direction) -> CAMediaTimingFunction {
+        let points = timing(direction)
+        return CAMediaTimingFunction(
+            controlPoints: Float(points.c1.x), Float(points.c1.y), Float(points.c2.x), Float(points.c2.y)
+        )
+    }
+
+    /// How far along the path the curve is at time fraction `t`, the same
+    /// way Core Animation evaluates it: solve the Bezier's x for t, read y.
+    static func progress(_ direction: Direction, at t: Double) -> Double {
+        let (c1, c2) = timing(direction)
+        func bezier(_ a: Double, _ b: Double, _ s: Double) -> Double {
+            let u = 1 - s
+            return 3 * u * u * s * a + 3 * u * s * s * b + s * s * s
+        }
+        var lo = 0.0, hi = 1.0
+        for _ in 0..<60 {
+            let mid = (lo + hi) / 2
+            if bezier(Double(c1.x), Double(c2.x), mid) < t { lo = mid } else { hi = mid }
+        }
+        return bezier(Double(c1.y), Double(c2.y), (lo + hi) / 2)
+    }
+
+    /// When a reveal hands the panel the keyboard.
+    enum KeyTiming: Equatable {
+        /// Made key and first responder while still off screen (or fully
+        /// transparent), so the redraw that key status and the caret cause
+        /// is done before a single frame of the slide is visible. Keying it
+        /// on landing redrew the note at the exact moment it came to rest.
+        case beforeFirstFrame
+        /// Never: the pointer brushed the edge; the keyboard stays put.
+        case never
+    }
+
+    static func keyTiming(activating: Bool) -> KeyTiming {
+        activating ? .beforeFirstFrame : .never
+    }
 }
 
 extension DisplayMode {
@@ -102,5 +199,15 @@ extension DisplayMode {
     /// it floating somewhere the next reveal would snap it back from.
     var allowsWindowDrag: Bool {
         !isEdgeDocked
+    }
+
+    /// AppKit's own order-front animation. For a titled panel the system
+    /// plays a short appear effect on `orderFront`, on top of whatever the
+    /// app animates. Screen Edge brings the sidebar in with its own slide or
+    /// fade, and the two together made the arrival pop, while the hide
+    /// (which orders out only once the panel is already off screen) never
+    /// showed it. Windowed modes keep the system's animation.
+    var windowAnimationBehavior: NSWindow.AnimationBehavior {
+        isEdgeDocked ? .none : .default
     }
 }
