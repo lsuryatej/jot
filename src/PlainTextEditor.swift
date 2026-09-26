@@ -1075,7 +1075,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             insertImage(image, at: selectedRange().location)
             return
         }
-        if let pasted = NSPasteboard.general.string(forType: .string), insertPastedListText(pasted) {
+        if let pasted = NSPasteboard.general.string(forType: .string),
+           insertPastedListText(pasted) || insertAtImageEdge(pasted) {
             return
         }
         super.paste(sender)
@@ -1160,6 +1161,8 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
         let point = convert(event.locationInWindow, from: nil)
         guard handleSpecialClick(at: point, modifiers: event.modifierFlags) else {
+            isTrackingClick = true
+            defer { isTrackingClick = false }
             super.mouseDown(with: event)
             return
         }
@@ -1350,36 +1353,27 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
     /// Where each image reference lands on screen, derived fresh from layout.
     func placedImages() -> [PlacedImage] {
-        guard let layoutManager, let textContainer, let textStorage else { return [] }
+        guard let textStorage else { return [] }
         let ns = textStorage.string as NSString
-        var placed: [PlacedImage] = []
+        return loadedImageReferences(touching: NSRange(location: 0, length: ns.length)).compactMap(placedImage(for:))
+    }
 
-        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: [.byLines]) { line, lineRange, _, _ in
-            guard let line else { return }
-            for reference in Attachments.references(in: line) {
-                guard let image = Attachments.image(at: reference.path) else { continue }
+    /// Where one loaded reference's image is drawn: at the reference's first
+    /// glyph, at its display width.
+    private func placedImage(for loaded: LoadedImageReference) -> PlacedImage? {
+        guard let layoutManager, let textContainer else { return nil }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: loaded.markdownRange, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        rect.origin.x += textContainerInset.width
+        rect.origin.y += textContainerInset.height
 
-                let markdownRange = NSRange(
-                    location: lineRange.location + reference.range.location,
-                    length: reference.range.length
-                )
-                let glyphRange = layoutManager.glyphRange(forCharacterRange: markdownRange, actualCharacterRange: nil)
-                var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-                rect.origin.x += self.textContainerInset.width
-                rect.origin.y += self.textContainerInset.height
-
-                let width = self.displayWidth(for: reference, image: image, markdownRange: markdownRange)
-                let height = width * (image.size.height / max(1, image.size.width))
-                placed.append(
-                    PlacedImage(
-                        image: image,
-                        markdownRange: markdownRange,
-                        rect: NSRect(x: rect.minX, y: rect.minY, width: width, height: height)
-                    )
-                )
-            }
-        }
-        return placed
+        let width = displayWidth(for: loaded.reference, image: loaded.image, markdownRange: loaded.markdownRange)
+        let height = width * (loaded.image.size.height / max(1, loaded.image.size.width))
+        return PlacedImage(
+            image: loaded.image,
+            markdownRange: loaded.markdownRange,
+            rect: NSRect(x: rect.minX, y: rect.minY, width: width, height: height)
+        )
     }
 
     private func displayWidth(for reference: ImageReference, image: NSImage, markdownRange: NSRange) -> CGFloat {
@@ -1431,6 +1425,230 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         return proposed
     }
 
+    // MARK: - Images as single characters
+
+    /// An image reference whose file loads, so it is drawn as a picture.
+    struct LoadedImageReference {
+        let reference: ImageReference
+        let image: NSImage
+        /// The whole `![320](path)` run, in string coordinates.
+        let markdownRange: NSRange
+        /// Whether its line holds nothing but image references.
+        let isAloneOnLine: Bool
+        /// Its line, without the trailing newline.
+        let lineRange: NSRange
+    }
+
+    /// Loaded image references on the lines touching `range`.
+    ///
+    /// These are the ones drawn as pictures over clear markdown, so they are
+    /// the ones that must act like one attachment character: the characters
+    /// underneath are invisible, and a caret among them edits a path the user
+    /// cannot see. A reference whose file does not load shows its markdown
+    /// and stays ordinary text, so it can be fixed.
+    func loadedImageReferences(touching range: NSRange) -> [LoadedImageReference] {
+        guard let textStorage else { return [] }
+        let ns = textStorage.string as NSString
+        guard ns.length > 0 else { return [] }
+        let lines = ns.lineRange(for: clamped(range))
+        var loaded: [LoadedImageReference] = []
+        ns.enumerateSubstrings(in: lines, options: [.byLines]) { line, lineRange, _, _ in
+            guard let line, line.contains("![") else { return }
+            let references = Attachments.references(in: line)
+            let alone = Self.isImageOnlyLine(line, references: references)
+            for reference in references {
+                guard let image = Attachments.image(at: reference.path) else { continue }
+                loaded.append(LoadedImageReference(
+                    reference: reference,
+                    image: image,
+                    markdownRange: NSRange(location: lineRange.location + reference.range.location, length: reference.range.length),
+                    isAloneOnLine: alone,
+                    lineRange: lineRange
+                ))
+            }
+        }
+        return loaded
+    }
+
+    /// Set while `mouseDown` is tracking a click, so a caret landing inside a
+    /// reference is placed by where the pointer is, not by which way it came.
+    private var isTrackingClick = false
+
+    /// `proposed`, adjusted so no edge of it falls inside a loaded image
+    /// reference.
+    ///
+    /// A caret inside goes to an edge. Arrow keys come from one edge and so
+    /// jump to the other, which is what Left and Right over an attachment do
+    /// in any Mac text view. Anything else (a click, Up or Down, a caret
+    /// set in code) goes to the edge nearer the proposed point, judged by the
+    /// middle of the drawn image rather than the middle of the hidden text,
+    /// since the image is what the user is looking at.
+    ///
+    /// A selection with an end inside grows to cover the whole reference,
+    /// except when the previous selection already covered it: then that end
+    /// is shrinking back across the image (Shift-Left after Shift-Right), and
+    /// it lets go of the whole reference instead of getting stuck on it.
+    func atomicSelection(_ proposed: NSRange, previous: NSRange, fromClick: Bool) -> NSRange {
+        let atoms = loadedImageReferences(touching: proposed)
+        guard !atoms.isEmpty else { return proposed }
+        func inside(_ index: Int, _ atom: NSRange) -> Bool {
+            index > atom.location && index < NSMaxRange(atom)
+        }
+
+        if proposed.length == 0 {
+            guard let atom = atoms.first(where: { inside(proposed.location, $0.markdownRange) }) else { return proposed }
+            let start = atom.markdownRange.location
+            let end = NSMaxRange(atom.markdownRange)
+            if !fromClick, previous.length == 0 {
+                if previous.location == start { return NSRange(location: end, length: 0) }
+                if previous.location == end { return NSRange(location: start, length: 0) }
+            }
+            return NSRange(location: nearerEdge(of: atom, to: proposed.location), length: 0)
+        }
+
+        var lower = proposed.location
+        var upper = NSMaxRange(proposed)
+        for atom in atoms.map(\.markdownRange) {
+            let lowerInside = inside(lower, atom)
+            let upperInside = inside(upper, atom)
+            guard lowerInside || upperInside else { continue }
+            if previous.length > 0, NSIntersectionRange(previous, atom) == atom {
+                let shrunkLower = lowerInside ? NSMaxRange(atom) : lower
+                let shrunkUpper = upperInside ? atom.location : upper
+                if shrunkLower <= shrunkUpper {
+                    lower = shrunkLower
+                    upper = shrunkUpper
+                    continue
+                }
+            }
+            if lowerInside { lower = atom.location }
+            if upperInside { upper = NSMaxRange(atom) }
+        }
+        return NSRange(location: lower, length: upper - lower)
+    }
+
+    /// `range` grown so it never cuts a loaded reference in half. What a
+    /// deletion is widened to.
+    func rangeCoveringWholeImages(_ range: NSRange) -> NSRange {
+        var lower = range.location
+        var upper = NSMaxRange(range)
+        for atom in loadedImageReferences(touching: range).map(\.markdownRange) {
+            if lower > atom.location && lower < NSMaxRange(atom) { lower = atom.location }
+            if upper > atom.location && upper < NSMaxRange(atom) { upper = NSMaxRange(atom) }
+        }
+        return NSRange(location: lower, length: upper - lower)
+    }
+
+    /// The edge of `atom` nearer `location`, measured against the middle of
+    /// the drawn image. Falls back to the middle of the text while the
+    /// storage is mid-edit, when layout cannot be asked for.
+    private func nearerEdge(of atom: LoadedImageReference, to location: Int) -> Int {
+        let start = atom.markdownRange.location
+        let end = NSMaxRange(atom.markdownRange)
+        let byText = location - start <= end - location ? start : end
+        guard textStorage?.editedMask.isEmpty ?? true,
+              let layoutManager, let textContainer,
+              let placed = placedImage(for: atom) else { return byText }
+        let glyph = layoutManager.glyphRange(forCharacterRange: NSRange(location: location, length: 1), actualCharacterRange: nil)
+        let x = layoutManager.boundingRect(forGlyphRange: glyph, in: textContainer).minX + textContainerInset.width
+        return x < placed.rect.midX ? start : end
+    }
+
+    /// Where a click on an image that did not turn into a resize puts the
+    /// caret: before the image for its left half, after it for its right.
+    func caretLocation(forClickOn placed: PlacedImage, at point: NSPoint) -> Int {
+        point.x < placed.rect.midX ? placed.markdownRange.location : NSMaxRange(placed.markdownRange)
+    }
+
+    /// Inserts `text` beside an image that has its line to itself, on a line
+    /// of its own. Returns false, doing nothing, anywhere else.
+    ///
+    /// Text sharing a line with an image would sit at the foot of an
+    /// image-tall line, and that line would go back to wrapping its hidden
+    /// markdown into blank image-tall gaps (issue #10). So typing or pasting
+    /// before an image opens a line above it, and after an image a line
+    /// below it. Text that already brings its own line break (Return) is
+    /// left to the normal path.
+    @discardableResult
+    func insertAtImageEdge(_ text: String) -> Bool {
+        guard !text.isEmpty, !hasMarkedText() else { return false }
+        let selection = selectedRange()
+        guard selection.length == 0 else { return false }
+        let ns = string as NSString
+        let location = selection.location
+        for atom in loadedImageReferences(touching: selection) where atom.isAloneOnLine {
+            let start = atom.markdownRange.location
+            let end = NSMaxRange(atom.markdownRange)
+            if location == start, !text.hasSuffix("\n"),
+               ns.substring(with: NSRange(location: atom.lineRange.location, length: start - atom.lineRange.location))
+                .trimmingCharacters(in: .whitespaces).isEmpty {
+                replace(range: selection, with: text + "\n",
+                        selecting: NSRange(location: start + (text as NSString).length, length: 0))
+                return true
+            }
+            if location == end, !text.hasPrefix("\n"),
+               ns.substring(with: NSRange(location: end, length: NSMaxRange(atom.lineRange) - end))
+                .trimmingCharacters(in: .whitespaces).isEmpty {
+                let insertion = "\n" + text
+                replace(range: selection, with: insertion,
+                        selecting: NSRange(location: end + (insertion as NSString).length, length: 0))
+                return true
+            }
+        }
+        return false
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        if replacementRange.location == NSNotFound || replacementRange == selectedRange(),
+           let text = (string as? String) ?? (string as? NSAttributedString)?.string,
+           insertAtImageEdge(text) {
+            return
+        }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// Set while one of the delete commands below runs. A change it proposes
+    /// that cuts into a loaded image is refused and widened into this, then
+    /// made once the command returns, so it is still one edit and one undo.
+    private var isInterceptingDeletion = false
+    private var widenedDeletion: NSRange?
+
+    private func deletingWholeImages(_ command: () -> Void) {
+        isInterceptingDeletion = true
+        widenedDeletion = nil
+        command()
+        isInterceptingDeletion = false
+        guard let widened = widenedDeletion else { return }
+        widenedDeletion = nil
+        replace(range: widened, with: "", selecting: NSRange(location: widened.location, length: 0))
+    }
+
+    override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
+        if isInterceptingDeletion,
+           affectedRanges.count == 1,
+           (replacementStrings ?? [""]).allSatisfy(\.isEmpty) {
+            let range = affectedRanges[0].rangeValue
+            let widened = rangeCoveringWholeImages(range)
+            if widened != range {
+                widenedDeletion = widened
+                return false
+            }
+        }
+        return super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
+    }
+
+    override func deleteBackward(_ sender: Any?) { deletingWholeImages { super.deleteBackward(sender) } }
+    override func deleteForward(_ sender: Any?) { deletingWholeImages { super.deleteForward(sender) } }
+    override func deleteWordBackward(_ sender: Any?) { deletingWholeImages { super.deleteWordBackward(sender) } }
+    override func deleteWordForward(_ sender: Any?) { deletingWholeImages { super.deleteWordForward(sender) } }
+    override func deleteToBeginningOfLine(_ sender: Any?) { deletingWholeImages { super.deleteToBeginningOfLine(sender) } }
+    override func deleteToEndOfLine(_ sender: Any?) { deletingWholeImages { super.deleteToEndOfLine(sender) } }
+    override func deleteToBeginningOfParagraph(_ sender: Any?) { deletingWholeImages { super.deleteToBeginningOfParagraph(sender) } }
+    override func deleteToEndOfParagraph(_ sender: Any?) { deletingWholeImages { super.deleteToEndOfParagraph(sender) } }
+    override func deleteBackwardByDecomposingPreviousCharacter(_ sender: Any?) {
+        deletingWholeImages { super.deleteBackwardByDecomposingPreviousCharacter(sender) }
+    }
+
     /// Returns the image under `point`, if any.
     private func image(at point: NSPoint) -> PlacedImage? {
         placedImages().first { $0.rect.contains(point) }
@@ -1468,7 +1686,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 self.resizingRange = nil
                 self.previewWidth = nil
             }
-            guard let finalWidth = self.previewWidth, abs(finalWidth - startWidth) > 1 else { return }
+            guard let finalWidth = self.previewWidth, abs(finalWidth - startWidth) > 1 else {
+                // A click, not a drag: the image is one character, so the
+                // caret goes before or after it by which half was clicked.
+                self.window?.makeFirstResponder(self)
+                self.setSelectedRange(NSRange(location: self.caretLocation(forClickOn: placed, at: startPoint), length: 0))
+                return
+            }
 
             let ns = self.string as NSString
             let markdown = ns.substring(with: placed.markdownRange)
@@ -1610,6 +1834,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         stillSelecting: Bool
     ) {
         let before = expandedLinkRanges
+        // Snapped before AppKit sees them, so a caret inside a hidden image
+        // reference is never drawn, not even for one frame.
+        let previous = selectedRange()
+        let ranges = ranges.map { value -> NSValue in
+            let proposed = value.rangeValue
+            let snapped = atomicSelection(proposed, previous: previous, fromClick: isTrackingClick)
+            return snapped == proposed ? value : NSValue(range: snapped)
+        }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         guard revealsLinkAtSelection else { return }
         if !linkMatches.contains(where: { selectionTouches($0.range) }) {
@@ -2062,10 +2294,27 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     // separate ones.
                     style.paragraphSpacingBefore = [CGFloat(18), 12, 8, 6, 6, 6][heading.level - 1]
                 }
-                textStorage.addAttributes(
-                    [.font: self.headingFont(heading), .paragraphStyle: style],
-                    range: lineRange
-                )
+                let face = self.headingFont(heading)
+                // Held to the height the regular face at this size gives
+                // the line, for the same reason `holdLineHeight` holds a
+                // bold word's line: Helvetica Neue and American Typewriter
+                // draw Bold a point taller than Regular, so a `#### ` line,
+                // which has no size lift, would push every line below it
+                // down by that point on top of its own spacing.
+                if face.font != face.regular {
+                    let natural = Self.typesetLineHeight(of: face.regular, multiple: style.lineHeightMultiple)
+                    let bolded = Self.typesetLineHeight(of: face.font, multiple: style.lineHeightMultiple)
+                    if bolded > natural + 0.01 {
+                        // TextKit adds the font's leading after clamping to
+                        // the maximum, so the cap leaves room for it.
+                        style.maximumLineHeight = natural - face.font.leading
+                    }
+                }
+                var attributes: [NSAttributedString.Key: Any] = [.font: face.font, .paragraphStyle: style]
+                if face.needsSyntheticStroke {
+                    attributes[.strokeWidth] = NoteFont.syntheticBoldStrokeWidth
+                }
+                textStorage.addAttributes(attributes, range: lineRange)
                 return
             }
 
@@ -2078,19 +2327,26 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     location: lineRange.location + ordered.markerRange.location,
                     length: ordered.markerRange.length
                 )
-                textStorage.addAttributes(
-                    [
-                        .foregroundColor: self.ink.secondary,
-                        .font: NSFontManager.shared.convert(self.baseFont, toHaveTrait: .boldFontMask),
-                    ],
-                    range: markerRange
-                )
+                // The same real Bold `**bold**` gets (see `NoteFont.bold(of:)`),
+                // not the font manager's Semibold, and a stroke in Monaco.
+                let bold = NoteFont.bold(of: self.baseFont)
+                var attributes: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: self.ink.secondary,
+                    .font: bold.font,
+                ]
+                if bold.needsSyntheticStroke {
+                    attributes[.strokeWidth] = NoteFont.syntheticBoldStrokeWidth
+                }
+                textStorage.addAttributes(attributes, range: markerRange)
+                self.holdLineHeight(of: ns.lineRange(for: lineRange), boldSpans: [markerRange], in: textStorage)
                 return
             }
 
             // An image line is given the height of its image, and the markdown
-            // that produced it is painted out. The characters are still there:
-            // select the line and you can edit or delete it as text.
+            // that produced it is painted out. The characters are still there
+            // on disk, but the editor treats the whole reference as one
+            // character (see "Images as single characters"), so a caret can
+            // never sit inside the hidden path.
             let references = Attachments.references(in: line)
             if !references.isEmpty {
                 var tallest: CGFloat = 0
@@ -2292,15 +2548,52 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         textStorage.addAttribute(.paragraphStyle, value: style, range: line)
     }
 
+    /// How tall TextKit actually makes a one-line paragraph set in `font`.
+    ///
+    /// `defaultLineHeight(for:)` rounds its estimate differently from the
+    /// typesetter: Helvetica Neue at 19pt reports 23 but lays out at 22.53,
+    /// so a cap derived from it held nothing back. Measured once per face
+    /// and multiple, since a styling pass can ask for every heading line.
+    private static var typesetHeights: [String: CGFloat] = [:]
+
+    static func typesetLineHeight(of font: NSFont, multiple: CGFloat) -> CGFloat {
+        let key = "\(font.fontName) \(font.pointSize) \(multiple)"
+        if let known = typesetHeights[key] { return known }
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = multiple
+        let storage = NSTextStorage(string: "Hg", attributes: [.font: font, .paragraphStyle: style])
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 10_000, height: 10_000))
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        let height = manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+        typesetHeights[key] = height
+        return height
+    }
+
     /// The same family and size at the weight a note's text would carry if
     /// it were not bold: regular for body text, or the heading weight.
     private func unbolded(_ font: NSFont) -> NSFont {
         NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
     }
 
+    /// A heading's face: `font` to draw it in, `regular` the same family at
+    /// the same size without the weight (what its line height is held to),
+    /// and whether the weight has to come from a stroke instead.
+    struct HeadingFace {
+        let font: NSFont
+        let regular: NSFont
+        let needsSyntheticStroke: Bool
+    }
+
     /// Headings step up from the note's own font, so a typewriter note gets
     /// bold typewriter headings rather than a system-font intruder.
-    private func headingFont(_ heading: Heading) -> NSFont {
+    ///
+    /// Bold is `NoteFont.bold(of:)`, the same as `**bold**`: the font
+    /// manager's bold trait lands on Semibold in SF Mono, New York and SF
+    /// Rounded, and on nothing at all in Monaco.
+    func headingFont(_ heading: Heading) -> HeadingFace {
         // Size carries the top of the hierarchy and weight carries the bottom.
         // Level 3 is the hinge: the last level that gets any lift, and the one
         // that trades bold away so it cannot be mistaken for a level 2. Below
@@ -2309,8 +2602,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let lift: CGFloat = [6.0, 3.5, 1.5, 0.0, 0.0, 0.0][heading.level - 1]
         let manager = NSFontManager.shared
         let sized = manager.convert(baseFont, toSize: baseFont.pointSize + lift)
-        guard heading.level != 3 else { return sized }
-        return manager.convert(sized, toHaveTrait: .boldFontMask)
+        guard heading.level != 3 else {
+            return HeadingFace(font: sized, regular: sized, needsSyntheticStroke: false)
+        }
+        let bold = NoteFont.bold(of: sized)
+        return HeadingFace(font: bold.font, regular: sized, needsSyntheticStroke: bold.needsSyntheticStroke)
     }
 }
 
