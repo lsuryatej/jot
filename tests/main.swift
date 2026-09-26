@@ -31,6 +31,7 @@ runFoldedMarkerLayoutTests()
 runFormattingShortcutTests()
 runLinkClickTests()
 runBoldWeightTests()
+runHeadingBoldTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

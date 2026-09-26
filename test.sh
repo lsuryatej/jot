@@ -81,6 +81,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/FormattingShortcutTests.swift \
     tests/LinkClickTests.swift \
     tests/BoldWeightTests.swift \
+    tests/HeadingBoldTests.swift \
     tests/main.swift \
     -o "$OUT"
 

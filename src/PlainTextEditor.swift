@@ -2206,10 +2206,27 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     // separate ones.
                     style.paragraphSpacingBefore = [CGFloat(18), 12, 8, 6, 6, 6][heading.level - 1]
                 }
-                textStorage.addAttributes(
-                    [.font: self.headingFont(heading), .paragraphStyle: style],
-                    range: lineRange
-                )
+                let face = self.headingFont(heading)
+                // Held to the height the regular face at this size gives
+                // the line, for the same reason `holdLineHeight` holds a
+                // bold word's line: Helvetica Neue and American Typewriter
+                // draw Bold a point taller than Regular, so a `#### ` line,
+                // which has no size lift, would push every line below it
+                // down by that point on top of its own spacing.
+                if face.font != face.regular {
+                    let natural = Self.typesetLineHeight(of: face.regular, multiple: style.lineHeightMultiple)
+                    let bolded = Self.typesetLineHeight(of: face.font, multiple: style.lineHeightMultiple)
+                    if bolded > natural + 0.01 {
+                        // TextKit adds the font's leading after clamping to
+                        // the maximum, so the cap leaves room for it.
+                        style.maximumLineHeight = natural - face.font.leading
+                    }
+                }
+                var attributes: [NSAttributedString.Key: Any] = [.font: face.font, .paragraphStyle: style]
+                if face.needsSyntheticStroke {
+                    attributes[.strokeWidth] = NoteFont.syntheticBoldStrokeWidth
+                }
+                textStorage.addAttributes(attributes, range: lineRange)
                 return
             }
 
@@ -2222,13 +2239,18 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     location: lineRange.location + ordered.markerRange.location,
                     length: ordered.markerRange.length
                 )
-                textStorage.addAttributes(
-                    [
-                        .foregroundColor: self.ink.secondary,
-                        .font: NSFontManager.shared.convert(self.baseFont, toHaveTrait: .boldFontMask),
-                    ],
-                    range: markerRange
-                )
+                // The same real Bold `**bold**` gets (see `NoteFont.bold(of:)`),
+                // not the font manager's Semibold, and a stroke in Monaco.
+                let bold = NoteFont.bold(of: self.baseFont)
+                var attributes: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: self.ink.secondary,
+                    .font: bold.font,
+                ]
+                if bold.needsSyntheticStroke {
+                    attributes[.strokeWidth] = NoteFont.syntheticBoldStrokeWidth
+                }
+                textStorage.addAttributes(attributes, range: markerRange)
+                self.holdLineHeight(of: ns.lineRange(for: lineRange), boldSpans: [markerRange], in: textStorage)
                 return
             }
 
@@ -2438,15 +2460,52 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         textStorage.addAttribute(.paragraphStyle, value: style, range: line)
     }
 
+    /// How tall TextKit actually makes a one-line paragraph set in `font`.
+    ///
+    /// `defaultLineHeight(for:)` rounds its estimate differently from the
+    /// typesetter: Helvetica Neue at 19pt reports 23 but lays out at 22.53,
+    /// so a cap derived from it held nothing back. Measured once per face
+    /// and multiple, since a styling pass can ask for every heading line.
+    private static var typesetHeights: [String: CGFloat] = [:]
+
+    static func typesetLineHeight(of font: NSFont, multiple: CGFloat) -> CGFloat {
+        let key = "\(font.fontName) \(font.pointSize) \(multiple)"
+        if let known = typesetHeights[key] { return known }
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = multiple
+        let storage = NSTextStorage(string: "Hg", attributes: [.font: font, .paragraphStyle: style])
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 10_000, height: 10_000))
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        let height = manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+        typesetHeights[key] = height
+        return height
+    }
+
     /// The same family and size at the weight a note's text would carry if
     /// it were not bold: regular for body text, or the heading weight.
     private func unbolded(_ font: NSFont) -> NSFont {
         NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask)
     }
 
+    /// A heading's face: `font` to draw it in, `regular` the same family at
+    /// the same size without the weight (what its line height is held to),
+    /// and whether the weight has to come from a stroke instead.
+    struct HeadingFace {
+        let font: NSFont
+        let regular: NSFont
+        let needsSyntheticStroke: Bool
+    }
+
     /// Headings step up from the note's own font, so a typewriter note gets
     /// bold typewriter headings rather than a system-font intruder.
-    private func headingFont(_ heading: Heading) -> NSFont {
+    ///
+    /// Bold is `NoteFont.bold(of:)`, the same as `**bold**`: the font
+    /// manager's bold trait lands on Semibold in SF Mono, New York and SF
+    /// Rounded, and on nothing at all in Monaco.
+    func headingFont(_ heading: Heading) -> HeadingFace {
         // Size carries the top of the hierarchy and weight carries the bottom.
         // Level 3 is the hinge: the last level that gets any lift, and the one
         // that trades bold away so it cannot be mistaken for a level 2. Below
@@ -2455,8 +2514,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let lift: CGFloat = [6.0, 3.5, 1.5, 0.0, 0.0, 0.0][heading.level - 1]
         let manager = NSFontManager.shared
         let sized = manager.convert(baseFont, toSize: baseFont.pointSize + lift)
-        guard heading.level != 3 else { return sized }
-        return manager.convert(sized, toHaveTrait: .boldFontMask)
+        guard heading.level != 3 else {
+            return HeadingFace(font: sized, regular: sized, needsSyntheticStroke: false)
+        }
+        let bold = NoteFont.bold(of: sized)
+        return HeadingFace(font: bold.font, regular: sized, needsSyntheticStroke: bold.needsSyntheticStroke)
     }
 }
 
