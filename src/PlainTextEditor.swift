@@ -1557,7 +1557,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
         var foldedOffsets: [Int] = []
         for i in 0..<glyphRange.length where isCharacterFolded(characterIndexes[i], in: ns) {
-            mutableProperties[i] = .null
+            // A control character, not `.null`: the typesetter skips null
+            // glyphs outright, so a folded run at the start of a line was
+            // never placed in that line at all. It got swept onto the end of
+            // the previous line's fragment, which put the caret up there on a
+            // fresh `# ` line and cost every heading after the first its
+            // spacing above, since its fragment no longer started the
+            // paragraph (#14). A control character is laid out where it
+            // stands; `shouldUse` below gives it zero width.
+            mutableProperties[i] = .controlCharacter
             foldedOffsets.append(i)
         }
         guard !foldedOffsets.isEmpty else { return 0 }
@@ -1569,14 +1577,33 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             font: font,
             forGlyphRange: glyphRange
         )
-        // `.null` alone marks these as glyphs with nothing to draw; it's
-        // `notShownAttribute` that actually collapses their width in layout,
-        // and it can only be set once the glyph exists — which, now that
+        // Zero advancement (from `shouldUse` below) collapses the width;
+        // `notShownAttribute` keeps the glyph from ever being drawn, and it
+        // can only be set once the glyph exists — which, now that
         // `setGlyphs` above has just created it, it does.
         for offset in foldedOffsets {
             layoutManager.setNotShownAttribute(true, forGlyphAt: glyphRange.location + offset)
         }
         return glyphRange.length
+    }
+
+    /// Folded markers arrive here as control characters (see above), and
+    /// this is where they lose their width: zero advancement keeps each one
+    /// in its own line fragment, at its own position, taking no room.
+    /// Real control characters (newlines, tabs) keep AppKit's own action.
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        shouldUse action: NSLayoutManager.ControlCharacterAction,
+        forControlCharacterAt charIndex: Int
+    ) -> NSLayoutManager.ControlCharacterAction {
+        guard !isCodeMode, let textStorage else { return action }
+        let ns = textStorage.string as NSString
+        guard charIndex < ns.length else { return action }
+        // A line break is never folded: `isCharacterFolded` never claims
+        // one, but guard anyway since breaking a line is the one action
+        // that must survive whatever the marker ranges say.
+        if action.contains(.paragraphBreak) || action.contains(.lineBreak) { return action }
+        return isCharacterFolded(charIndex, in: ns) ? .zeroAdvancement : action
     }
 
     /// The match under `point`, hit-testing only the part currently on
