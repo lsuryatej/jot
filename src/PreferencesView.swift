@@ -548,6 +548,11 @@ struct PreferencesView: View {
                 ShortcutRow(action: "Read clipboard image as text (OCR)", combo: "⇧⌘V")
             }
 
+            Section("Links") {
+                ShortcutRow(action: "Open link in browser", combo: "⌘-click")
+                ShortcutRow(action: "Expand a shortened link to edit it", combo: "click")
+            }
+
             Section("Search") {
                 ShortcutRow(action: "Find in this note", combo: "⌘F")
                 ShortcutRow(action: "Search every note", combo: "⇧⌘F")

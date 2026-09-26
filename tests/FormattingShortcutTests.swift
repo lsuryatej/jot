@@ -244,6 +244,34 @@ func runFormattingShortcutTests() {
               "both markers are on the fold list")
     }
 
+    suite("Cmd+B folds the new markers at once and leaves the line's height alone") {
+        let view = makeTextView("first line\nmake this bold\nlast line")
+        view.baseFont = .systemFont(ofSize: 13)
+        guard let lm = view.layoutManager, let tc = view.textContainer else {
+            check(false, "view has a layout manager")
+            return
+        }
+        lm.ensureLayout(for: tc)
+        func fragment(at character: Int) -> NSRect {
+            lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: character), effectiveRange: nil)
+        }
+        let lineBefore = fragment(at: 11)
+        let lastBefore = fragment(at: (view.string as NSString).length - 1)
+
+        view.setSelectedRange(NSRange(location: 21, length: 4))
+        view.toggleBold(nil)
+        lm.ensureLayout(for: tc)
+
+        equal(view.selectedRange(), NSRange(location: 23, length: 4), "selection still on the word, not jumped")
+        let opening = lm.glyphIndexForCharacter(at: 21)
+        let closing = lm.glyphIndexForCharacter(at: 27)
+        check(lm.notShownAttribute(forGlyphAt: opening) && lm.notShownAttribute(forGlyphAt: closing),
+              "the markers are folded synchronously, never drawn for a frame")
+        equal(fragment(at: 11).height, lineBefore.height, "the bolded line keeps its height")
+        equal(fragment(at: (view.string as NSString).length - 1).origin.y, lastBefore.origin.y,
+              "the line below does not move")
+    }
+
     suite("one Cmd+B is one undo step") {
         let view = makeTextView("make this bold")
         let provider = UndoProvider()
