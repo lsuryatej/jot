@@ -24,6 +24,7 @@ runReminderNotesManagerTests()
 runResizableCardTests()
 runUpdateCheckerTests()
 runImageMarkdownVisibilityTests()
+runImageLineLayoutTests()
 runCoverageGapTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")

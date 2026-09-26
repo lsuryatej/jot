@@ -1245,6 +1245,34 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
     }
 
+    /// Whether `line` holds nothing but image references (and whitespace).
+    static func isImageOnlyLine(_ line: String, references: [ImageReference]) -> Bool {
+        guard !references.isEmpty else { return false }
+        let remainder = NSMutableString(string: line)
+        for reference in references.sorted(by: { $0.range.location > $1.range.location }) {
+            remainder.deleteCharacters(in: reference.range)
+        }
+        return (remainder as String).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Double-clicking inside an image's hidden markdown selects the whole
+    /// reference. Selecting one word of an invisible path highlighted a sliver
+    /// of blank space under the image and was never what anyone meant.
+    override func selectionRange(forProposedRange proposedCharRange: NSRange, granularity: NSSelectionGranularity) -> NSRange {
+        let proposed = super.selectionRange(forProposedRange: proposedCharRange, granularity: granularity)
+        guard granularity == .selectByWord, let textStorage else { return proposed }
+        let ns = textStorage.string as NSString
+        guard proposedCharRange.location <= ns.length else { return proposed }
+        let lineRange = ns.lineRange(for: NSRange(location: proposedCharRange.location, length: 0))
+        for reference in Attachments.references(in: ns.substring(with: lineRange)) {
+            let markdownRange = NSRange(location: lineRange.location + reference.range.location, length: reference.range.length)
+            guard NSLocationInRange(proposedCharRange.location, markdownRange),
+                  Attachments.image(at: reference.path) != nil else { continue }
+            return NSUnionRange(markdownRange, proposedCharRange)
+        }
+        return proposed
+    }
+
     /// Returns the image under `point`, if any.
     private func image(at point: NSPoint) -> PlacedImage? {
         placedImages().first { $0.rect.contains(point) }
@@ -1768,6 +1796,18 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     let style = NSMutableParagraphStyle()
                     style.minimumLineHeight = tallest + 6
                     style.maximumLineHeight = tallest + 6
+                    // Min/max line height applies to every line fragment of
+                    // the paragraph, not just the first. A reference is ~60
+                    // characters, wider than a narrow note, so it used to
+                    // wrap, and each wrapped piece of invisible markdown got
+                    // its own image-tall line: a blank gap under the picture
+                    // that Down arrow and double-click landed in (issue #10).
+                    // A line holding nothing but references is laid out as a
+                    // single line instead. A line mixing text and an image
+                    // keeps wrapping so its visible text is never clipped.
+                    if Self.isImageOnlyLine(line, references: references) {
+                        style.lineBreakMode = .byClipping
+                    }
                     textStorage.addAttribute(.paragraphStyle, value: style, range: lineRange)
                 }
             }
