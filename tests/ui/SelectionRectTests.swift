@@ -93,12 +93,19 @@ private struct EditorFixture {
     }
 
     /// What the layout manager will actually paint for that call: its own
-    /// correction when it claims the call, and the untouched incoming rects
-    /// when it hands the call back to `super`.
+    /// correction when it claims the call, and otherwise the incoming rects
+    /// with their vertical edges snapped onto the window's pixels (the
+    /// deselect-residue fix), still handed to `super`.
     func paintedRects(for range: NSRange, color: NSColor, selected: Bool) -> [NSRect] {
         let incoming = incomingRects(for: range, selected: selected)
-        return manager.correctedBackgroundRects(for: incoming, charRange: range, color: color) ?? incoming
+        return manager.paintedBackgroundRects(
+            for: incoming, charRange: range, color: color, scale: window.backingScaleFactor
+        )
     }
+
+    /// Half a device pixel: the most a selection edge may move when it is
+    /// snapped onto the pixel grid.
+    var halfPixel: CGFloat { 0.5 / max(1, window.backingScaleFactor) + 0.0001 }
 
     func font(at index: Int) -> NSFont? {
         guard index < storage.length else { return nil }
@@ -148,7 +155,49 @@ func runSelectionRectTests() {
             check(incoming.count >= 3, "the selection arrives as one rect per line fragment (got \(incoming.count))")
             equal(painted.count, incoming.count, "and nothing is added or dropped")
             for (index, pair) in zip(painted, incoming).enumerated() {
-                check(pair.0 == pair.1, "line \(index): the selection rect is filled exactly as AppKit measured it")
+                check(pair.0.minX == pair.1.minX && pair.0.width == pair.1.width,
+                      "line \(index): the selection keeps AppKit's horizontal extent")
+                check(abs(pair.0.minY - pair.1.minY) <= fixture.halfPixel
+                      && abs(pair.0.maxY - pair.1.maxY) <= fixture.halfPixel,
+                      "line \(index): and fills the fragment AppKit measured, to the nearest pixel")
+            }
+            for index in painted.indices.dropLast() {
+                check(painted[index].maxY == painted[index + 1].minY,
+                      "lines \(index) and \(index + 1) share one edge: no overlap, no gap")
+            }
+        }
+
+        suite("a cleared selection leaves nothing outside what AppKit redraws") {
+            // The deselect residue: AppKit hands this layout manager selection
+            // rects rounded out to whole points, but on deselect it redraws
+            // only the exact fragments grown to the next device pixel. At this
+            // fixture's 1.6 spacing the second line starts on a fractional
+            // edge, so the stock rounding painted a pixel row above it that was
+            // never repainted.
+            guard let fixture = EditorFixture(text: "\(body)\n\(body)\n\(body)") else {
+                check(false, "fixture came up")
+                return
+            }
+            defer { fixture.close() }
+
+            let scale = max(1, fixture.window.backingScaleFactor)
+            let range = NSRange(location: (body as NSString).length + 3, length: (body as NSString).length)
+            let incoming = fixture.incomingRects(for: range, selected: true).map(NSIntegralRect)
+            let painted = fixture.manager.paintedBackgroundRects(
+                for: incoming, charRange: range, color: selectionColor(fixture.view), scale: scale
+            )
+            var invalidated = NSRect.null
+            let glyphs = fixture.manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            fixture.manager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                invalidated = invalidated.union(rect.offsetBy(dx: fixture.view.textContainerOrigin.x,
+                                                              dy: fixture.view.textContainerOrigin.y))
+            }
+            let redrawTop = floor(invalidated.minY * scale) / scale
+            let redrawBottom = ceil(invalidated.maxY * scale) / scale
+            check(!painted.isEmpty, "the selection paints something")
+            for rect in painted {
+                check(rect.minY >= redrawTop - 0.0001, "painted top \(rect.minY) is inside the redraw (\(redrawTop))")
+                check(rect.maxY <= redrawBottom + 0.0001, "painted bottom \(rect.maxY) is inside the redraw (\(redrawBottom))")
             }
         }
 
@@ -193,8 +242,10 @@ func runSelectionRectTests() {
                 return
             }
             for (index, pair) in zip(painted, incoming).enumerated() {
-                check(pair.0.height == pair.1.height, "line \(index): filled at its own fragment's height")
-                check(pair.0.origin.y == pair.1.origin.y, "line \(index): and at its own fragment's top edge")
+                check(abs(pair.0.height - pair.1.height) <= fixture.halfPixel * 2,
+                      "line \(index): filled at its own fragment's height")
+                check(abs(pair.0.origin.y - pair.1.origin.y) <= fixture.halfPixel,
+                      "line \(index): and at its own fragment's top edge")
             }
             check(painted[0].height != painted[1].height,
                   "the body line is not painted at the heading's height")

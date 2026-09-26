@@ -227,6 +227,85 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
         return output
     }
 
+    /// Snaps one incoming selection rect onto the line fragment it belongs to,
+    /// with both vertical edges on the nearest device pixel. Returns nil when
+    /// this fragment is not the rect's fragment.
+    ///
+    /// The residue this exists for: AppKit's background pass rounds every
+    /// selection rect out to whole points (`NSIntegralRect`) before handing it
+    /// to `fillBackgroundRectArray`, but when the selection goes away
+    /// `NSTextView` invalidates the exact line fragment, and the window server
+    /// only grows that out to the next device pixel. With a line-height
+    /// multiple the fragment edges are fractional (58.8pt, say), so the fill
+    /// started at 58.0 and the redraw at 58.5: one pixel row of selection
+    /// colour painted above the text and never painted over. The same happens
+    /// at the bottom edge, and wherever a Cmd+B / Cmd+I edit leaves the
+    /// selection on a line whose edges are fractional.
+    ///
+    /// Snapping each edge to the nearest pixel keeps the fill inside that
+    /// redraw by construction, and two selected lines now share one edge
+    /// instead of overlapping by a point (which doubled up a translucent
+    /// selection colour). x and width stay AppKit's: the invalidation spans
+    /// the whole fragment width, so horizontal rounding can never escape it.
+    ///
+    /// Pure, like `backgroundRect`, so the geometry is testable headless.
+    ///
+    /// - Parameters:
+    ///   - rect: the rect AppKit wants filled, in the text view's coordinates.
+    ///   - lineFragment: the fragment, in the text container's coordinates.
+    ///   - containerInset: the text view's `textContainerInset`.
+    ///   - scale: device pixels per point of the window being drawn into.
+    static func selectionRect(
+        for rect: NSRect,
+        lineFragment: NSRect,
+        containerInset: NSSize,
+        scale: CGFloat
+    ) -> NSRect? {
+        let fragment = lineFragment.offsetBy(dx: containerInset.width, dy: containerInset.height)
+        guard fragment.intersects(rect) else { return nil }
+        let pixels = max(1, scale)
+        let minY = (fragment.minY * pixels).rounded() / pixels
+        let maxY = (fragment.maxY * pixels).rounded() / pixels
+        return NSRect(x: rect.minX, y: minY, width: rect.width, height: maxY - minY)
+    }
+
+    /// Every rect this manager fills for one background call: a wash's
+    /// baseline correction, or, for anything else (the selection, find
+    /// matches), AppKit's rects snapped onto their fragments by
+    /// `selectionRect`. A rect that matches no fragment, which only an
+    /// unusual caller could produce, is left exactly as it came.
+    func paintedBackgroundRects(for rects: [NSRect], charRange: NSRange, color: NSColor, scale: CGFloat) -> [NSRect] {
+        correctedBackgroundRects(for: rects, charRange: charRange, color: color)
+            ?? alignedSelectionRects(for: rects, charRange: charRange, scale: scale)
+    }
+
+    /// The non-wash half of `paintedBackgroundRects`, split out so the
+    /// override, which has already asked whether the call is a wash, does not
+    /// walk the attribute runs a second time.
+    private func alignedSelectionRects(for rects: [NSRect], charRange: NSRange, scale: CGFloat) -> [NSRect] {
+        guard let textStorage, textStorage.length > 0, charRange.length > 0 else { return rects }
+
+        let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+        let inset = firstTextView?.textContainerInset ?? .zero
+        return rects.map { rect in
+            // The rect arrives rounded out to whole points, so it can poke up
+            // to a point into the neighbouring fragment: pick the fragment it
+            // overlaps most, not the first one it touches.
+            var best: (overlap: CGFloat, rect: NSRect)?
+            enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, _, _ in
+                guard let snapped = Self.selectionRect(
+                    for: rect, lineFragment: fragmentRect, containerInset: inset, scale: scale
+                ) else { return }
+                let fragment = fragmentRect.offsetBy(dx: inset.width, dy: inset.height)
+                let overlap = min(rect.maxY, fragment.maxY) - max(rect.minY, fragment.minY)
+                if overlap > (best?.overlap ?? -.greatestFiniteMagnitude) {
+                    best = (overlap, snapped)
+                }
+            }
+            return best?.rect ?? rect
+        }
+    }
+
     /// The font of the washed run where it enters one line fragment.
     ///
     /// A fragment can start before the washed range does — the run may begin
@@ -252,7 +331,16 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
         for index in 0..<rectCount { incoming.append(rectArray[index]) }
 
         guard let corrected = correctedBackgroundRects(for: incoming, charRange: charRange, color: color) else {
-            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            // The selection (and find matches) still fill through `super`, at
+            // full fragment height, exactly as issue #9 needs; only their
+            // vertical edges move, onto the pixels AppKit will redraw when
+            // the selection is cleared. See `selectionRect`.
+            let scale = firstTextView?.window?.backingScaleFactor ?? 1
+            let aligned = alignedSelectionRects(for: incoming, charRange: charRange, scale: scale)
+            aligned.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                super.fillBackgroundRectArray(base, count: buffer.count, forCharacterRange: charRange, color: color)
+            }
             return
         }
 
