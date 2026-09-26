@@ -17,6 +17,7 @@ struct EdgeStackView: View {
     /// to an index at the moment they fire, because live reordering shifts
     /// every index after the first swap.
     @State private var draggingNoteID: UUID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,7 +53,11 @@ struct EdgeStackView: View {
                     guard let target, notesManager.notes.indices.contains(target) else { return }
                     // Rows are keyed by note identity, so that is what
                     // scrollTo has to be handed.
-                    withAnimation { proxy.scrollTo(notesManager.notes[target].id, anchor: .top) }
+                    // Under Reduce Motion the jump happens in one step: a long
+                    // animated scroll is motion the user didn't drive.
+                    withAnimation(MotionPolicy.movement(.default, reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(notesManager.notes[target].id, anchor: .top)
+                    }
                     DispatchQueue.main.async { scrollToIndex = nil }
                 }
             }
@@ -98,6 +103,7 @@ struct NoteCard: View {
     /// value to reset to.
     @State private var contentHeight: CGFloat = 40
     @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The height a resize drag started from. Nil outside an active drag.
     @State private var dragStartHeight: CGFloat?
 
@@ -159,12 +165,13 @@ struct NoteCard: View {
         // A hovered card lifts a little off the stack; a carried one dims so
         // the eye keeps track of what is being moved while the others part.
         .shadow(color: .black.opacity(isHovered && !isCarried ? 0.10 : 0), radius: 7, y: 2)
-        .scaleEffect(isCarried ? 0.985 : 1)
+        .scaleEffect(isCarried ? MotionPolicy.carriedCardScale(reduceMotion: reduceMotion) : 1)
         .opacity(isCarried ? 0.45 : 1)
         .onDrop(of: [.text], delegate: NoteCardDropDelegate(
             noteID: noteID,
             notesManager: notesManager,
-            draggingNoteID: $draggingNoteID
+            draggingNoteID: $draggingNoteID,
+            reduceMotion: reduceMotion
         ))
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
@@ -259,13 +266,17 @@ private struct NoteCardDropDelegate: DropDelegate {
     let noteID: UUID
     let notesManager: NotesManager
     @Binding var draggingNoteID: UUID?
+    /// Under Reduce Motion the other cards snap to their new places instead
+    /// of sliding; the carried card still follows the pointer, which is
+    /// motion the user is driving directly.
+    let reduceMotion: Bool
 
     func dropEntered(info: DropInfo) {
         guard let carriedID = draggingNoteID, carriedID != noteID,
               let from = notesManager.notes.firstIndex(where: { $0.id == carriedID }),
               let to = notesManager.notes.firstIndex(where: { $0.id == noteID })
         else { return }
-        withAnimation(.easeOut(duration: 0.15)) {
+        withAnimation(MotionPolicy.movement(.easeOut(duration: 0.15), reduceMotion: reduceMotion)) {
             notesManager.moveNote(from: from, to: to)
         }
     }

@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         CurrencyRates.bootstrap(fetchesLive: settings.fetchesLiveCurrencyRates)
+        ReduceMotion.startObserving()
         UpdateChecker.check(enabled: settings.checksForUpdates)
         notesManager.timerKeyword = settings.effectiveTimerKeyword
         notesManager.pomodoroKeyword = settings.effectivePomodoroKeyword
@@ -440,6 +441,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if settings.displayMode.anchorsToStatusItem {
             anchorPanelToStatusItem()
         }
+        // An edge fade leaves alpha wherever it stopped; windowed modes
+        // never animate it, so they always show fully opaque.
+        panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         panel.focusEditor()
@@ -480,16 +484,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let offScreenX = settings.screenEdge == .right ? visible.maxX : visible.minX - width
         let docked = NSRect(x: onScreenX, y: visible.minY, width: width, height: visible.height)
 
-        panel.setFrame(
-            NSRect(x: offScreenX, y: visible.minY, width: width, height: visible.height),
-            display: false
-        )
+        // Under Reduce Motion the sidebar never travels: it is placed docked
+        // and only its alpha animates, 0 to 1, over the same duration.
+        let reveal = MotionPolicy.edgeReveal(reduceMotion: ReduceMotion.isEnabled)
+        switch reveal {
+        case .slide:
+            panel.alphaValue = 1
+            panel.setFrame(
+                NSRect(x: offScreenX, y: visible.minY, width: width, height: visible.height),
+                display: false
+            )
+        case .fade:
+            panel.alphaValue = 0
+            panel.setFrame(docked, display: false)
+        }
         panel.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(docked, display: true)
+            switch reveal {
+            case .slide: panel.animator().setFrame(docked, display: true)
+            case .fade:  panel.animator().alphaValue = 1
+            }
         } completionHandler: { [weak self] in
             // NSAnimationContext's completion handler always fires on the
             // main thread, but its type is not statically @MainActor.
@@ -790,7 +807,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let identifier = notification.request.identifier
         Task { @MainActor in
             if identifier.hasPrefix(reminderIdentifierPrefix) {
-                CelebrationWindowController.fire(style: self.settings.celebrationStyle, sound: self.settings.timerSound)
+                CelebrationWindowController.fire(
+                    style: self.settings.celebrationStyle,
+                    sound: self.settings.timerSound,
+                    title: Celebration.reminderBadgeTitle
+                )
             }
         }
         completionHandler([.banner, .sound])

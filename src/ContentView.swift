@@ -21,6 +21,10 @@ struct ContentView: View {
     @State private var swipeFeedbackDismiss: DispatchWorkItem?
     @State private var reminderToastDismiss: DispatchWorkItem?
 
+    /// System Settings › Accessibility › Display › Reduce motion, kept live
+    /// by SwiftUI. The toast chips fade in place instead of dropping in.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     /// Chrome text follows the paper's ink, not SwiftUI's semantic colors:
@@ -366,7 +370,8 @@ struct ContentView: View {
             // a burst of confetti over everything else on screen.
             CelebrationWindowController.fire(
                 style: settings.celebrationStyle,
-                sound: settings.timerSound
+                sound: settings.timerSound,
+                title: Celebration.badgeTitle(endingPhase: notesManager.activePomodoroPhase)
             )
             notesManager.timerDidFire()
             return
@@ -400,7 +405,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 44)
                 .allowsHitTesting(false)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.jotToast(reduceMotion: reduceMotion))
         }
     }
 
@@ -454,7 +459,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, settings.showsHeader ? 44 : 10)
                 .allowsHitTesting(false)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.jotToast(reduceMotion: reduceMotion))
         }
     }
 
