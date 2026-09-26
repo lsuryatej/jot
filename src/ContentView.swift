@@ -136,7 +136,7 @@ struct ContentView: View {
         if let tint = settings.effectiveTint.overlayColor {
             Rectangle()
                 .fill(Color(nsColor: tint))
-                .opacity(settings.glassTint.overlayOpacity)
+                .opacity(settings.effectiveTint.overlayOpacity)
         }
     }
 
@@ -398,7 +398,7 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.hairlineOpacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10)), lineWidth: 1))
                 .frame(maxWidth: .infinity)
                 .padding(.top, 44)
                 .allowsHitTesting(false)
@@ -452,7 +452,7 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.hairlineOpacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10)), lineWidth: 1))
                 .frame(maxWidth: .infinity)
                 .padding(.top, settings.showsHeader ? 44 : 10)
                 .allowsHitTesting(false)

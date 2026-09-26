@@ -494,6 +494,13 @@ final class SettingsManager: ObservableObject {
 
     private let defaults: UserDefaults
 
+    /// Mirrors System Settings > Accessibility > Display > Increase Contrast,
+    /// kept live by `accessibilityDisplayOptionsDidChangeNotification`. Not
+    /// persisted: the system owns it. Hairlines strengthen and the purely
+    /// decorative lit edge and tint wash step aside while it is on.
+    @Published var increasesContrast = false
+    private var accessibilityObserver: NSObjectProtocol?
+
     @Published var displayMode: DisplayMode {
         didSet { defaults.set(displayMode.rawValue, forKey: Key.displayMode) }
     }
@@ -756,6 +763,24 @@ final class SettingsManager: ObservableObject {
             CelebrationStyle(rawValue: defaults.string(forKey: Key.celebrationStyle) ?? "") ?? .cannons
         self.timerSound =
             CelebrationSound(rawValue: defaults.string(forKey: Key.timerSound) ?? "") ?? .hero
+
+        // The same rule as the migration above: an injected suite starts
+        // from the standard look, so a test run never depends on this
+        // machine's accessibility settings.
+        if defaults === UserDefaults.standard {
+            increasesContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                let increase = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                MainActor.assumeIsolated {
+                    guard let self, self.increasesContrast != increase else { return }
+                    self.increasesContrast = increase
+                }
+            }
+        }
     }
 
     // MARK: - Theme notes
@@ -874,15 +899,24 @@ final class SettingsManager: ObservableObject {
     }
 
     var effectiveWantsLitEdge: Bool {
-        themeOverride?.paperHex == nil && appearance.wantsLitEdge
+        themeOverride?.paperHex == nil && appearance.wantsLitEdge && !increasesContrast
+    }
+
+    /// A hairline's opacity: its resting value normally, a clearly visible
+    /// edge under Increase Contrast (a 0.10 hairline all but disappears on a
+    /// busy desktop, which is exactly who turns the setting on).
+    func hairlineOpacity(_ resting: Double) -> Double {
+        increasesContrast ? max(resting, 0.45) : resting
     }
 
     var effectiveWantsOpaqueCards: Bool {
         effectivePaperColor != nil || appearance == .solid
     }
 
+    /// The wash on a translucent paper; none under Increase Contrast, since
+    /// a tint only ever lowers the contrast of the ink sitting on it.
     var effectiveTint: GlassTint {
-        themeOverride?.tint ?? glassTint
+        increasesContrast ? .none : (themeOverride?.tint ?? glassTint)
     }
 
     // Typography: a theme note may carry its own font, size, spacing, and

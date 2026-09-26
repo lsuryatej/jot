@@ -150,7 +150,9 @@ struct NoteCard: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
                     Color(nsColor: settings.effectiveHairlineColor)
-                        .opacity(settings.effectiveWantsLitEdge ? 0.16 : (isHovered ? 0.16 : 0.10)),
+                        .opacity(settings.hairlineOpacity(
+                            settings.effectiveWantsLitEdge ? 0.16 : (isHovered ? 0.16 : 0.10)
+                        )),
                     lineWidth: 1
                 )
         )

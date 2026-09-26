@@ -111,6 +111,7 @@ func runAppearanceContrastTests() {
 
     runInkContrastTests()
     runTimerChipContrastTests()
+    runIncreaseContrastTests()
 }
 
 /// Every surface a paper's ink lands on: the page, the header and footer
@@ -250,5 +251,34 @@ func runTimerChipContrastTests() {
         }
         check(TimerChipPalette.background(for: .rest) != TimerChipPalette.background(for: .work),
               "work and break stay distinguishable at a glance")
+    }
+}
+
+func runIncreaseContrastTests() {
+    suite("Increase Contrast strengthens hairlines and drops decoration") {
+        let name = "JotTests.increaseContrast-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = SettingsManager(defaults: defaults)
+        settings.appearance = .glass
+        settings.glassTint = .amber
+
+        check(!settings.increasesContrast, "an injected suite starts from the standard setting")
+        check(settings.effectiveWantsLitEdge, "glass keeps its lit edge normally")
+        equal(settings.effectiveTint, .amber, "and its tint")
+        equal(settings.hairlineOpacity(0.10), 0.10, "hairlines keep their resting opacity")
+
+        settings.increasesContrast = true
+        check(!settings.effectiveWantsLitEdge, "the decorative lit edge goes")
+        equal(settings.effectiveTint, GlassTint.none, "the tint wash goes")
+        for base in [0.10, 0.16, 0.18] {
+            check(settings.hairlineOpacity(base) >= 0.4,
+                  "a \(base) hairline becomes a real edge (\(settings.hairlineOpacity(base)))")
+        }
+        equal(settings.glassTint, .amber, "the picked tint itself is kept for when the setting goes off")
+
+        settings.increasesContrast = false
+        check(settings.effectiveWantsLitEdge, "turning it off brings the lit edge back")
+        equal(settings.effectiveTint, .amber, "and the tint")
     }
 }
