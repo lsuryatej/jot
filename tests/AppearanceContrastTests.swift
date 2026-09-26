@@ -108,4 +108,125 @@ func runAppearanceContrastTests() {
         view.adoptPaperAppearance(nil)
         check(view.appearance == nil, "a translucent paper hands it back to the system")
     }
+
+    runInkContrastTests()
 }
+
+/// Every surface a paper's ink lands on: the page, the header and footer
+/// chrome (pure chrome is the worst case of their 0.8/0.6 wash), and the edge
+/// cards. Translucent papers get a spread of what their material resolves to
+/// in each mode, including a tint wash.
+private func surfaces(for paper: Appearance, in mode: NSAppearance.Name) -> [(String, NSColor)] {
+    if let color = paper.paperColor {
+        return [("paper", color), ("chrome", paper.chromeColor), ("card", paper.cardColor),
+                ("header", Contrast.composite(paper.chromeColor.withAlphaComponent(0.8), over: color))]
+    }
+    let appearance = NSAppearance(named: mode)!
+    let window = Contrast.resolved(.windowBackgroundColor, in: appearance)
+    let control = Contrast.resolved(.controlBackgroundColor, in: appearance)
+    let amber = GlassTint.amber.overlayColor!.withAlphaComponent(GlassTint.amber.overlayOpacity)
+    if mode == .darkAqua {
+        let material = ThemeNote.color(fromHex: "#3a3a3c")!
+        return [("window", window), ("control", control), ("material", material),
+                ("amber wash", Contrast.composite(amber, over: material))]
+    }
+    let material = ThemeNote.color(fromHex: "#e0e0e0")!
+    return [("window", window), ("control", control), ("material", material),
+            ("amber wash", Contrast.composite(amber, over: material))]
+}
+
+private func ratioText(_ r: CGFloat) -> String { String(format: "%.2f", r) }
+
+func runInkContrastTests() {
+
+    suite("every paper's primary and secondary ink passes 4.5:1 on paper, chrome, and cards") {
+        for paper in Appearance.allCases {
+            let modes: [NSAppearance.Name] = SettingsManager.windowAppearanceName(for: paper, theme: nil)
+                .map { [$0] } ?? [.aqua, .darkAqua]
+            for mode in modes {
+                let appearance = NSAppearance(named: mode)!
+                for (role, ink) in [("primary", paper.ink.text), ("secondary", paper.ink.secondary)] {
+                    let resolved = Contrast.resolved(ink, in: appearance)
+                    for (surfaceName, surface) in surfaces(for: paper, in: mode) {
+                        let r = Contrast.ratio(Contrast.composite(resolved, over: surface), surface)
+                        check(r >= 4.5, "\(paper.rawValue)/\(mode.rawValue) \(role) on \(surfaceName): \(ratioText(r)):1")
+                    }
+                }
+            }
+        }
+    }
+
+    suite("Increase Contrast variants are stronger and reach 7:1") {
+        for (name, ink, paper) in AdaptiveInk.catalogue {
+            let modes: [NSAppearance.Name] = SettingsManager.windowAppearanceName(for: paper, theme: nil)
+                .map { [$0] } ?? [.aqua, .darkAqua]
+            for mode in modes {
+                let dark = mode == .darkAqua
+                let normal = dark ? ink.dark : ink.light
+                let strong = dark ? ink.darkHighContrast : ink.lightHighContrast
+                for (surfaceName, surface) in surfaces(for: paper, in: mode) {
+                    let before = Contrast.ratio(Contrast.composite(normal, over: surface), surface)
+                    let after = Contrast.ratio(Contrast.composite(strong, over: surface), surface)
+                    check(after > before, "\(name)/\(mode.rawValue) on \(surfaceName): high contrast is stronger (\(ratioText(before)) to \(ratioText(after)))")
+                    check(after >= 7, "\(name)/\(mode.rawValue) on \(surfaceName): high contrast reaches 7:1 (\(ratioText(after)))")
+                }
+            }
+        }
+    }
+
+    suite("adaptive inks pick their variant from the appearance") {
+        let ink = AdaptiveInk.catalogue.first { $0.0 == "system secondary" }!.1
+        let increase = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let light = Contrast.resolved(ink.color, in: NSAppearance(named: .aqua)!)
+        let dark = Contrast.resolved(ink.color, in: NSAppearance(named: .darkAqua)!)
+        func same(_ a: NSColor, _ b: NSColor) -> Bool {
+            let a = a.usingColorSpace(.sRGB)!, b = b.usingColorSpace(.sRGB)!
+            return abs(a.redComponent - b.redComponent) < 0.002 && abs(a.alphaComponent - b.alphaComponent) < 0.002
+        }
+        check(same(light, increase ? ink.lightHighContrast : ink.light), "light mode resolves the light variant")
+        check(same(dark, increase ? ink.darkHighContrast : ink.dark), "dark mode resolves the dark variant")
+        check(Appearance.white.ink.secondary === Appearance.white.ink.secondary,
+              "paper inks are shared instances, so InkTheme equality stays cheap and stable")
+    }
+
+    suite("theme-note inks are contrast-guaranteed on their paper, chrome, and cards") {
+        let papers = ["#223038", "#1b2330", "#f3ead8", "#fdf6e3", "#002b36", "#2e3440",
+                      "#282a36", "#e8f0e8", "#ffe4e1", "#3b2f2f", "#d8dee9", "#9aa5b1"]
+        for hex in papers {
+            let paper = ThemeNote.color(fromHex: hex)!
+            let surfaces = [("paper", paper),
+                            ("chrome", ThemeNote.derivedChromeColor(for: paper)),
+                            ("card", ThemeNote.derivedCardColor(for: paper))]
+            let ink = ThemeNote.derivedInk(for: paper)
+            for (role, color) in [("primary", ink.text), ("secondary", ink.secondary)] {
+                for (surfaceName, surface) in surfaces {
+                    let r = Contrast.ratio(color, surface)
+                    check(r >= 4.5, "theme \(hex) \(role) on \(surfaceName): \(ratioText(r)):1")
+                }
+            }
+        }
+
+        let name = "JotTests.themeInk-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = SettingsManager(defaults: defaults)
+        settings.themeOverride = ThemeNote.parse("theme\npaper: #223038\nink: #e8e4d8")
+        let paper = ThemeNote.color(fromHex: "#223038")!
+        for surface in [paper, settings.effectiveChromeColor, settings.effectiveCardColor] {
+            let r = Contrast.ratio(settings.effectiveInk.secondary, surface)
+            check(r >= 4.5, "an explicit ink's secondary still passes (\(ratioText(r)):1)")
+        }
+
+        for inkHex in ["#eeeeee", "#d0d0d0", "#1c1c1e", "#303030"] {
+            settings.appearance = .frosted
+            settings.themeOverride = ThemeNote.parse("theme\nink: \(inkHex)")
+            let mode = NSAppearance(named: settings.effectiveWindowAppearanceName!)!
+            for surface in [NSColor.windowBackgroundColor, .controlBackgroundColor] {
+                let resolved = Contrast.resolved(surface, in: mode)
+                let r = Contrast.ratio(settings.effectiveInk.secondary, resolved)
+                check(r >= 4.5, "ink-only theme \(inkHex): secondary on the adopted material \(ratioText(r)):1")
+            }
+        }
+    }
+}
+

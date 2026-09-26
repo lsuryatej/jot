@@ -167,10 +167,24 @@ enum ThemeNote {
     /// Ink for a custom paper that did not specify any: light papers get dark
     /// warm-neutral ink, dark papers get light ink, both carrying a whisper of
     /// the paper's own hue.
+    ///
+    /// Text and secondary are then pushed until they clear 4.5:1 on the paper
+    /// and on the chrome and cards derived from it: a hue-mate at a fixed
+    /// brightness passed on some papers and measured under 3:1 on others.
     static func derivedInk(for paper: NSColor) -> InkTheme {
         let lightPaper = luminance(of: paper) > 0.5
-        let text = hueMate(of: paper, brightness: lightPaper ? 0.13 : 0.90, saturationScale: 0.6)
-        let secondary = hueMate(of: paper, brightness: lightPaper ? 0.52 : 0.58, saturationScale: 0.45)
+        let surfaces = [paper, derivedChromeColor(for: paper), derivedCardColor(for: paper)]
+        let extreme = lightPaper
+            ? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+            : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+        let text = ensuringContrast(
+            hueMate(of: paper, brightness: lightPaper ? 0.13 : 0.90, saturationScale: 0.6),
+            toward: extreme, on: surfaces
+        )
+        let secondary = ensuringContrast(
+            hueMate(of: paper, brightness: lightPaper ? 0.52 : 0.58, saturationScale: 0.45),
+            toward: text, on: surfaces
+        )
         let link = lightPaper
             ? NSColor(srgbRed: 0.100, green: 0.360, blue: 0.720, alpha: 1)
             : NSColor(srgbRed: 0.520, green: 0.720, blue: 0.930, alpha: 1)
@@ -181,6 +195,29 @@ enum ThemeNote {
             link: link,
             guide: hueMate(of: paper, brightness: lightPaper ? 0.38 : 0.72)
         )
+    }
+
+    /// `color`, moved step by step toward `target` until it clears `minimum`
+    /// on every surface. Keeps as much of the original tone as the contrast
+    /// allows; lands on `target` itself when nothing short of it passes.
+    static func ensuringContrast(
+        _ color: NSColor,
+        toward target: NSColor,
+        on surfaces: [NSColor],
+        minimum: CGFloat = 4.5
+    ) -> NSColor {
+        guard let from = color.usingColorSpace(.sRGB), let to = target.usingColorSpace(.sRGB) else { return color }
+        for step in 0...20 {
+            let t = CGFloat(step) / 20
+            let candidate = NSColor(
+                srgbRed: from.redComponent + (to.redComponent - from.redComponent) * t,
+                green: from.greenComponent + (to.greenComponent - from.greenComponent) * t,
+                blue: from.blueComponent + (to.blueComponent - from.blueComponent) * t,
+                alpha: 1
+            )
+            if surfaces.allSatisfy({ Contrast.ratio(candidate, $0) >= minimum }) { return candidate }
+        }
+        return to
     }
 
     /// Card and chrome neighbours for a custom opaque paper: the card lifts a
