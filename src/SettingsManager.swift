@@ -93,6 +93,59 @@ struct InkTheme: Equatable {
     )
 }
 
+/// WCAG 2.x contrast, so ink choices are measured rather than eyeballed.
+enum Contrast {
+    /// Relative luminance per WCAG 2.x, from linearised sRGB.
+    static func relativeLuminance(_ color: NSColor) -> CGFloat {
+        guard let s = color.usingColorSpace(.sRGB) else { return 0.5 }
+        func linear(_ c: CGFloat) -> CGFloat {
+            c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(s.redComponent)
+            + 0.7152 * linear(s.greenComponent)
+            + 0.0722 * linear(s.blueComponent)
+    }
+
+    /// The contrast ratio between two opaque colours, 1...21.
+    static func ratio(_ a: NSColor, _ b: NSColor) -> CGFloat {
+        let la = relativeLuminance(a), lb = relativeLuminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+
+    /// `foreground` flattened onto an opaque `background`, which is what the
+    /// eye actually sees when a translucent ink sits on a surface.
+    static func composite(_ foreground: NSColor, over background: NSColor) -> NSColor {
+        let f = foreground.usingColorSpace(.sRGB) ?? foreground
+        let b = background.usingColorSpace(.sRGB) ?? background
+        let a = f.alphaComponent
+        return NSColor(
+            srgbRed: f.redComponent * a + b.redComponent * (1 - a),
+            green: f.greenComponent * a + b.greenComponent * (1 - a),
+            blue: f.blueComponent * a + b.blueComponent * (1 - a),
+            alpha: 1
+        )
+    }
+
+    /// A dynamic colour pinned to concrete sRGB components under `appearance`.
+    static func resolved(_ color: NSColor, in appearance: NSAppearance) -> NSColor {
+        var result = color
+        appearance.performAsCurrentDrawingAppearance {
+            result = color.usingColorSpace(.sRGB) ?? color
+        }
+        return result
+    }
+}
+
+extension NSAppearanceCustomization {
+    /// Pins the appearance to the paper's (nil hands it back to the system).
+    /// Skips a no-op assignment: every set invalidates the whole view tree's
+    /// appearance, and theme notes re-derive on every keystroke.
+    func adoptPaperAppearance(_ name: NSAppearance.Name?) {
+        guard appearance?.name != name else { return }
+        appearance = name.flatMap { NSAppearance(named: $0) }
+    }
+}
+
 /// How the note's surface is rendered: three translucent window materials,
 /// or an opaque paper that carries its own ink.
 enum Appearance: String, CaseIterable, Identifiable {
@@ -615,6 +668,36 @@ final class SettingsManager: ObservableObject {
     /// otherwise the picked appearance's paper (nil meaning translucent).
     var effectivePaperColor: NSColor? {
         themeOverride?.paperHex ?? appearance.paperColor
+    }
+
+    /// The appearance the note's window must adopt so everything AppKit and
+    /// SwiftUI colour for themselves (header buttons, the font menu, the
+    /// stepper, scrollers, the find bar) agrees with the paper under them.
+    ///
+    /// An opaque paper forces its own ink whatever mode macOS is in; without
+    /// this the controls kept the system's colours and vanished on a
+    /// mismatched paper (True Dark in Light Mode measured about 1.1:1).
+    /// Translucent papers return nil: they sit inside the system mode, which
+    /// is exactly right for them. A theme's ink on a translucent paper is the
+    /// one exception, since light ink needs a dark material under it.
+    ///
+    /// Light versus dark uses the same luminance rule `derivedInk` does, so a
+    /// theme paper's derived ink and its controls always flip together.
+    static func windowAppearanceName(for appearance: Appearance, theme: ThemeNote.Theme?) -> NSAppearance.Name? {
+        func name(forSurface surface: NSColor) -> NSAppearance.Name {
+            ThemeNote.luminance(of: surface) > 0.5 ? .aqua : .darkAqua
+        }
+        if let paper = theme?.paperHex ?? appearance.paperColor {
+            return name(forSurface: paper)
+        }
+        if let ink = theme?.inkHex {
+            return ThemeNote.luminance(of: ink) > 0.5 ? .darkAqua : .aqua
+        }
+        return nil
+    }
+
+    var effectiveWindowAppearanceName: NSAppearance.Name? {
+        Self.windowAppearanceName(for: appearance, theme: themeOverride)
     }
 
     var effectiveMaterialRawValue: Int {
