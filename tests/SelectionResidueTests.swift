@@ -135,6 +135,75 @@ func runSelectionResidueTests() {
             }
         }
 
+        // The regression the three-line cases above could never see. AppKit
+        // describes a selection with at most three rects, and every whole line
+        // between the first and the last shares ONE block rect. Three lines
+        // happen to give one rect per line; four or more, or Cmd+A from the
+        // top (a single block), do not. Snapping each rect onto the one
+        // fragment it overlapped most collapsed the block onto its tallest
+        // line, leaving every other middle line unselected on screen.
+        let note = """
+        # Groceries and errands
+        Pick up the dry cleaning before six, and remember that the shop on Ferris Street closes early on Thursdays so plan around it.
+        - [ ] oat milk
+        - [x] sourdough
+        Body line three.
+        ## Subheading here
+        1. first numbered
+        2. second numbered
+        Last line of the note.
+        """
+        let length = (note as NSString).length
+        for multiple in [1.0, 1.3, 1.6] {
+            for size in [CGFloat(13), CGFloat(16)] {
+                for scale in [CGFloat(1), CGFloat(2)] {
+                    for (label, range) in [("Cmd+A", NSRange(location: 0, length: length)),
+                                           ("mid-line to mid-line", NSRange(location: 10, length: length - 25)),
+                                           ("line start to mid-line", NSRange(location: 24, length: length - 40))] {
+                        suite("multi-line selection: \(label), spacing \(multiple), \(Int(size))pt, \(Int(scale))x") {
+                            guard let fixture = ResidueFixture(text: note, multiple: multiple, size: size) else {
+                                check(false, "fixture came up")
+                                return
+                            }
+                            let incoming = fixture.incoming(range)
+                            let fragments = fixture.fragments(range)
+                            let painted = fixture.manager.paintedBackgroundRects(
+                                for: incoming, charRange: range, color: selection, scale: scale
+                            ).sorted { $0.minY < $1.minY }
+                            check(fragments.count >= 9, "the note lays out as many lines (\(fragments.count))")
+                            check(incoming.count < fragments.count,
+                                  "AppKit hands over a block rect, not one rect per line (\(incoming.count) for \(fragments.count))")
+                            equal(painted.count, incoming.count, "nothing is added or dropped")
+
+                            let half = 0.5 / scale + 0.0001
+                            var uncovered: [Int] = []
+                            for (index, fragment) in fragments.enumerated() {
+                                let covered = painted.contains {
+                                    $0.minY <= fragment.minY + half && $0.maxY >= fragment.maxY - half
+                                }
+                                if !covered { uncovered.append(index) }
+                            }
+                            check(uncovered.isEmpty, "every selected line is filled top to bottom (unfilled: \(uncovered))")
+
+                            let region = redrawn(fragments.reduce(NSRect.null) { $0.union($1) }, scale: scale)
+                            for rect in painted {
+                                check(contains(region, rect), "painted \(rect) stays inside what deselecting redraws \(region)")
+                            }
+                            for index in painted.indices.dropLast() {
+                                equal(painted[index].maxY, painted[index + 1].minY,
+                                      "rects \(index) and \(index + 1) meet on one edge: no overlap, no gap")
+                            }
+                            if let first = painted.first, let last = painted.last,
+                               let top = fragments.first, let bottom = fragments.last {
+                                check(abs(first.minY - top.minY) <= half, "the fill starts at the first line's top")
+                                check(abs(last.maxY - bottom.maxY) <= half, "and ends at the last line's bottom")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         suite("selection residue: a highlight wash is still corrected, not aligned as a selection") {
             guard let fixture = ResidueFixture(text: "a ==highlight== word\nnext", multiple: 1.6) else {
                 check(false, "fixture came up")

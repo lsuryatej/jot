@@ -227,23 +227,35 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
         return output
     }
 
-    /// Snaps one incoming selection rect onto the line fragment it belongs to,
+    /// Snaps one incoming selection rect onto the line fragments it covers,
     /// with both vertical edges on the nearest device pixel. Returns nil when
-    /// this fragment is not the rect's fragment.
+    /// the rect covers none of `lineFragments`.
     ///
     /// The residue this exists for: AppKit's background pass rounds every
     /// selection rect out to whole points (`NSIntegralRect`) before handing it
     /// to `fillBackgroundRectArray`, but when the selection goes away
-    /// `NSTextView` invalidates the exact line fragment, and the window server
-    /// only grows that out to the next device pixel. With a line-height
+    /// `NSTextView` invalidates the exact line fragments, and the window server
+    /// only grows those out to the next device pixel. With a line-height
     /// multiple the fragment edges are fractional (58.8pt, say), so the fill
     /// started at 58.0 and the redraw at 58.5: one pixel row of selection
     /// colour painted above the text and never painted over. The same happens
     /// at the bottom edge, and wherever a Cmd+B / Cmd+I edit leaves the
     /// selection on a line whose edges are fractional.
     ///
+    /// One rect is not one line. AppKit describes a selection with at most
+    /// three rects: the partial first line, one block for every whole line in
+    /// between, and the partial last line (Cmd+A from the top of a note is a
+    /// single block). The block must keep its full height, so the rect's top
+    /// takes the top of the first fragment it covers and its bottom the bottom
+    /// of the last. Snapping each rect onto just one fragment, the one it
+    /// overlapped most, collapsed every middle block onto its tallest line,
+    /// which is how the #9 regression came back.
+    ///
+    /// "Covers" means at least half of the fragment: the rounding out adds
+    /// under a point, so a neighbouring fragment it pokes into never
+    /// qualifies, while a fragment the rect really spans always does.
     /// Snapping each edge to the nearest pixel keeps the fill inside that
-    /// redraw by construction, and two selected lines now share one edge
+    /// redraw by construction, and the three rects meet on one shared edge
     /// instead of overlapping by a point (which doubled up a translucent
     /// selection colour). x and width stay AppKit's: the invalidation spans
     /// the whole fragment width, so horizontal rounding can never escape it.
@@ -252,20 +264,29 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
     ///
     /// - Parameters:
     ///   - rect: the rect AppKit wants filled, in the text view's coordinates.
-    ///   - lineFragment: the fragment, in the text container's coordinates.
+    ///   - lineFragments: the selection's fragments, in the text container's
+    ///     coordinates, in layout order.
     ///   - containerInset: the text view's `textContainerInset`.
     ///   - scale: device pixels per point of the window being drawn into.
     static func selectionRect(
         for rect: NSRect,
-        lineFragment: NSRect,
+        lineFragments: [NSRect],
         containerInset: NSSize,
         scale: CGFloat
     ) -> NSRect? {
-        let fragment = lineFragment.offsetBy(dx: containerInset.width, dy: containerInset.height)
-        guard fragment.intersects(rect) else { return nil }
+        var top: CGFloat?
+        var bottom: CGFloat?
+        for lineFragment in lineFragments {
+            let fragment = lineFragment.offsetBy(dx: containerInset.width, dy: containerInset.height)
+            let overlap = min(rect.maxY, fragment.maxY) - max(rect.minY, fragment.minY)
+            guard fragment.height > 0, overlap >= fragment.height / 2 else { continue }
+            top = min(top ?? fragment.minY, fragment.minY)
+            bottom = max(bottom ?? fragment.maxY, fragment.maxY)
+        }
+        guard let top, let bottom else { return nil }
         let pixels = max(1, scale)
-        let minY = (fragment.minY * pixels).rounded() / pixels
-        let maxY = (fragment.maxY * pixels).rounded() / pixels
+        let minY = (top * pixels).rounded() / pixels
+        let maxY = (bottom * pixels).rounded() / pixels
         return NSRect(x: rect.minX, y: minY, width: rect.width, height: maxY - minY)
     }
 
@@ -285,24 +306,27 @@ final class TextHeightBackgroundLayoutManager: NSLayoutManager {
     private func alignedSelectionRects(for rects: [NSRect], charRange: NSRange, scale: CGFloat) -> [NSRect] {
         guard let textStorage, textStorage.length > 0, charRange.length > 0 else { return rects }
 
-        let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
         let inset = firstTextView?.textContainerInset ?? .zero
+        // Every fragment the rects reach, not only the ones `charRange` names:
+        // a partial redraw can hand over a clipped range with rects that still
+        // span whole lines, and a block must not lose the lines outside it.
+        var glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+        if let container = textContainers.first {
+            let reach = rects.reduce(NSRect.null) { $0.union($1) }
+                .offsetBy(dx: -inset.width, dy: -inset.height)
+            glyphRange = NSUnionRange(glyphRange, self.glyphRange(forBoundingRectWithoutAdditionalLayout: reach, in: container))
+        }
+        var fragments: [NSRect] = []
+        enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, _, _ in
+            fragments.append(fragmentRect)
+        }
+        // The empty line after a trailing newline has no glyphs, so it is not
+        // enumerated, yet Cmd+A selects it.
+        if extraLineFragmentTextContainer != nil, extraLineFragmentRect.height > 0 {
+            fragments.append(extraLineFragmentRect)
+        }
         return rects.map { rect in
-            // The rect arrives rounded out to whole points, so it can poke up
-            // to a point into the neighbouring fragment: pick the fragment it
-            // overlaps most, not the first one it touches.
-            var best: (overlap: CGFloat, rect: NSRect)?
-            enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, _, _ in
-                guard let snapped = Self.selectionRect(
-                    for: rect, lineFragment: fragmentRect, containerInset: inset, scale: scale
-                ) else { return }
-                let fragment = fragmentRect.offsetBy(dx: inset.width, dy: inset.height)
-                let overlap = min(rect.maxY, fragment.maxY) - max(rect.minY, fragment.minY)
-                if overlap > (best?.overlap ?? -.greatestFiniteMagnitude) {
-                    best = (overlap, snapped)
-                }
-            }
-            return best?.rect ?? rect
+            Self.selectionRect(for: rect, lineFragments: fragments, containerInset: inset, scale: scale) ?? rect
         }
     }
 

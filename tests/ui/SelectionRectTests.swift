@@ -36,7 +36,7 @@ private struct EditorFixture {
     let container: NSTextContainer
     let storage: NSTextStorage
 
-    init?(text: String) {
+    init?(text: String, fontSize: CGFloat = 13, lineHeightMultiple: Double = 1.6) {
         let window = NSWindow(
             contentRect: NSRect(x: 140, y: 140, width: 440, height: 360),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -54,8 +54,8 @@ private struct EditorFixture {
         // load-bearing for this geometry: rects arrive with it applied while
         // fragments are measured without it.
         view.textContainerInset = NSSize(width: 18, height: 38)
-        view.baseFont = .systemFont(ofSize: 13)
-        view.lineHeightMultiple = 1.6
+        view.baseFont = .systemFont(ofSize: fontSize)
+        view.lineHeightMultiple = lineHeightMultiple
 
         scroll.documentView = view
         window.contentView?.addSubview(scroll)
@@ -249,6 +249,113 @@ func runSelectionRectTests() {
             }
             check(painted[0].height != painted[1].height,
                   "the body line is not painted at the heading's height")
+        }
+
+        // MARK: what actually reaches the screen
+
+        // The regression after the deselect-residue fix. Every check above
+        // reads rects back, and every one of them selected three lines or
+        // fewer, which AppKit describes as one rect per line. Four or more,
+        // or Cmd+A, arrive as a partial first line, ONE block for every whole
+        // line between, and a partial last line; snapping that block onto a
+        // single fragment left all but one middle line unselected. So this
+        // renders the real view and reads the pixels: every line of the
+        // selection must change colour top to bottom, and nothing outside it.
+        let note = """
+        # Groceries and errands
+        Pick up the dry cleaning before six, and remember that the shop on Ferris Street closes early on Thursdays so plan around it.
+        - [ ] oat milk
+        - [x] sourdough
+        Body line three.
+        ## Subheading here
+        1. first numbered
+        2. second numbered
+        Last line of the note.
+        """
+        for multiple in [1.0, 1.3, 1.6] {
+            for size in [CGFloat(13), CGFloat(16)] {
+                for label in ["Cmd+A", "mid-line to mid-line"] {
+                    suite("rendered multi-line selection: \(label), spacing \(multiple), \(Int(size))pt") {
+                        guard let fixture = EditorFixture(text: note, fontSize: size, lineHeightMultiple: multiple) else {
+                            check(false, "fixture came up")
+                            return
+                        }
+                        defer { fixture.close() }
+                        let view = fixture.view
+                        // Tall enough to render every line, however large the
+                        // font and spacing.
+                        view.isVerticallyResizable = true
+                        view.sizeToFit()
+                        fixture.window.makeFirstResponder(view)
+                        view.setSelectedRange(NSRange(location: 0, length: 0))
+                        pump(0.1)
+                        guard let (plain, sx, sy) = renderBitmap(view) else {
+                            check(false, "the view renders")
+                            return
+                        }
+
+                        let length = fixture.storage.length
+                        if label == "Cmd+A" {
+                            view.selectAll(nil)
+                        } else {
+                            view.setSelectedRange(NSRange(location: 10, length: length - 25))
+                        }
+                        pump(0.1)
+                        let range = view.selectedRange()
+                        guard range.length > 0, let (selected, _, _) = renderBitmap(view) else {
+                            check(false, "the selection took and the view renders")
+                            return
+                        }
+
+                        func changed(_ x: Int, _ y: Int) -> Bool {
+                            guard let a = plain.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                                  let b = selected.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+                            return max(abs(a.redComponent - b.redComponent),
+                                       abs(a.greenComponent - b.greenComponent),
+                                       abs(a.blueComponent - b.blueComponent)) > 0.06
+                        }
+
+                        let origin = view.textContainerOrigin
+                        let glyphs = fixture.manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                        var lines: [(fragment: NSRect, span: NSRect)] = []
+                        fixture.manager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, lineGlyphs, _ in
+                            let part = NSIntersectionRange(lineGlyphs, glyphs)
+                            let span = fixture.manager.boundingRect(forGlyphRange: part, in: fixture.container)
+                            lines.append((rect.offsetBy(dx: origin.x, dy: origin.y),
+                                          span.offsetBy(dx: origin.x, dy: origin.y)))
+                        }
+                        check(lines.count >= 9, "the note lays out as many lines (\(lines.count))")
+
+                        var unfilled: [String] = []
+                        for (index, line) in lines.enumerated() {
+                            // Columns across the selected part of the line, so
+                            // a row counts as selected wherever it clears a
+                            // glyph; the first and last device row are left to
+                            // the pixel snapping.
+                            let columns = stride(from: line.span.minX + 1, to: line.span.maxX - 1, by: 2)
+                                .map { Int(($0 * sx).rounded()) }
+                            let top = Int((line.fragment.minY * sy).rounded()) + 1
+                            let bottom = Int((line.fragment.maxY * sy).rounded()) - 1
+                            let missing = (top..<max(top, bottom)).filter { y in !columns.contains { changed($0, y) } }
+                            if !missing.isEmpty { unfilled.append("line \(index): \(missing.count) rows") }
+                        }
+                        check(unfilled.isEmpty, "every selected line is filled top to bottom \(unfilled)")
+
+                        // Nothing leaks past the selection's own lines.
+                        if let first = lines.first, let last = lines.last {
+                            let width = Int(view.bounds.width * sx)
+                            let above = Int((first.fragment.minY * sy).rounded()) - 2
+                            let below = Int((last.fragment.maxY * sy).rounded()) + 1
+                            check(!(0..<width).contains { changed($0, above) }, "nothing is painted above the first line")
+                            check(!(0..<width).contains { changed($0, below) }, "nothing is painted below the last line")
+                        }
+                        if !unfilled.isEmpty {
+                            let path = saveRender(view, named: "multiline-selection-\(label)-\(multiple)-\(Int(size))")
+                            print("         render: \(path ?? "not saved")")
+                        }
+                    }
+                }
+            }
         }
 
         // MARK: attribute washes, which must still be corrected
