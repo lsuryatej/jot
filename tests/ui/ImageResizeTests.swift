@@ -161,7 +161,9 @@ func runImageResizeTests() {
             equal(view.selectedRange(), NSRange(location: end, length: 0), "right half: caret after the image")
 
             let beside = view.convert(NSPoint(x: placed.rect.maxX + 40, y: placed.rect.midY), to: nil)
-            click(window, at: beside)
+            // Queued up-event: NSTextView's mouseDown tracks until mouseUp,
+            // so the harness `click()` (sendEvent only) would wedge here.
+            drag(window, from: beside, to: beside, steps: 1)
             equal(view.selectedRange(), NSRange(location: end, length: 0), "beside the image: caret after it")
 
             view.insertText("12345", replacementRange: NSRange(location: NSNotFound, length: 0))
