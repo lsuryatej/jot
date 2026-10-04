@@ -20,6 +20,7 @@ struct EdgeStackView: View {
     /// Holds the visible cards still while one above them changes height.
     @State private var scrollAnchor = EdgeScrollAnchor()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,7 +66,17 @@ struct EdgeStackView: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
-                    .background(EdgeScrollAnchorProbe(anchor: scrollAnchor))
+                    .background(EdgeScrollAnchorProbe(
+                        anchor: scrollAnchor,
+                        // Cards scrolling up under the header fade out over
+                        // the stack's top padding rather than being sliced
+                        // off at a hard line. A card at rest sits below the
+                        // fade, untouched.
+                        topFade: Self.topFadeHeight(
+                            increasesContrast: settings.increasesContrast,
+                            reduceTransparency: reduceTransparency
+                        )
+                    ))
                 }
                 .onChange(of: scrollToIndex) { _, target in
                     guard let target, notesManager.notes.indices.contains(target) else { return }
@@ -80,6 +91,13 @@ struct EdgeStackView: View {
                 }
             }
         }
+    }
+
+    /// How deep the scroll-edge fade is: the stack's top padding, or none
+    /// when the user has asked for contrast or less transparency, where
+    /// text dissolving into the paper is the opposite of what they want.
+    static func topFadeHeight(increasesContrast: Bool, reduceTransparency: Bool) -> CGFloat {
+        increasesContrast || reduceTransparency ? 0 : 10
     }
 
     private var header: some View {
@@ -536,38 +554,123 @@ final class EdgeScrollAnchor {
     }
 }
 
-/// Sits behind the stack's content to find the scroll view around it, and to
+/// Sits behind the stack's content to find the scroll view around it: to
 /// hear, in the middle of SwiftUI's layout pass, that the content's height
-/// has just changed.
+/// has just changed, and to give the scroll view its top-edge fade.
 struct EdgeScrollAnchorProbe: NSViewRepresentable {
     let anchor: EdgeScrollAnchor
+    /// Depth of the fade at the top of the viewport; 0 for a hard edge.
+    var topFade: CGFloat = 0
 
     func makeNSView(context: Context) -> ProbeView {
         let view = ProbeView()
         view.anchor = anchor
+        view.topFade = topFade
         return view
     }
 
     func updateNSView(_ view: ProbeView, context: Context) {
         view.anchor = anchor
+        view.topFade = topFade
     }
 
     final class ProbeView: NSView {
         weak var anchor: EdgeScrollAnchor?
+        var topFade: CGFloat = 0 {
+            didSet { if topFade != oldValue { fade.update(depth: topFade) } }
+        }
+        private let fade = EdgeTopFade()
 
         override func viewDidMoveToSuperview() {
             super.viewDidMoveToSuperview()
-            anchor?.scrollView = enclosingScrollView
+            adopt(enclosingScrollView)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Layer geometry can flip once the view is in a window; lay
+            // the fade out again against the real thing.
+            if fade.scrollView != nil { fade.update(depth: topFade) }
         }
 
         override func setFrameSize(_ newSize: NSSize) {
             let changed = abs(newSize.height - frame.height) > 0.01
             super.setFrameSize(newSize)
-            if anchor?.scrollView == nil { anchor?.scrollView = enclosingScrollView }
+            if anchor?.scrollView == nil || fade.scrollView == nil { adopt(enclosingScrollView) }
             if changed { anchor?.restore() }
         }
 
+        private func adopt(_ scrollView: NSScrollView?) {
+            guard let scrollView else { return }
+            anchor?.scrollView = scrollView
+            fade.attach(to: scrollView, depth: topFade)
+        }
+
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+/// The scroll-edge fade at the top of the edge stack, as a gradient mask on
+/// the stack's own scroll view layer.
+///
+/// In AppKit rather than a SwiftUI `.mask`: the cards are real NSTextViews
+/// hosted inside SwiftUI's scroll view, and a layer mask on that scroll view
+/// is guaranteed to cover them, scroller and all. The mask is opaque except
+/// for the top `depth` points, so nothing below the fade is touched.
+@MainActor
+final class EdgeTopFade {
+    private(set) weak var scrollView: NSScrollView?
+    private var depth: CGFloat = 0
+    private var observer: NSObjectProtocol?
+
+    func attach(to scrollView: NSScrollView, depth: CGFloat) {
+        guard scrollView !== self.scrollView else { return update(depth: depth) }
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        self.scrollView = scrollView
+        scrollView.postsFrameChangedNotifications = true
+        observer = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: scrollView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.layout() }
+        }
+        update(depth: depth)
+    }
+
+    func update(depth: CGFloat) {
+        self.depth = depth
+        layout()
+        // A layer only knows which way its geometry runs once it is in the
+        // layer tree, which for a freshly layer-backed view is a turn later.
+        DispatchQueue.main.async { [weak self] in self?.layout() }
+    }
+
+    private func layout() {
+        guard let scrollView else { return }
+        guard depth > 0 else {
+            scrollView.layer?.mask = nil
+            return
+        }
+        scrollView.wantsLayer = true
+        guard let layer = scrollView.layer else { return }
+        let mask = (layer.mask as? CAGradientLayer) ?? CAGradientLayer()
+        let bounds = layer.bounds
+        let stop = NSNumber(value: Double(min(1, depth / max(bounds.height, 1))))
+        // Whichever way the layer's geometry runs, the clear end goes at the
+        // top of the viewport, under the header.
+        let topIsMinY = layer.contentsAreFlipped()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = bounds
+        mask.colors = [NSColor.clear.cgColor, NSColor.black.cgColor, NSColor.black.cgColor]
+        mask.locations = [0, stop, 1]
+        mask.startPoint = CGPoint(x: 0.5, y: topIsMinY ? 0 : 1)
+        mask.endPoint = CGPoint(x: 0.5, y: topIsMinY ? 1 : 0)
+        layer.mask = mask
+        CATransaction.commit()
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 }
 

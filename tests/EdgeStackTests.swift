@@ -252,5 +252,33 @@ func runEdgeStackTests() {
                 equal(title?.pointSize, 13, "\(name): a point larger than the body")
             }
         }
+
+        // MARK: - Top edge: fade, don't clip
+
+        suite("the edge stack fades content out under its header instead of clipping it") {
+            equal(EdgeStackView.topFadeHeight(increasesContrast: false, reduceTransparency: false), 10,
+                  "a short fade, as deep as the stack's top padding, so a card at rest is untouched")
+            equal(EdgeStackView.topFadeHeight(increasesContrast: true, reduceTransparency: false), 0,
+                  "Increase Contrast: a hard edge, never text fading into the paper")
+            equal(EdgeStackView.topFadeHeight(increasesContrast: false, reduceTransparency: true), 0,
+                  "Reduce Transparency: a hard edge too")
+        }
+
+        suite("the fade is a mask over the stack's scroll view, covering the cards' AppKit views") {
+            @MainActor func mask(increasesContrast: Bool) -> (CAGradientLayer?, NSScrollView?) {
+                let harness = EdgeStackHarness(notes: edgeStackSeed(8), height: 400)
+                harness.settings.increasesContrast = increasesContrast
+                harness.pump()
+                let scroll = harness.stackScrollView
+                return (scroll?.layer?.mask as? CAGradientLayer, scroll)
+            }
+            let (fade, scroll) = mask(increasesContrast: false)
+            check(fade != nil, "the stack's scroll view carries a gradient mask")
+            equal(fade?.frame, scroll?.layer?.bounds, "covering the whole viewport")
+            let stop = (fade?.locations?[1].doubleValue ?? 0) * Double(scroll?.layer?.bounds.height ?? 0)
+            check(abs(stop - 10) < 0.01, "opaque from 10pt down (\(stop))")
+            let (none, _) = mask(increasesContrast: true)
+            check(none == nil, "and none under Increase Contrast")
+        }
     }
 }
