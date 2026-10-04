@@ -210,5 +210,47 @@ func runEdgeStackTests() {
             let applied = harness.cards().values.compactMap { ($0.documentView as? ChecklistTextView)?.lineHeightMultiple }
             equal(applied, Array(repeating: spacing, count: 5), "all five cards take the new line spacing")
         }
+
+        // MARK: - Typography: the note's own font
+
+        suite("an edge card is set in its note's own font, not the app default") {
+            EdgeCardHeights.shared.removeAll()
+            let manager = makeManager(seed: ["Serif note\nbody", "Default note\nbody"])
+            manager.notes[0].fontName = "New York"
+            let harness = EdgeStackHarness(manager: manager)
+            harness.settings.noteFontName = "SF Mono"
+            harness.pump()
+            let serif = harness.card(0)?.documentView as? ChecklistTextView
+            let plain = harness.card(1)?.documentView as? ChecklistTextView
+            equal(serif?.baseFont, NoteFont.resolved("New York", size: serif?.baseFont.pointSize ?? 0),
+                  "the New York note's card is in New York")
+            equal(plain?.baseFont.isFixedPitch, true, "a note with no font of its own follows the default (SF Mono)")
+        }
+
+        suite("an edge card keeps its compact size whatever the note's size") {
+            EdgeCardHeights.shared.removeAll()
+            let manager = makeManager(seed: ["Big\nnote"])
+            manager.notes[0].fontSize = 20
+            let harness = EdgeStackHarness(manager: manager)
+            harness.pump()
+            let editor = harness.card(0)?.documentView as? ChecklistTextView
+            equal(editor?.baseFont.pointSize, 12, "capped at the 12pt card body")
+        }
+
+        suite("an edge card's title is a bold cut of the note's own font") {
+            for name in ["SF Pro", "New York", "SF Mono"] {
+                let base = NoteFont.resolved(name, size: 12)
+                let view = makeTextView("Groceries\nmilk")
+                view.baseFont = base
+                view.stylesFirstLineAsTitle = true
+                view.applyChecklistStyling()
+                let title = view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+                equal(title?.familyName, base.familyName, "\(name): the title stays in the note's family")
+                equal(title?.isFixedPitch, base.isFixedPitch, "\(name): monospaced only if the note is")
+                check(NSFontManager.shared.weight(of: title ?? base) > NSFontManager.shared.weight(of: base),
+                      "\(name): heavier than the body")
+                equal(title?.pointSize, 13, "\(name): a point larger than the body")
+            }
+        }
     }
 }

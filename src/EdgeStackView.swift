@@ -55,13 +55,7 @@ struct EdgeStackView: View {
                                 index: index,
                                 count: count,
                                 style: style,
-                                baseFont: NoteFont.resolved(
-                                    settings.effectiveNoteFontName,
-                                    // Cards stay compact previews: the chosen
-                                    // family, but never larger than the old
-                                    // fixed 12pt body no matter the size setting.
-                                    size: min(12, settings.effectiveFontSize)
-                                ),
+                                baseFont: EdgeCardStyle.font(for: note, settings: settings),
                                 isCarried: draggingNoteID == note.id,
                                 draggingNoteID: $draggingNoteID,
                                 scrollAnchor: scrollAnchor
@@ -115,7 +109,6 @@ struct EdgeStackView: View {
 /// its note, resolved once per stack render instead of read by every card
 /// observing `SettingsManager` (which re-rendered all of them on any change).
 struct EdgeCardStyle: Equatable {
-    var editorFont: NSFont
     var lineHeightMultiple: Double
     var listKeyword: String
     var codeKeyword: String
@@ -128,7 +121,6 @@ struct EdgeCardStyle: Equatable {
 
     @MainActor
     init(settings: SettingsManager) {
-        editorFont = settings.effectiveEditorFont
         lineHeightMultiple = settings.effectiveLineSpacing
         listKeyword = settings.effectiveListKeyword
         codeKeyword = settings.effectiveCodeKeyword
@@ -138,6 +130,18 @@ struct EdgeCardStyle: Equatable {
         hairlineColor = settings.effectiveHairlineColor
         restingHairlineOpacity = settings.hairlineOpacity(settings.effectiveWantsLitEdge ? 0.16 : 0.10)
         hoveredHairlineOpacity = settings.hairlineOpacity(0.16)
+    }
+
+    /// A card's body font: the note's own font when it has one (a theme
+    /// note still wins, as everywhere), the default otherwise. Cards stay
+    /// compact previews: the note's family, but never larger than the 12pt
+    /// card body whatever its size.
+    @MainActor
+    static func font(for note: Note, settings: SettingsManager) -> NSFont {
+        NoteFont.resolved(
+            settings.resolvedFontName(perNote: note.fontName),
+            size: CGFloat(min(12, settings.resolvedFontSize(perNote: note.fontSize)))
+        )
     }
 }
 
@@ -227,7 +231,7 @@ struct NoteCard: View, Equatable {
                 text: note.text,
                 onTextChange: { [notesManager, index] in notesManager.setText($0, at: index) },
                 lineHeightMultiple: style.lineHeightMultiple,
-                baseFont: style.editorFont,
+                baseFont: baseFont,
                 listKeyword: style.listKeyword,
                 codeKeyword: style.codeKeyword,
                 ink: style.ink,
