@@ -156,6 +156,22 @@ enum Celebration {
         return life.base + life.range + 0.4
     }
 
+    /// What actually goes on screen when a celebration fires.
+    ///
+    /// Reduce Motion deliberately plays no part here: the confetti is a rare,
+    /// user-chosen moment (and "Sound only" is one click away in Settings),
+    /// so it fires the same either way.
+    enum Presentation: Equatable {
+        /// The sound and nothing else.
+        case soundOnly
+        /// The sound plus the style's full-screen confetti.
+        case particles
+    }
+
+    static func presentation(for style: CelebrationStyle) -> Presentation {
+        style == .none ? .soundOnly : .particles
+    }
+
     /// Plays the chosen sound. Safe to call with any style; only the sound is
     /// this function's business.
     static func play(sound: CelebrationSound) {

@@ -22,7 +22,8 @@ final class CelebrationWindowController {
     /// style is "sound only"; the confetti does not.
     static func fire(style: CelebrationStyle, sound: CelebrationSound) {
         Celebration.play(sound: sound)
-        guard style != .none, let screen = NSScreen.main else { return }
+        guard Celebration.presentation(for: style) == .particles,
+              let screen = NSScreen.main else { return }
         current?.dismiss()
         current = CelebrationWindowController(style: style, screen: screen)
         current?.run()
@@ -70,7 +71,7 @@ final class CelebrationWindowController {
         stopEmittingItem?.cancel()
         dismissItem?.cancel()
         window.orderOut(nil)
-        Self.current = nil
+        if Self.current === self { Self.current = nil }
     }
 
     private var emitterLayers: [CAEmitterLayer] {

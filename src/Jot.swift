@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var settingsCloseMonitor: Any?
     private var edgeTrigger: EdgeTriggerWindow?
     private var edgeAutoHideTimer: Timer?
+    /// Which edge slide is in charge; stale completions check it and stand
+    /// down. See `EdgeRevealState`.
+    private var edgeReveal = EdgeRevealState()
+    private let edgeAnimator = EdgeSlideAnimator()
     /// Guards against re-applying a mode that is already in effect. The
     /// @Published sink fires once on subscribe, which would otherwise tear the
     /// interface down and rebuild it immediately after launch.
@@ -34,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         CurrencyRates.bootstrap(fetchesLive: settings.fetchesLiveCurrencyRates)
+        ReduceMotion.startObserving()
         UpdateChecker.check(enabled: settings.checksForUpdates)
         notesManager.timerKeyword = settings.effectiveTimerKeyword
         notesManager.pomodoroKeyword = settings.effectivePomodoroKeyword
@@ -266,6 +271,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .receive(on: RunLoop.main)
             .sink { [weak self] theme in self?.settings.themeOverride = theme }
             .store(in: &cancellables)
+
+        // The panel is the only window that shows a note (Screen Edge cards,
+        // the dropdown, and the global search overlay all live inside it),
+        // so pinning its appearance to the paper covers every surface.
+        // Computed from the published values rather than read back from
+        // settings: @Published emits before the stored property changes.
+        settings.$appearance
+            .combineLatest(settings.$themeOverride)
+            .map { SettingsManager.windowAppearanceName(for: $0, theme: $1) }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] name in self?.panel.adoptPaperAppearance(name) }
+            .store(in: &cancellables)
     }
 
     // MARK: - Reordering
@@ -345,7 +363,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard appliedMode != mode else { return }
 
         let wasVisible = isInterfaceVisible
-        hideInterface()
+        // At once: the panel is about to be restyled and moved, so a slide
+        // out would be animating a window that no longer looks like it.
+        hideInterface(animated: false)
         appliedMode = mode
 
         let desiredPolicy: NSApplication.ActivationPolicy =
@@ -378,8 +398,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     // MARK: - Visibility
 
+    /// A sidebar sliding away is already hidden as far as every command is
+    /// concerned: the hide was asked for, so the next toggle means show and
+    /// reverses the slide rather than being swallowed by it.
     private var isInterfaceVisible: Bool {
-        panel?.isVisible ?? false
+        guard let panel, panel.isVisible else { return false }
+        return edgeReveal.phase != .concealing
+    }
+
+    /// The edge sidebar is out, or on its way out of the edge towards the
+    /// user. False mid-hide, so a click or hot key then reverses the hide.
+    private var isEdgeRevealedOrArriving: Bool {
+        panel.isVisible && edgeReveal.isArrivingOrShown
     }
 
     /// On screen is not the same as in front of you.
@@ -400,7 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// frontmost, so demanding app activation here would break the deliberate
     /// dismiss in the two modes that need it most.
     private var isInterfaceFocused: Bool {
-        guard let panel, panel.isVisible else { return false }
+        guard isInterfaceVisible else { return false }
         return panel.isKeyWindow
     }
 
@@ -429,7 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Already out, focus elsewhere: hand it the keyboard rather than
             // sliding it in from off screen a second time. Same distinction
             // the edge strip's own click handler makes in `installEdgeTrigger`.
-            if panel.isVisible {
+            if isEdgeRevealedOrArriving {
                 focusPanel()
                 return
             }
@@ -440,6 +470,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if settings.displayMode.anchorsToStatusItem {
             anchorPanelToStatusItem()
         }
+        // An edge fade leaves alpha wherever it stopped; windowed modes
+        // never animate it, so they always show fully opaque.
+        panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         panel.focusEditor()
@@ -451,7 +484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if edgeTrigger == nil {
             edgeTrigger = EdgeTriggerWindow { [weak self] activating in
                 guard let self else { return }
-                if self.panel.isVisible {
+                if self.isEdgeRevealedOrArriving {
                     // Already out: a click on the bar should still hand it focus.
                     if activating { self.focusPanel() }
                     return
@@ -472,33 +505,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// hover must never take the keyboard: the pointer reaching a screen edge
     /// is usually incidental, and stealing focus there sends the user's next
     /// keystrokes into this note instead of the app they were working in.
+    ///
+    /// Called mid-hide, it reverses from wherever the panel has got to, in
+    /// the time the remaining distance needs, rather than jumping back off
+    /// screen and starting over.
     private func revealFromEdge(activating: Bool) {
-        guard let visible = (NSScreen.main?.visibleFrame) else { return }
+        guard let frames = edgeFrames() else { return }
+        // Only a hide still under way is reversed from where it is; anything
+        // else (first reveal, after a mode switch) starts from the edge.
+        let interrupting = panel.isVisible && edgeReveal.phase == .concealing
+        let token = edgeReveal.beginReveal()
 
-        let width = CGFloat(settings.edgeWidth)
-        let onScreenX = settings.screenEdge == .right ? visible.maxX - width : visible.minX
-        let offScreenX = settings.screenEdge == .right ? visible.maxX : visible.minX - width
-        let docked = NSRect(x: onScreenX, y: visible.minY, width: width, height: visible.height)
-
-        panel.setFrame(
-            NSRect(x: offScreenX, y: visible.minY, width: width, height: visible.height),
-            display: false
+        // Under Reduce Motion the sidebar never travels: it is placed docked
+        // and only its alpha animates, 0 to 1, over the same duration.
+        let style = MotionPolicy.edgeReveal(reduceMotion: ReduceMotion.isEnabled)
+        let start = EdgeRevealGeometry.revealStart(
+            style: style, interrupting: interrupting,
+            currentFrame: panel.frame, currentAlpha: panel.alphaValue, frames: frames
         )
-        panel.orderFrontRegardless()
+        let target = EdgeRevealGeometry.revealTarget(frames: frames)
+        panel.alphaValue = start.alpha
+        panel.setFrame(start.frame, display: false)
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(docked, display: true)
-        } completionHandler: { [weak self] in
-            // NSAnimationContext's completion handler always fires on the
-            // main thread, but its type is not statically @MainActor.
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if activating { self.focusPanel() }
-                self.startEdgeAutoHide()
-            }
+        if !interrupting {
+            // Lay the content out and draw it at its final size while the
+            // panel is still off screen (or transparent). Ordered front with
+            // a stale backing store, the first frames showed SwiftUI settling
+            // into a new size mid-slide.
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.display()
         }
+
+        switch EdgeRevealGeometry.keyTiming(activating: activating) {
+        case .beforeFirstFrame:
+            // Keyed now, off screen, so the caret and key-state redraw are
+            // done before the slide is visible instead of on landing.
+            focusPanel()
+        case .never:
+            panel.orderFrontRegardless()
+        }
+
+        let duration: TimeInterval
+        switch style {
+        case .slide:
+            duration = EdgeRevealGeometry.slideDuration(
+                fromX: start.frame.minX, toX: target.frame.minX, frames: frames
+            )
+        case .fade:
+            duration = EdgeRevealGeometry.fadeDuration(fromAlpha: start.alpha, toAlpha: target.alpha)
+        }
+
+        edgeAnimator.run(
+            panel, from: start, to: target, duration: duration, direction: .reveal
+        ) { [weak self] in
+            guard let self else { return }
+            // A hide (or a newer reveal) took over mid-slide: nothing to
+            // land, and nothing to focus on a panel leaving the screen.
+            guard self.edgeReveal.finish(token) else { return }
+            // Keyed before the slide began; only if something took the
+            // keyboard away during it does landing hand it back.
+            if activating, !self.panel.isKeyWindow { self.focusPanel() }
+            self.startEdgeAutoHide()
+        }
+    }
+
+    /// The reveal played backwards: the same straight path back past the
+    /// edge (or, under Reduce Motion, the same fade to transparent) over the
+    /// same duration, on the reveal's curve reversed in time. A reveal
+    /// arriving before it lands reverses it; see `revealFromEdge`.
+    private func concealToEdge() {
+        // Already sliding away: let that slide finish rather than cutting it.
+        guard edgeReveal.phase != .concealing else { return }
+        guard let frames = edgeFrames(), let token = edgeReveal.beginConceal() else {
+            hideImmediately()
+            return
+        }
+
+        let style = MotionPolicy.edgeReveal(reduceMotion: ReduceMotion.isEnabled)
+        let target = EdgeRevealGeometry.concealTarget(style: style, frames: frames)
+        let duration: TimeInterval
+        switch style {
+        case .slide:
+            duration = EdgeRevealGeometry.slideDuration(
+                fromX: panel.frame.minX, toX: target.frame.minX, frames: frames
+            )
+        case .fade:
+            duration = EdgeRevealGeometry.fadeDuration(fromAlpha: panel.alphaValue, toAlpha: target.alpha)
+        }
+
+        let from = EdgeRevealGeometry.Pose(frame: panel.frame, alpha: panel.alphaValue)
+        edgeAnimator.run(
+            panel, from: from, to: target, duration: duration, direction: .conceal
+        ) { [weak self] in
+            guard let self else { return }
+            // A show arrived mid-slide and reversed it: leave it out.
+            guard self.edgeReveal.finish(token) else { return }
+            self.panel.orderOut(nil)
+            self.panel.alphaValue = 1
+        }
+    }
+
+    /// The docked and just-off-screen frames for the current edge and width.
+    private func edgeFrames() -> (docked: CGRect, hidden: CGRect)? {
+        guard let visible = NSScreen.main?.visibleFrame else { return nil }
+        return EdgeRevealGeometry.frames(
+            visible: visible, width: CGFloat(settings.edgeWidth), edge: settings.screenEdge
+        )
     }
 
     /// Puts the note back to the size it had before it was docked.
@@ -579,9 +691,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.setFrameOrigin(NSPoint(x: x, y: buttonRect.minY - size.height - 6))
     }
 
-    private func hideInterface() {
+    /// Edge mode slides the sidebar back out the way it came; every other
+    /// mode, and any caller passing `animated: false`, orders out at once.
+    private func hideInterface(animated: Bool = true) {
         stopEdgeAutoHide()
+        guard let panel else { return }
+        if animated, settings.displayMode.isEdgeDocked, panel.isVisible {
+            concealToEdge()
+        } else {
+            hideImmediately()
+        }
+    }
+
+    private func hideImmediately() {
+        edgeAnimator.cancel()
+        edgeReveal.reset()
         panel?.orderOut(nil)
+        panel?.alphaValue = 1
     }
 
     // MARK: - Status item
@@ -790,7 +916,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let identifier = notification.request.identifier
         Task { @MainActor in
             if identifier.hasPrefix(reminderIdentifierPrefix) {
-                CelebrationWindowController.fire(style: self.settings.celebrationStyle, sound: self.settings.timerSound)
+                CelebrationWindowController.fire(
+                    style: self.settings.celebrationStyle,
+                    sound: self.settings.timerSound
+                )
             }
         }
         completionHandler([.banner, .sound])
@@ -808,6 +937,7 @@ final class FloatingPanel: NSPanel {
 
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
+        // Re-decided per mode in `apply(mode:)`: never while edge-docked.
         isMovableByWindowBackground = true
         backgroundColor = .clear // handled in SwiftUI
         hasShadow = true
@@ -820,6 +950,7 @@ final class FloatingPanel: NSPanel {
     /// Window level, Spaces behaviour, and focus-stealing all differ per mode.
     func apply(mode: DisplayMode) {
         hidesOnDeactivate = mode.hidesOnDeactivate
+        animationBehavior = mode.windowAnimationBehavior
 
         // A panel docked flush against the screen edge has nothing to close,
         // minimise, or zoom, and the traffic lights read as a stray window.
@@ -830,6 +961,10 @@ final class FloatingPanel: NSPanel {
         if mode.isEdgeDocked {
             titlebarAppearsTransparent = true
         }
+        // Nor can it be dragged: background-dragging the docked sidebar left
+        // it stranded off its edge until the next reveal snapped it back.
+        isMovable = mode.allowsWindowDrag
+        isMovableByWindowBackground = mode.allowsWindowDrag
 
         if mode.wantsFloatingLevel {
             level = .floating

@@ -55,13 +55,18 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/GlassTint.swift \
     src/ThemeNote.swift \
     src/Celebration.swift \
+    src/Motion.swift \
+    src/EdgeReveal.swift \
     src/PlainTextEditor.swift \
+    src/EditorAccessibility.swift \
     src/PreferencesView.swift \
+    src/MainMenu.swift \
     tests/NotesManagerTests.swift \
     tests/ReminderDirectiveTests.swift \
     tests/ResizableCardTests.swift \
     tests/UpdateCheckerTests.swift \
     tests/ImageMarkdownVisibilityTests.swift \
+    tests/ImageLineLayoutTests.swift \
     tests/GlassTintTests.swift \
     tests/ThemeNoteTests.swift \
     tests/CelebrationTests.swift \
@@ -75,6 +80,17 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/PerNoteFontTests.swift \
     tests/CodeBlockTests.swift \
     tests/CoverageGapTests.swift \
+    tests/FoldedMarkerLayoutTests.swift \
+    tests/FormattingShortcutTests.swift \
+    tests/LinkClickTests.swift \
+    tests/BoldWeightTests.swift \
+    tests/SelectionResidueTests.swift \
+    tests/HeadingBoldTests.swift \
+    tests/AppearanceContrastTests.swift \
+    tests/AccentInkTests.swift \
+    tests/MotionTests.swift \
+    tests/EdgeRevealTests.swift \
+    tests/VoiceOverTests.swift \
     tests/main.swift \
     -o "$OUT"
 

@@ -177,6 +177,14 @@ enum MainMenu {
         highlight.keyEquivalentModifierMask = [.command, .shift]
         highlight.target = target
         menu.addItem(highlight)
+
+        // nil target, like Extract Text below: these act on whichever note
+        // editor is first responder, which matters in Screen Edge mode where
+        // several are on screen. As with the two above, the text view's
+        // `performKeyEquivalent` claims Cmd+B / Cmd+I itself, so the menu is
+        // for discoverability and mouse use.
+        menu.addItem(withTitle: "Bold", action: #selector(ChecklistTextView.toggleBold(_:)), keyEquivalent: "b")
+        menu.addItem(withTitle: "Italic", action: #selector(ChecklistTextView.toggleItalic(_:)), keyEquivalent: "i")
         menu.addItem(.separator())
 
         // Cmd+V keeps a pasted image; this reads it instead.

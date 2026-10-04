@@ -74,9 +74,12 @@ enum DisplayMode: String, CaseIterable, Identifiable {
 /// True Dark would otherwise get black text on a near-black page.
 struct InkTheme: Equatable {
     let text: NSColor
-    /// Checkboxes' markers, the keyword line, struck-through items.
+    /// Checkboxes' markers, the keyword line, struck-through items, "Note N
+    /// of M", footer counts, math hints. Small text, so it must clear 4.5:1
+    /// on the paper, the chrome, and the edge cards (tested per paper).
     let secondary: NSColor
-    /// Checked markers, math results.
+    /// Checked markers, math results. Small text too: on the papers that use
+    /// the system accent it is `AccentInk`, held to 4.5:1 like the rest.
     let accent: NSColor
     let link: NSColor
     /// Dot and square guides, drawn at low opacity by the editor.
@@ -86,11 +89,341 @@ struct InkTheme: Equatable {
     /// light/dark resolution is exactly right.
     static let system = InkTheme(
         text: .labelColor,
-        secondary: .tertiaryLabelColor,
-        accent: .controlAccentColor,
+        secondary: AdaptiveInk.systemSecondary.color,
+        accent: AccentInk.translucent,
         link: .linkColor,
         guide: .labelColor
     )
+}
+
+/// WCAG 2.x contrast, so ink choices are measured rather than eyeballed.
+enum Contrast {
+    /// Relative luminance per WCAG 2.x, from linearised sRGB.
+    static func relativeLuminance(_ color: NSColor) -> CGFloat {
+        guard let s = color.usingColorSpace(.sRGB) else { return 0.5 }
+        func linear(_ c: CGFloat) -> CGFloat {
+            c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(s.redComponent)
+            + 0.7152 * linear(s.greenComponent)
+            + 0.0722 * linear(s.blueComponent)
+    }
+
+    /// The contrast ratio between two opaque colours, 1...21.
+    static func ratio(_ a: NSColor, _ b: NSColor) -> CGFloat {
+        let la = relativeLuminance(a), lb = relativeLuminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+
+    /// `foreground` flattened onto an opaque `background`, which is what the
+    /// eye actually sees when a translucent ink sits on a surface.
+    static func composite(_ foreground: NSColor, over background: NSColor) -> NSColor {
+        let f = foreground.usingColorSpace(.sRGB) ?? foreground
+        let b = background.usingColorSpace(.sRGB) ?? background
+        let a = f.alphaComponent
+        return NSColor(
+            srgbRed: f.redComponent * a + b.redComponent * (1 - a),
+            green: f.greenComponent * a + b.greenComponent * (1 - a),
+            blue: f.blueComponent * a + b.blueComponent * (1 - a),
+            alpha: 1
+        )
+    }
+
+    /// A dynamic colour pinned to concrete sRGB components under `appearance`.
+    static func resolved(_ color: NSColor, in appearance: NSAppearance) -> NSColor {
+        var result = color
+        appearance.performAsCurrentDrawingAppearance {
+            result = color.usingColorSpace(.sRGB) ?? color
+        }
+        return result
+    }
+}
+
+/// The countdown chip's colours.
+///
+/// Opaque, so the chip reads the same on every paper, and dark enough that
+/// white text clears 4.5:1: none of the chip's text (10pt title and phase,
+/// 13pt clock) is large enough for the 3:1 allowance. The old
+/// `green.opacity(0.8)` measured 1.8:1 over White and red 2.8:1. #248A3D,
+/// Apple's high-contrast green, is 4.4:1 with white, just short, so Break
+/// takes a step deeper.
+enum TimerChipPalette {
+    enum State: CaseIterable {
+        /// A plain timer, or a Pomodoro work phase.
+        case work
+        /// A Pomodoro break.
+        case rest
+    }
+
+    static let text = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+
+    static func background(for state: State) -> NSColor {
+        switch state {
+        case .work: return NSColor(srgbRed: 0xD7 / 255, green: 0x00 / 255, blue: 0x15 / 255, alpha: 1) // #D70015, 5.4:1
+        case .rest: return NSColor(srgbRed: 0x1F / 255, green: 0x7A / 255, blue: 0x35 / 255, alpha: 1) // #1F7A35, 5.4:1
+        }
+    }
+}
+
+/// An ink with a stronger variant for Increase Contrast, and separate light
+/// and dark variants where the surface follows the system mode.
+///
+/// Built once as a shared `NSColor(name:dynamicProvider:)`: AppKit resolves
+/// it against whatever appearance is drawing, and a shared instance keeps
+/// `InkTheme`'s equality cheap (the editor re-styles when its ink changes).
+struct AdaptiveInk {
+    let light: NSColor
+    let lightHighContrast: NSColor
+    let dark: NSColor
+    let darkHighContrast: NSColor
+    let color: NSColor
+
+    init(light: NSColor, lightHighContrast: NSColor, dark: NSColor? = nil, darkHighContrast: NSColor? = nil) {
+        let dark = dark ?? light
+        let darkHighContrast = darkHighContrast ?? lightHighContrast
+        self.light = light
+        self.lightHighContrast = lightHighContrast
+        self.dark = dark
+        self.darkHighContrast = darkHighContrast
+        self.color = NSColor(name: nil) { appearance in
+            switch appearance.bestMatch(from: [
+                .aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua,
+            ]) {
+            case .accessibilityHighContrastDarkAqua: return darkHighContrast
+            case .accessibilityHighContrastAqua:     return lightHighContrast
+            case .darkAqua:                          return dark
+            default:                                 return light
+            }
+        }
+    }
+
+    private static func hex(_ value: UInt32) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xff) / 255,
+            green: CGFloat((value >> 8) & 0xff) / 255,
+            blue: CGFloat(value & 0xff) / 255,
+            alpha: 1
+        )
+    }
+
+    /// Secondary ink on the translucent papers.
+    ///
+    /// Not `.secondaryLabelColor`: on current macOS that is black at 50% in
+    /// light mode, 3.95:1 on white and worse on a grey material. 62% clears
+    /// 4.5:1 over every light material and tint wash, and the dark side
+    /// clears it over a lighter-than-usual dark material. Alpha rather than
+    /// grey, so it keeps sitting in whatever wash is under it.
+    static let systemSecondary = AdaptiveInk(
+        light: NSColor(white: 0, alpha: 0.62),
+        lightHighContrast: NSColor(white: 0, alpha: 0.80),
+        dark: NSColor(white: 1, alpha: 0.62),
+        darkHighContrast: NSColor(white: 1, alpha: 0.86)
+    )
+
+    /// White's secondary: Apple's secondary grey, 6.0:1 on the page.
+    static let whiteSecondary = AdaptiveInk(light: hex(0x636366), lightHighContrast: hex(0x48484A))
+
+    /// Cream's secondary: a warm brown in Cream's own hue, 5.6:1 on the page.
+    static let creamSecondary = AdaptiveInk(light: hex(0x6B5E4A), lightHighContrast: hex(0x4A4032))
+
+    /// True Dark's secondary already cleared 5:1; only its stronger variant is new.
+    static let trueDarkSecondary = AdaptiveInk(light: hex(0x8F8C87), lightHighContrast: hex(0xB5B1AB))
+
+    /// Every adaptive ink with the paper it is painted on, for the tests.
+    static let catalogue: [(String, AdaptiveInk, Appearance)] = [
+        ("system secondary", systemSecondary, .frosted),
+        ("white secondary", whiteSecondary, .white),
+        ("cream secondary", creamSecondary, .cream),
+        ("true dark secondary", trueDarkSecondary, .trueDark),
+    ]
+}
+
+/// The user's system accent, made readable on the paper it is painted on.
+///
+/// Math results and checked checklist markers are small text in the accent,
+/// and the raw `controlAccentColor` does not clear 4.5:1 on the light papers
+/// (default blue is about 4:1 on white, yellow far less) or on the dark
+/// material (purple about 3.4:1). This keeps the accent's hue and saturation
+/// and moves only its HSL lightness, darker on light surfaces and lighter on
+/// dark ones, until it clears 4.5:1 on every surface the ink lands on (7:1
+/// under Increase Contrast). An accent that already passes is used as is.
+///
+/// Each paper family gets one shared `NSColor(name:dynamicProvider:)`, so it
+/// follows a change of accent, system mode or Increase Contrast live, and
+/// `InkTheme` equality stays cheap and stable.
+enum AccentInk {
+    /// The papers whose accent is the user's system accent. True Dark carries
+    /// its own green, and theme notes derive their own inks.
+    static let papers: [Appearance] = [.frosted, .glass, .solid, .white, .cream]
+
+    static let translucent = dynamic(for: .frosted)
+    static let white = dynamic(for: .white)
+    static let cream = dynamic(for: .cream)
+
+    /// Every surface the accent lands on for `paper`. Opaque papers: page,
+    /// chrome, the header's chrome wash, and edge cards. Translucent papers:
+    /// the window and control backgrounds, a representative material for the
+    /// mode, and every tint wash over it.
+    static func surfaces(for paper: Appearance, dark: Bool) -> [NSColor] {
+        if let color = paper.paperColor {
+            return [color, paper.chromeColor, paper.cardColor,
+                    Contrast.composite(paper.chromeColor.withAlphaComponent(0.8), over: color)]
+        }
+        let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
+        let material = dark
+            ? NSColor(srgbRed: 0x3a / 255, green: 0x3a / 255, blue: 0x3c / 255, alpha: 1)
+            : NSColor(srgbRed: 0xe0 / 255, green: 0xe0 / 255, blue: 0xe0 / 255, alpha: 1)
+        var result = [
+            Contrast.resolved(.windowBackgroundColor, in: appearance),
+            Contrast.resolved(.controlBackgroundColor, in: appearance),
+            material,
+        ]
+        for tint in GlassTint.allCases {
+            guard let overlay = tint.overlayColor else { continue }
+            result.append(Contrast.composite(overlay.withAlphaComponent(tint.overlayOpacity), over: material))
+        }
+        return result
+    }
+
+    /// The readable accent for `paper`, pure so every accent can be tested.
+    /// Opaque papers are always light, whatever `dark` says.
+    static func ink(for paper: Appearance, accent: NSColor, dark: Bool, highContrast: Bool) -> NSColor {
+        let isDark = paper.paperColor == nil ? dark : false
+        return adjusted(accent, on: surfaces(for: paper, dark: isDark), minimum: highContrast ? 7 : 4.5)
+    }
+
+    /// `accent` with its HSL lightness moved, away from the surfaces, until
+    /// its worst ratio across them clears `minimum`. Hue and saturation stay.
+    static func adjusted(_ accent: NSColor, on surfaces: [NSColor], minimum: CGFloat) -> NSColor {
+        let opaque = (accent.usingColorSpace(.sRGB) ?? accent).withAlphaComponent(1)
+        func worst(_ color: NSColor) -> CGFloat {
+            surfaces.map { Contrast.ratio(color, $0) }.min() ?? 21
+        }
+        // A hair over the bar, so rounding in a later colour conversion can't
+        // drop a just-passing ink under it.
+        let target = minimum + 0.02
+        guard worst(opaque) < target else { return opaque }
+
+        let lightSurfaces = (surfaces.map(Contrast.relativeLuminance).max() ?? 1) > 0.18
+        let (h, s, l) = hsl(opaque)
+        var lightness = l
+        var candidate = opaque
+        for _ in 0..<200 {
+            lightness += lightSurfaces ? -0.005 : 0.005
+            lightness = min(max(lightness, 0), 1)
+            candidate = color(h: h, s: s, l: lightness)
+            if worst(candidate) >= target || lightness == 0 || lightness == 1 { break }
+        }
+        return candidate
+    }
+
+    /// HSL components of an sRGB colour, each 0...1.
+    static func hsl(_ color: NSColor) -> (h: CGFloat, s: CGFloat, l: CGFloat) {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+        let maxC = max(r, g, b), minC = min(r, g, b)
+        let l = (maxC + minC) / 2
+        let d = maxC - minC
+        guard d > 0.00001 else { return (0, 0, l) }
+        let s = d / (1 - abs(2 * l - 1))
+        var h: CGFloat
+        switch maxC {
+        case r: h = ((g - b) / d).truncatingRemainder(dividingBy: 6)
+        case g: h = (b - r) / d + 2
+        default: h = (r - g) / d + 4
+        }
+        h /= 6
+        if h < 0 { h += 1 }
+        return (h, min(s, 1), l)
+    }
+
+    static func color(h: CGFloat, s: CGFloat, l: CGFloat) -> NSColor {
+        let c = (1 - abs(2 * l - 1)) * s
+        let hp = h * 6
+        let x = c * (1 - abs(hp.truncatingRemainder(dividingBy: 2) - 1))
+        let (r1, g1, b1): (CGFloat, CGFloat, CGFloat)
+        switch hp {
+        case ..<1: (r1, g1, b1) = (c, x, 0)
+        case ..<2: (r1, g1, b1) = (x, c, 0)
+        case ..<3: (r1, g1, b1) = (0, c, x)
+        case ..<4: (r1, g1, b1) = (0, x, c)
+        case ..<5: (r1, g1, b1) = (x, 0, c)
+        default:   (r1, g1, b1) = (c, 0, x)
+        }
+        let m = l - c / 2
+        func clamp(_ v: CGFloat) -> CGFloat { min(max(v, 0), 1) }
+        return NSColor(srgbRed: clamp(r1 + m), green: clamp(g1 + m), blue: clamp(b1 + m), alpha: 1)
+    }
+
+    /// Resolved inks by accent, mode and contrast, so drawing (which resolves
+    /// the dynamic colour for every run it paints) never re-runs the search.
+    nonisolated(unsafe) private static var cache: [String: NSColor] = [:]
+    private static let cacheLock = NSLock()
+
+    private static func dynamic(for paper: Appearance) -> NSColor {
+        dynamic(key: paper.rawValue) { accent, dark, highContrast in
+            ink(for: paper, accent: accent, dark: dark, highContrast: highContrast)
+        }
+    }
+
+    /// The accent made readable on a fixed set of opaque surfaces: a theme
+    /// note's own paper, chrome and cards. One shared colour per surface set,
+    /// so a theme re-derived on every keystroke keeps an equal `InkTheme`.
+    static func on(_ surfaces: [NSColor]) -> NSColor {
+        let key = "custom:" + surfaces.map { surface in
+            let c = surface.usingColorSpace(.sRGB) ?? surface
+            return String(format: "%.4f,%.4f,%.4f", c.redComponent, c.greenComponent, c.blueComponent)
+        }.joined(separator: ";")
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let hit = shared[key] { return hit }
+        let color = dynamic(key: key) { accent, _, highContrast in
+            adjusted(accent, on: surfaces, minimum: highContrast ? 7 : 4.5)
+        }
+        shared[key] = color
+        return color
+    }
+
+    nonisolated(unsafe) private static var shared: [String: NSColor] = [:]
+
+    /// A dynamic colour that resolves the live accent, mode and Increase
+    /// Contrast under the drawing appearance and hands them to `make`,
+    /// memoised per combination.
+    private static func dynamic(
+        key base: String,
+        _ make: @escaping (_ accent: NSColor, _ dark: Bool, _ highContrast: Bool) -> NSColor
+    ) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [
+                .aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua,
+            ])
+            let dark = match == .darkAqua || match == .accessibilityHighContrastDarkAqua
+            let highContrast = match == .accessibilityHighContrastAqua
+                || match == .accessibilityHighContrastDarkAqua
+                || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            let accent = Contrast.resolved(.controlAccentColor, in: appearance)
+            let key = base + String(
+                format: "|%d|%d|%.4f|%.4f|%.4f", dark ? 1 : 0, highContrast ? 1 : 0,
+                accent.redComponent, accent.greenComponent, accent.blueComponent
+            )
+            cacheLock.lock()
+            defer { cacheLock.unlock() }
+            if let hit = cache[key] { return hit }
+            let ink = make(accent, dark, highContrast)
+            cache[key] = ink
+            return ink
+        }
+    }
+}
+
+extension NSAppearanceCustomization {
+    /// Pins the appearance to the paper's (nil hands it back to the system).
+    /// Skips a no-op assignment: every set invalidates the whole view tree's
+    /// appearance, and theme notes re-derive on every keystroke.
+    func adoptPaperAppearance(_ name: NSAppearance.Name?) {
+        guard appearance?.name != name else { return }
+        appearance = name.flatMap { NSAppearance(named: $0) }
+    }
 }
 
 /// How the note's surface is rendered: three translucent window materials,
@@ -173,15 +506,15 @@ enum Appearance: String, CaseIterable, Identifiable {
             // white text on white paper.
             return InkTheme(
                 text: NSColor(srgbRed: 0.110, green: 0.110, blue: 0.118, alpha: 1),
-                secondary: NSColor(srgbRed: 0.560, green: 0.560, blue: 0.570, alpha: 1),
-                accent: .controlAccentColor,
+                secondary: AdaptiveInk.whiteSecondary.color,
+                accent: AccentInk.white,
                 link: NSColor(srgbRed: 0.100, green: 0.360, blue: 0.720, alpha: 1),
                 guide: .black
             )
         case .trueDark:
             return InkTheme(
                 text: NSColor(srgbRed: 0.910, green: 0.898, blue: 0.878, alpha: 1),
-                secondary: NSColor(srgbRed: 0.560, green: 0.549, blue: 0.529, alpha: 1),
+                secondary: AdaptiveInk.trueDarkSecondary.color,
                 accent: NSColor(srgbRed: 0.480, green: 0.780, blue: 0.560, alpha: 1),
                 link: NSColor(srgbRed: 0.520, green: 0.720, blue: 0.930, alpha: 1),
                 guide: NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1)
@@ -189,8 +522,8 @@ enum Appearance: String, CaseIterable, Identifiable {
         case .cream:
             return InkTheme(
                 text: NSColor(srgbRed: 0.180, green: 0.153, blue: 0.110, alpha: 1),
-                secondary: NSColor(srgbRed: 0.560, green: 0.507, blue: 0.420, alpha: 1),
-                accent: .controlAccentColor,
+                secondary: AdaptiveInk.creamSecondary.color,
+                accent: AccentInk.cream,
                 link: NSColor(srgbRed: 0.100, green: 0.360, blue: 0.720, alpha: 1),
                 guide: NSColor(srgbRed: 0.400, green: 0.340, blue: 0.240, alpha: 1)
             )
@@ -339,6 +672,13 @@ final class SettingsManager: ObservableObject {
     }
 
     private let defaults: UserDefaults
+
+    /// Mirrors System Settings > Accessibility > Display > Increase Contrast,
+    /// kept live by `accessibilityDisplayOptionsDidChangeNotification`. Not
+    /// persisted: the system owns it. Hairlines strengthen and the purely
+    /// decorative lit edge and tint wash step aside while it is on.
+    @Published var increasesContrast = false
+    private var accessibilityObserver: NSObjectProtocol?
 
     @Published var displayMode: DisplayMode {
         didSet { defaults.set(displayMode.rawValue, forKey: Key.displayMode) }
@@ -602,6 +942,24 @@ final class SettingsManager: ObservableObject {
             CelebrationStyle(rawValue: defaults.string(forKey: Key.celebrationStyle) ?? "") ?? .cannons
         self.timerSound =
             CelebrationSound(rawValue: defaults.string(forKey: Key.timerSound) ?? "") ?? .hero
+
+        // The same rule as the migration above: an injected suite starts
+        // from the standard look, so a test run never depends on this
+        // machine's accessibility settings.
+        if defaults === UserDefaults.standard {
+            increasesContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                let increase = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                MainActor.assumeIsolated {
+                    guard let self, self.increasesContrast != increase else { return }
+                    self.increasesContrast = increase
+                }
+            }
+        }
     }
 
     // MARK: - Theme notes
@@ -617,6 +975,36 @@ final class SettingsManager: ObservableObject {
         themeOverride?.paperHex ?? appearance.paperColor
     }
 
+    /// The appearance the note's window must adopt so everything AppKit and
+    /// SwiftUI colour for themselves (header buttons, the font menu, the
+    /// stepper, scrollers, the find bar) agrees with the paper under them.
+    ///
+    /// An opaque paper forces its own ink whatever mode macOS is in; without
+    /// this the controls kept the system's colours and vanished on a
+    /// mismatched paper (True Dark in Light Mode measured about 1.1:1).
+    /// Translucent papers return nil: they sit inside the system mode, which
+    /// is exactly right for them. A theme's ink on a translucent paper is the
+    /// one exception, since light ink needs a dark material under it.
+    ///
+    /// Light versus dark uses the same luminance rule `derivedInk` does, so a
+    /// theme paper's derived ink and its controls always flip together.
+    static func windowAppearanceName(for appearance: Appearance, theme: ThemeNote.Theme?) -> NSAppearance.Name? {
+        func name(forSurface surface: NSColor) -> NSAppearance.Name {
+            ThemeNote.luminance(of: surface) > 0.5 ? .aqua : .darkAqua
+        }
+        if let paper = theme?.paperHex ?? appearance.paperColor {
+            return name(forSurface: paper)
+        }
+        if let ink = theme?.inkHex {
+            return ThemeNote.luminance(of: ink) > 0.5 ? .darkAqua : .aqua
+        }
+        return nil
+    }
+
+    var effectiveWindowAppearanceName: NSAppearance.Name? {
+        Self.windowAppearanceName(for: appearance, theme: themeOverride)
+    }
+
     var effectiveMaterialRawValue: Int {
         appearance.materialRawValue
     }
@@ -624,19 +1012,31 @@ final class SettingsManager: ObservableObject {
     var effectiveInk: InkTheme {
         guard let override = themeOverride else { return appearance.ink }
         if let paper = override.paperHex {
-            return override.inkHex.map { Self.ink(fromText: $0) } ?? ThemeNote.derivedInk(for: paper)
+            return override.inkHex.map {
+                Self.ink(fromText: $0, on: [paper, effectiveChromeColor, effectiveCardColor])
+            } ?? ThemeNote.derivedInk(for: paper)
         }
         // A tint or accent-only theme leaves the system ink alone unless the
         // user explicitly asked for different text.
         if let text = override.inkHex {
-            return Self.ink(fromText: text)
+            // The window adopts the mode opposite the ink (see
+            // `windowAppearanceName`), so that mode's backgrounds are the
+            // surfaces its secondary has to read on.
+            guard let mode = Self.windowAppearanceName(for: appearance, theme: override)
+                .flatMap({ NSAppearance(named: $0) })
+            else { return Self.ink(fromText: text) }
+            let surfaces = [NSColor.windowBackgroundColor, .controlBackgroundColor]
+                .map { Contrast.resolved($0, in: mode) }
+            return Self.ink(fromText: text, on: surfaces)
         }
         return appearance.ink
     }
 
     /// Builds an InkTheme around one explicit text colour; the companions are
-    /// neutral greys of it, since we cannot know what surface sits beneath.
-    private static func ink(fromText text: NSColor) -> InkTheme {
+    /// neutral greys of it. When the paper is known the secondary is pushed
+    /// toward the text until it clears 4.5:1 on it; the text itself is the
+    /// user's explicit choice and is left alone.
+    private static func ink(fromText text: NSColor, on surfaces: [NSColor] = []) -> InkTheme {
         func greyed(_ t: CGFloat) -> NSColor {
             let s = text.usingColorSpace(.sRGB)!
             let light = ThemeNote.luminance(of: text) > 0.5
@@ -649,8 +1049,8 @@ final class SettingsManager: ObservableObject {
         }
         return InkTheme(
             text: text,
-            secondary: greyed(0.55),
-            accent: .controlAccentColor,
+            secondary: surfaces.isEmpty ? greyed(0.55) : ThemeNote.ensuringContrast(greyed(0.55), toward: text, on: surfaces),
+            accent: surfaces.isEmpty ? .controlAccentColor : AccentInk.on(surfaces),
             link: NSColor(srgbRed: 0.100, green: 0.360, blue: 0.720, alpha: 1),
             guide: greyed(0.75)
         )
@@ -678,15 +1078,24 @@ final class SettingsManager: ObservableObject {
     }
 
     var effectiveWantsLitEdge: Bool {
-        themeOverride?.paperHex == nil && appearance.wantsLitEdge
+        themeOverride?.paperHex == nil && appearance.wantsLitEdge && !increasesContrast
+    }
+
+    /// A hairline's opacity: its resting value normally, a clearly visible
+    /// edge under Increase Contrast (a 0.10 hairline all but disappears on a
+    /// busy desktop, which is exactly who turns the setting on).
+    func hairlineOpacity(_ resting: Double) -> Double {
+        increasesContrast ? max(resting, 0.45) : resting
     }
 
     var effectiveWantsOpaqueCards: Bool {
         effectivePaperColor != nil || appearance == .solid
     }
 
+    /// The wash on a translucent paper; none under Increase Contrast, since
+    /// a tint only ever lowers the contrast of the ink sitting on it.
     var effectiveTint: GlassTint {
-        themeOverride?.tint ?? glassTint
+        increasesContrast ? .none : (themeOverride?.tint ?? glassTint)
     }
 
     // Typography: a theme note may carry its own font, size, spacing, and

@@ -28,7 +28,9 @@ finding where a given piece of behaviour lives.
 | `src/GlassTint.swift` | Tint choices for the translucent papers |
 | `src/Celebration.swift` | Timer celebration configuration: styles and sounds |
 | `src/CelebrationWindow.swift` | The confetti window itself |
+| `src/Motion.swift` | Reduce Motion: the injectable setting and what each animation becomes |
 | `src/EdgeTrigger.swift` | Screen-edge trigger strip and hot side |
+| `src/EdgeReveal.swift` | Edge sidebar show/hide: generation guard and slide geometry |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/Note.swift` | The note model and its stable identity |
 | `src/GlobalSearch.swift` | Cross-note search, matching every note's text directly |
@@ -39,6 +41,7 @@ finding where a given piece of behaviour lives.
 | `src/AppleNotesSync.swift` | One-way push into Apple Notes |
 | `src/ContentView.swift` | Panel UI: header, editor, timer overlay, share |
 | `src/PlainTextEditor.swift` | `NSTextView` wrapper: swipe, images, math rendering |
+| `src/EditorAccessibility.swift` | VoiceOver for the editor: spoken math results, Results rotor, images as "Image" |
 | `src/NotesManager.swift` | Note state, navigation, timer parsing |
 | `src/NoteStore.swift` | Atomic file persistence, backups, and migrations |
 | `tests/` | Logic tests, run by `./test.sh` |

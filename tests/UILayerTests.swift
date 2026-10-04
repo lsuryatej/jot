@@ -334,11 +334,12 @@ func runUILayerTests() {
         equal(LinkShrink.matches(in: view.string).count, 0, "nothing worth collapsing")
     }
 
-    suite("a plain click on a collapsed link's domain does not expand it") {
+    suite("a plain click on a collapsed link's domain expands it without editing the text") {
         let url = "https://www.example.com/some/very/long/path?query=1"
         let view = makeTextView(url)
         view.recomputeLinkMatches()
         view.applyLinkFolding()
+        view.linkOpener = { _ in check(false, "a plain click must never open the link") }
 
         guard let match = LinkShrink.matches(in: view.string).first,
               let domainRect = viewRect(for: match.displayRange, in: view)
@@ -347,12 +348,13 @@ func runUILayerTests() {
             return
         }
         click(at: NSPoint(x: domainRect.midX, y: domainRect.midY), on: view)
-        equal(view.string, url, "no command modifier — this is a real click test elsewhere, not an expand")
+        equal(view.string, url, "the click changes presentation only, never the text")
+        check(view.isExpanded(match), "since issue #12, a plain click expands (Cmd+click opens)")
     }
 
     suite("expanding a link and collapsing it again round-trips the hidden glyphs") {
         let url = "https://www.example.com/some/very/long/path?query=1"
-        let view = makeTextView(url)
+        let view = makeTextView(url + " end")
         view.recomputeLinkMatches()
         view.applyLinkFolding()
 
@@ -367,14 +369,16 @@ func runUILayerTests() {
         let hit = view.linkMatch(at: NSPoint(x: domainRect.midX, y: domainRect.midY))
         check(hit?.range.location == match.range.location, "the collapsed domain's own rect is what's hit-testable while folded")
 
-        view.toggleLinkExpansion(match)
+        // Clicking into it expands it (issue #12; this used to be Cmd+click).
+        click(at: NSPoint(x: domainRect.midX, y: domainRect.midY), on: view)
         let wholeGlyphs = lm.glyphRange(forCharacterRange: match.range, actualCharacterRange: nil)
         check(
             (0..<wholeGlyphs.length).allSatisfy { !lm.notShownAttribute(forGlyphAt: wholeGlyphs.location + $0) },
             "expanded — every glyph in the URL is visible again"
         )
 
-        view.toggleLinkExpansion(match)
+        // Moving the caret off the link folds it again.
+        view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
         let schemeRange = NSRange(location: match.range.location, length: match.displayRange.location - match.range.location)
         let hiddenGlyphs = lm.glyphRange(forCharacterRange: schemeRange, actualCharacterRange: nil)
         check(
@@ -634,5 +638,101 @@ func runBackgroundRectTests() {
             baselineOffset: 15, containerInset: .zero, font: body
         )
         check(corrected == nil, "a fragment 200pt away is not this rect's line")
+    }
+}
+
+// MARK: - Telling a wash apart from a selection
+//
+// Issue #9: `fillBackgroundRectArray` is the hook for `.backgroundColor` runs
+// AND the hook AppKit fills the text selection through. Correcting a wash onto
+// its baseline at text height is right; doing the same to a selection collapses
+// every selected line out of its fragment, which is what the report described.
+// So the override has to know which call it is looking at before it touches
+// anything, and that decision is pure enough to drive from here.
+
+func runBackgroundWashDiscriminationTests() {
+    typealias Manager = TextHeightBackgroundLayoutManager
+
+    let body = NSFont.systemFont(ofSize: 13)
+    let wash = NSColor.systemYellow.withAlphaComponent(0.4)
+
+    /// "a ==highlight== line\nplain second line", with the wash already on the
+    /// word, which is the state the styling pass leaves behind.
+    func marked() -> NSTextStorage {
+        let storage = NSTextStorage(string: "a highlight line\nplain second line")
+        let whole = NSRange(location: 0, length: storage.length)
+        storage.addAttribute(.font, value: body, range: whole)
+        storage.addAttribute(.backgroundColor, value: wash, range: NSRange(location: 2, length: 9))
+        return storage
+    }
+
+    suite("an attribute run is recognised as this layout manager's own work") {
+        let storage = marked()
+        check(Manager.isAttributeWash(charRange: NSRange(location: 2, length: 9), color: wash, textStorage: storage),
+              "the washed word, in the colour it was washed with, is a wash")
+    }
+
+    suite("a selection is not") {
+        let storage = marked()
+        // What AppKit hands over for a two-line selection: one call, one range,
+        // and characters carrying no `.backgroundColor` of their own.
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 0, length: 25),
+                                       color: .selectedTextBackgroundColor, textStorage: storage),
+              "a selection spanning both lines carries no background attribute")
+        // An unfocused view selects in a different colour entirely, which is
+        // the first reason this cannot be a comparison against one known
+        // selection colour.
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 0, length: 25),
+                                       color: .unemphasizedSelectedContentBackgroundColor, textStorage: storage),
+              "and the unfocused selection colour is not special-cased either")
+    }
+
+    suite("a selection is still a selection when it happens to be the wash colour") {
+        // The case a colour comparison gets wrong in the other direction: the
+        // system selection colour is a moving target (accent colour, focus,
+        // appearance), so a highlight can land on it by coincidence. Asking the
+        // characters, not the colour, is immune.
+        let storage = marked()
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 0, length: 25),
+                                       color: wash, textStorage: storage),
+              "the selected characters still do not all carry that colour")
+    }
+
+    suite("a wash whose colour happens to resemble the selection colour is still corrected") {
+        let storage = NSTextStorage(string: "one highlighted word here")
+        storage.addAttribute(.font, value: body, range: NSRange(location: 0, length: storage.length))
+        let lookalike = NSColor.selectedTextBackgroundColor
+        storage.addAttribute(.backgroundColor, value: lookalike, range: NSRange(location: 4, length: 11))
+        check(Manager.isAttributeWash(charRange: NSRange(location: 4, length: 11),
+                                      color: lookalike, textStorage: storage),
+              "the characters carry it, so it is a wash whatever colour it is")
+    }
+
+    suite("a partly washed range is not a wash") {
+        // A selection dragged out of a highlighted word arrives with the
+        // attribute on its first characters only. Reading the attribute at
+        // `charRange.location` alone would call that a wash and collapse the
+        // selection; the whole range has to carry it.
+        let storage = marked()
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 2, length: 14), color: wash, textStorage: storage),
+              "the run ends partway through, so this call is not that run")
+    }
+
+    suite("a different colour over the same characters is not that run's wash") {
+        let storage = marked()
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 2, length: 9),
+                                       color: NSColor.systemRed, textStorage: storage),
+              "same range, wrong colour: some other pass is painting this")
+    }
+
+    suite("degenerate ranges answer no rather than crashing") {
+        let storage = marked()
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 0, length: 0), color: wash, textStorage: storage),
+              "an empty range washes nothing")
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 400, length: 3), color: wash, textStorage: storage),
+              "a range past the end of the storage is nobody's wash")
+        check(!Manager.isAttributeWash(charRange: NSRange(location: 2, length: 9),
+                                       color: wash, textStorage: NSTextStorage(string: "")),
+              "and empty storage has no runs at all")
     }
 }

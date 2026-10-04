@@ -184,6 +184,7 @@ struct PreferencesView: View {
             HStack(spacing: 8) {
                 Image(systemName: item.icon)
                     .frame(width: 16)
+                    .accessibilityHidden(true)
                 Text(item.title)
                 Spacer(minLength: 0)
             }
@@ -197,6 +198,8 @@ struct PreferencesView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // The selected pane is shown only by colour.
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -542,8 +545,15 @@ struct PreferencesView: View {
             Section("Formatting") {
                 ShortcutRow(action: "Toggle checklist", combo: "⌘L")
                 ShortcutRow(action: "Toggle highlight", combo: "⇧⌘H")
+                ShortcutRow(action: "Toggle bold", combo: "⌘B")
+                ShortcutRow(action: "Toggle italic", combo: "⌘I")
                 ShortcutRow(action: "Nest / un-nest checklist item", combo: "⇥ / ⇧⇥")
                 ShortcutRow(action: "Read clipboard image as text (OCR)", combo: "⇧⌘V")
+            }
+
+            Section("Links") {
+                ShortcutRow(action: "Open link in browser", combo: "⌘-click")
+                ShortcutRow(action: "Expand a shortened link to edit it", combo: "click")
             }
 
             Section("Search") {
@@ -621,6 +631,7 @@ struct PreferencesView: View {
         .buttonStyle(.plain)
         .help(tint.title)
         .accessibilityLabel(tint.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

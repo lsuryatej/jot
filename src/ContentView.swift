@@ -21,6 +21,10 @@ struct ContentView: View {
     @State private var swipeFeedbackDismiss: DispatchWorkItem?
     @State private var reminderToastDismiss: DispatchWorkItem?
 
+    /// System Settings › Accessibility › Display › Reduce motion, kept live
+    /// by SwiftUI. The toast chips fade in place instead of dropping in.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     /// Chrome text follows the paper's ink, not SwiftUI's semantic colors:
@@ -136,7 +140,7 @@ struct ContentView: View {
         if let tint = settings.effectiveTint.overlayColor {
             Rectangle()
                 .fill(Color(nsColor: tint))
-                .opacity(settings.glassTint.overlayOpacity)
+                .opacity(settings.effectiveTint.overlayOpacity)
         }
     }
 
@@ -227,6 +231,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .help("Share this note")
+            .accessibilityLabel("Share note")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -347,13 +352,30 @@ struct ContentView: View {
                 .font(.system(.headline, design: .monospaced))
         }
         .padding(8)
-        .background((notesManager.activePomodoroPhase == .rest ? Color.green : Color.red).opacity(0.8))
-        .foregroundStyle(.white)
+        .background(Color(nsColor: TimerChipPalette.background(
+            for: notesManager.activePomodoroPhase == .rest ? .rest : .work
+        )))
+        .foregroundStyle(Color(nsColor: TimerChipPalette.text))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        // One element that reads as a sentence, not three fragments.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(timerAccessibilityLabel)
         .padding(.top, 50)
         .padding(.trailing, 20)
         .onAppear { updateTimer() }
         .onReceive(tick) { _ in updateTimer() }
+    }
+
+    private var timerAccessibilityLabel: String {
+        var parts: [String] = []
+        if let phase = notesManager.activePomodoroPhase {
+            parts.append(phase == .work ? "Pomodoro work" : "Pomodoro break")
+        } else {
+            parts.append("Timer")
+        }
+        if let owner = timerOwnerLabel { parts.append("for \(owner)") }
+        parts.append(timeRemaining.isEmpty ? "starting" : "\(timeRemaining) remaining")
+        return parts.joined(separator: ", ")
     }
 
     private func updateTimer() {
@@ -396,11 +418,11 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.hairlineOpacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10)), lineWidth: 1))
                 .frame(maxWidth: .infinity)
                 .padding(.top, 44)
                 .allowsHitTesting(false)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.jotToast(reduceMotion: reduceMotion))
         }
     }
 
@@ -450,11 +472,11 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10), lineWidth: 1))
+                .overlay(Capsule().strokeBorder(Color(nsColor: settings.effectiveHairlineColor).opacity(settings.hairlineOpacity(settings.effectiveWantsLitEdge ? 0.18 : 0.10)), lineWidth: 1))
                 .frame(maxWidth: .infinity)
                 .padding(.top, settings.showsHeader ? 44 : 10)
                 .allowsHitTesting(false)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.jotToast(reduceMotion: reduceMotion))
         }
     }
 
