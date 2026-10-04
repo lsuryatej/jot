@@ -1380,18 +1380,17 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         rect.origin.x += textContainerInset.width
         rect.origin.y += textContainerInset.height
 
-        let width = displayWidth(for: loaded.reference, image: loaded.image, markdownRange: loaded.markdownRange)
-        let height = width * (loaded.image.size.height / max(1, loaded.image.size.width))
+        let aspect = loaded.image.size.height / max(1, loaded.image.size.width)
+        var width = loaded.reference.width ?? Attachments.defaultWidth(for: loaded.image)
+        if let atom = imageAtom(at: loaded.markdownRange.location), atom.range == loaded.markdownRange {
+            width = atom.size.width
+        }
+        if let previewWidth, resizingRange == loaded.markdownRange { width = previewWidth }
         return PlacedImage(
             image: loaded.image,
             markdownRange: loaded.markdownRange,
-            rect: NSRect(x: rect.minX, y: rect.minY, width: width, height: height)
+            rect: NSRect(x: rect.minX, y: rect.minY, width: width, height: width * aspect)
         )
-    }
-
-    private func displayWidth(for reference: ImageReference, image: NSImage, markdownRange: NSRange) -> CGFloat {
-        if let previewWidth, resizingRange == markdownRange { return previewWidth }
-        return reference.width ?? Attachments.defaultWidth(for: image)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1432,7 +1431,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         for reference in Attachments.references(in: ns.substring(with: lineRange)) {
             let markdownRange = NSRange(location: lineRange.location + reference.range.location, length: reference.range.length)
             guard NSLocationInRange(proposedCharRange.location, markdownRange),
-                  Attachments.image(at: reference.path) != nil else { continue }
+                  cachedImage(at: reference.path) != nil else { continue }
             return NSUnionRange(markdownRange, proposedCharRange)
         }
         return proposed
@@ -1470,7 +1469,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let references = Attachments.references(in: line)
             let alone = Self.isImageOnlyLine(line, references: references)
             for reference in references {
-                guard let image = Attachments.image(at: reference.path) else { continue }
+                guard let image = self.cachedImage(at: reference.path) else { continue }
                 loaded.append(LoadedImageReference(
                     reference: reference,
                     image: image,
@@ -1481,6 +1480,22 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             }
         }
         return loaded
+    }
+
+    /// Pictures already read from disk, by absolute path. Attachments are
+    /// written once under a fresh UUID and never rewritten, so a hit never
+    /// goes stale; a miss (a broken path) is not cached, so a file that turns
+    /// up later is picked up. Every styling pass and every selection change
+    /// asks for the note's images, and reading them each time was a disk
+    /// read per image per keystroke.
+    private var imageCache: [String: NSImage] = [:]
+
+    private func cachedImage(at path: String) -> NSImage? {
+        let key = Attachments.directoryURL().deletingLastPathComponent().appendingPathComponent(path).path
+        if let hit = imageCache[key] { return hit }
+        guard let image = Attachments.image(at: path) else { return nil }
+        imageCache[key] = image
+        return image
     }
 
     /// Set while `mouseDown` is tracking a click, so a caret landing inside a
@@ -2027,13 +2042,19 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // styling pass; the explicit guard says so at the point it matters,
         // since folding a character out of code would hide real content.
         guard !isCodeMode else { return 0 }
-        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty || !emphasisMarkers.isEmpty,
+        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty || !emphasisMarkers.isEmpty
+                || !imageAtoms.isEmpty,
               let textStorage else { return 0 }
         let ns = textStorage.string as NSString
 
         var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
         var foldedOffsets: [Int] = []
-        for i in 0..<glyphRange.length where isCharacterFolded(characterIndexes[i], in: ns) {
+        // An image's hidden markdown is laid out the same way, with one
+        // difference made in `shouldUse` below: its first character keeps
+        // the picture's width, so the caret before and after it lands on
+        // the picture's edges.
+        for i in 0..<glyphRange.length
+        where isCharacterFolded(characterIndexes[i], in: ns) || imageAtom(at: characterIndexes[i]) != nil {
             // A control character, not `.null`: the typesetter skips null
             // glyphs outright, so a folded run at the start of a line was
             // never placed in that line at all. It got swept onto the end of
@@ -2080,7 +2101,26 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // one, but guard anyway since breaking a line is the one action
         // that must survive whatever the marker ranges say.
         if action.contains(.paragraphBreak) || action.contains(.lineBreak) { return action }
+        if let atom = imageAtom(at: charIndex) {
+            return charIndex == atom.range.location ? .whitespace : .zeroAdvancement
+        }
         return isCharacterFolded(charIndex, in: ns) ? .zeroAdvancement : action
+    }
+
+    /// The width of an image's one wide glyph: the picture's. Only image
+    /// references are given the whitespace action, so nothing else asks.
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        boundingBoxForControlGlyphAt glyphIndex: Int,
+        for textContainer: NSTextContainer,
+        proposedLineFragment proposedRect: NSRect,
+        glyphPosition: NSPoint,
+        characterIndex charIndex: Int
+    ) -> NSRect {
+        guard let atom = imageAtom(at: charIndex), charIndex == atom.range.location else {
+            return NSRect(origin: glyphPosition, size: .zero)
+        }
+        return NSRect(x: glyphPosition.x, y: 0, width: atom.size.width, height: 1)
     }
 
     /// The match under `point`, hit-testing only the part currently on
@@ -2273,6 +2313,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             highlightMarkers = []
             headingMarkers = []
             emphasisMarkers = []
+            imageAtoms = []
             return
         }
 
@@ -2303,6 +2344,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 }
             }
         }
+
+        // Over the whole note, like the heading markers below: glyph
+        // generation asks about any character, not only the edited ones.
+        imageAtoms = computeImageAtoms()
 
         ns.enumerateSubstrings(in: target, options: [.byLines]) { line, lineRange, _, _ in
             guard let line else { return }
@@ -2376,18 +2421,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             if !references.isEmpty {
                 var tallest: CGFloat = 0
                 for reference in references {
-                    guard let image = Attachments.image(at: reference.path) else { continue }
-                    let width = reference.width ?? Attachments.defaultWidth(for: image)
-                    tallest = max(tallest, width * (image.size.height / max(1, image.size.width)))
-
-                    textStorage.addAttribute(
-                        .foregroundColor,
-                        value: NSColor.clear,
-                        range: NSRange(
-                            location: lineRange.location + reference.range.location,
-                            length: reference.range.length
-                        )
+                    let range = NSRange(
+                        location: lineRange.location + reference.range.location,
+                        length: reference.range.length
                     )
+                    guard let atom = self.imageAtom(at: range.location), atom.range == range else { continue }
+                    tallest = max(tallest, atom.size.height)
+
+                    textStorage.addAttribute(.foregroundColor, value: NSColor.clear, range: range)
                 }
                 if tallest > 0 {
                     let style = NSMutableParagraphStyle()
@@ -2399,9 +2440,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     // wrap, and each wrapped piece of invisible markdown got
                     // its own image-tall line: a blank gap under the picture
                     // that Down arrow and double-click landed in (issue #10).
-                    // A line holding nothing but references is laid out as a
-                    // single line instead. A line mixing text and an image
-                    // keeps wrapping so its visible text is never clipped.
+                    // The hidden markdown now takes only the picture's width
+                    // (see `shouldGenerateGlyphs`), and the picture is fitted
+                    // to the column, so a reference no longer wraps at all.
+                    // A line holding nothing but references is still clipped
+                    // to one line, as a guarantee. A line mixing text and an
+                    // image keeps wrapping so its visible text is never cut.
                     if Self.isImageOnlyLine(line, references: references) {
                         style.lineBreakMode = .byClipping
                     }
@@ -2490,6 +2534,90 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// coordinates. Recomputed by every styling pass; read by glyph
     /// generation, same as `headingMarkers`.
     private(set) var emphasisMarkers: [NSRange] = []
+
+    /// One loaded image reference as layout sees it: the characters of its
+    /// markdown and the size its picture is drawn at. Recomputed by every
+    /// styling pass; read by glyph generation, which gives the reference's
+    /// first glyph the picture's width and every other glyph none, so the
+    /// hidden markdown takes exactly the room the picture does.
+    struct ImageAtom {
+        let range: NSRange
+        let image: NSImage
+        let size: NSSize
+    }
+
+    private(set) var imageAtoms: [ImageAtom] = []
+
+    /// The atom whose characters include `characterIndex`.
+    func imageAtom(at characterIndex: Int) -> ImageAtom? {
+        imageAtoms.first { NSLocationInRange(characterIndex, $0.range) }
+    }
+
+    /// The width of the text column, which no picture is drawn wider than.
+    var imageColumnWidth: CGFloat {
+        guard let textContainer else { return .greatestFiniteMagnitude }
+        return textContainer.size.width - 2 * textContainer.lineFragmentPadding
+    }
+
+    /// Every loaded reference in the note, sized: its own width, or its
+    /// image's natural one, fitted into what is left of the column after
+    /// whatever precedes it on its line (a list marker, say). A picture
+    /// wider than the column would push its line past the edge, and a list
+    /// item would wrap the picture away from its marker.
+    func computeImageAtoms() -> [ImageAtom] {
+        guard let textStorage else { return [] }
+        let ns = textStorage.string as NSString
+        var atoms: [ImageAtom] = []
+        var lineStart = -1
+        var used: CGFloat = 0
+        var measuredTo = 0
+        for loaded in loadedImageReferences(touching: NSRange(location: 0, length: ns.length)) {
+            if loaded.lineRange.location != lineStart {
+                lineStart = loaded.lineRange.location
+                used = 0
+                measuredTo = lineStart
+            }
+            let before = NSRange(location: measuredTo, length: loaded.markdownRange.location - measuredTo)
+            if before.length > 0 {
+                used += textStorage.attributedSubstring(from: before).size().width
+            }
+            let natural = loaded.reference.width ?? Attachments.defaultWidth(for: loaded.image)
+            // A point of slack so rounding can never wrap a picture that
+            // exactly fills the column onto a line of its own.
+            // A view not yet given its size (a fresh editor has a zero frame
+            // until the scroll view lays it out) fits nothing: its pictures
+            // keep their own width until `setFrameSize` refits them.
+            let column = imageColumnWidth
+            let room = column > 48 ? column - used - 1 : .greatestFiniteMagnitude
+            let width = max(min(natural, room), min(natural, 24))
+            let aspect = loaded.image.size.height / max(1, loaded.image.size.width)
+            atoms.append(ImageAtom(
+                range: loaded.markdownRange,
+                image: loaded.image,
+                size: NSSize(width: width, height: width * aspect)
+            ))
+            used += width
+            measuredTo = NSMaxRange(loaded.markdownRange)
+        }
+        return atoms
+    }
+
+    /// Images are re-fitted when the column changes width. Deferred: the
+    /// frame changes in the middle of layout, where the text storage must
+    /// not be edited, and only when a fitted size actually changes, so a
+    /// window resize does not restyle a note whose pictures already fit.
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = abs(newSize.width - frame.width) > 0.5
+        super.setFrameSize(newSize)
+        guard widthChanged, !imageAtoms.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isStyling else { return }
+            let refitted = self.computeImageAtoms()
+            let changed = refitted.count != self.imageAtoms.count
+                || zip(refitted, self.imageAtoms).contains { $0.range != $1.range || $0.size != $1.size }
+            if changed { self.applyChecklistStyling() }
+        }
+    }
 
     /// Restyles one emphasis span's content in place.
     ///

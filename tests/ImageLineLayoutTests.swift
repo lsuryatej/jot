@@ -203,14 +203,19 @@ func runImageAtomicReferenceTests() {
         equal(caret(view), s, "Option-Left from after the image lands before it")
     }
 
-    suite("image atomic: a caret placed inside the reference snaps to the nearer edge") {
+    // The reference is one image-wide glyph followed by zero-width ones, so
+    // every position inside it is drawn at the image's trailing edge, and
+    // snapping by where it is drawn sends it there. Clicks, which land by
+    // half, are covered further down.
+    suite("image atomic: a caret placed inside the reference snaps to the edge it is drawn at") {
         guard let (view, _, s, e) = fixture() else { return }
         view.setSelectedRange(NSRange(location: 0, length: 0))
         view.setSelectedRange(NSRange(location: s + 3, length: 0))
-        equal(caret(view), s, "a caret under the left of the image goes before it")
+        equal(caret(view), e, "a caret inside the reference goes after the image")
+        check(caret(view) != s + 3, "and never stays inside (s=\(s))")
         view.setSelectedRange(NSRange(location: 0, length: 0))
         view.setSelectedRange(NSRange(location: e - 3, length: 0))
-        equal(caret(view), e, "a caret past the image's middle goes after it")
+        equal(caret(view), e, "near the end too")
     }
 
     suite("image atomic: Down from the right half of the line above lands after the image, never inside") {
@@ -465,5 +470,104 @@ func runImageCaretTests() {
             + lm.location(forGlyphAt: glyph).y + view.textContainerInset.height
         check(abs(drawn.minY - (baseline - ceil(view.baseFont.ascender))) < 0.5,
               "the caret's top is one ascender above the line's baseline (\(drawn.minY) vs \(baseline))")
+    }
+}
+
+// Maintainer-approved: "caret after an image sits beside the image." The
+// hidden markdown was clipped to one line, but its glyphs still spanned the
+// whole column, so the caret after an image drew at the right edge of the
+// note. The reference's glyphs now take exactly the image's drawn width: one
+// carries the width, the rest take none.
+func runImageGlyphWidthTests() {
+    func fixture(width: CGFloat = 240, text: (String) -> String = { "before line\n\($0)\nafter line" })
+        -> (view: ChecklistTextView, markdown: NSRange)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: width)
+        let full = text(markdown)
+        let view = makeTextView(full)
+        let range = (full as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            check(false, "sanity: the reference is in the note")
+            return nil
+        }
+        return (view, range)
+    }
+
+    suite("image glyphs: the hidden reference is exactly as wide as the image") {
+        guard let (view, markdown) = fixture(), let lm = view.layoutManager, let tc = view.textContainer,
+              let placed = view.placedImages().first else { return }
+        lm.ensureLayout(for: tc)
+        let glyphs = lm.glyphRange(forCharacterRange: markdown, actualCharacterRange: nil)
+        let rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+        check(abs(rect.width - placed.rect.width) < 0.5,
+              "the reference's glyphs span \(rect.width)pt, the image \(placed.rect.width)pt")
+        let used = lm.lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+        check(used.width < placed.rect.width + 20,
+              "the image line is no wider than the image (\(used.width)pt used)")
+    }
+
+    suite("image glyphs: the caret after an image sits at its trailing edge, the caret before at its leading edge") {
+        guard let (view, markdown) = fixture(), let placed = view.placedImages().first,
+              let after = appKitCaretRect(at: NSMaxRange(markdown), in: view),
+              let before = appKitCaretRect(at: markdown.location, in: view) else {
+            check(false, "the image and its carets are laid out")
+            return
+        }
+        check(abs(after.minX - placed.rect.maxX) < 1, "after: x \(after.minX) at the image's right edge \(placed.rect.maxX)")
+        check(abs(before.minX - placed.rect.minX) < 1, "before: x \(before.minX) at the image's left edge \(placed.rect.minX)")
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        let drawn = view.caretRect(from: after)
+        check(drawn.minY > placed.rect.midY,
+              "the caret is text-high at the foot of the image line, like an attachment (\(drawn) vs image \(placed.rect))")
+    }
+
+    suite("image glyphs: none of the hidden markdown is ever drawn") {
+        guard let (view, markdown) = fixture(), let lm = view.layoutManager, let tc = view.textContainer else { return }
+        lm.ensureLayout(for: tc)
+        let glyphs = lm.glyphRange(forCharacterRange: markdown, actualCharacterRange: nil)
+        let shown = (glyphs.location..<NSMaxRange(glyphs)).filter { !lm.notShownAttribute(forGlyphAt: $0) }
+        check(shown.isEmpty, "every glyph of the reference is not-shown, so no selection colour can reveal it (\(shown.count) shown)")
+    }
+
+    suite("image glyphs: an image wider than the column is drawn at the column's width, on one line") {
+        guard let (view, markdown) = fixture(width: 900), let tc = view.textContainer,
+              let placed = view.placedImages().first else { return }
+        let column = tc.size.width - 2 * tc.lineFragmentPadding
+        check(placed.rect.width <= column + 0.5, "the image fits the column (\(placed.rect.width) <= \(column))")
+        check(abs(placed.rect.height - placed.rect.width / 2) < 0.5, "and keeps its aspect ratio")
+        let fragments = lineFragments(for: markdown, in: view)
+        equal(fragments.count, 1, "on one line")
+        if let first = fragments.first {
+            check(abs(first.height - (placed.rect.height + 6)) < 1, "as tall as the fitted image (\(first.height))")
+        }
+    }
+
+    suite("image glyphs: text sharing a line with an image does not wrap the hidden markdown into gaps") {
+        guard let (view, markdown) = fixture(width: 120, text: { "before\nsee \($0) here\nafter" }) else { return }
+        let fragments = lineFragments(for: markdown, in: view)
+        equal(fragments.count, 1, "one line: the reference takes the image's width, not ~60 characters")
+    }
+}
+
+func runImageGlyphClickTests() {
+    suite("image glyphs: AppKit's own hit-testing puts a click on an image before or after it by half") {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let text = "before line\n\(markdown)\nafter line"
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: markdown)
+        guard let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return
+        }
+        for (x, expected, label) in [
+            (placed.rect.minX + 20, range.location, "left half: before"),
+            (placed.rect.maxX - 20, NSMaxRange(range), "right half: after"),
+        ] {
+            view.setSelectedRange(NSRange(location: 0, length: 0))
+            let index = view.characterIndexForInsertion(at: NSPoint(x: x, y: placed.rect.midY))
+            view.setSelectedRange(NSRange(location: index, length: 0))
+            equal(view.selectedRange().location, expected, "\(label) (hit index \(index))")
+        }
     }
 }
