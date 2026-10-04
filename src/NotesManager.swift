@@ -30,6 +30,16 @@ final class NotesManager: ObservableObject {
     /// Convenience for call sites that only care about the text.
     var texts: [String] { notes.map(\.text) }
 
+    /// Where each note's caret and scroll were left this session. Not
+    /// published and not saved: nothing redraws because of it, and it means
+    /// nothing after a relaunch.
+    let viewStates = NoteViewStateStore()
+
+    /// The note on screen, or nil while there is none.
+    var currentNoteID: UUID? {
+        notes.indices.contains(currentIndex) ? notes[currentIndex].id : nil
+    }
+
     /// Seeds the newly-current note's directive tracking on every change,
     /// covering every way this can be reassigned — swipe/keyboard
     /// navigation, `addNewNote`, `deleteNote`, `moveNote`, and a direct jump

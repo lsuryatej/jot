@@ -188,6 +188,8 @@ struct ContentView: View {
             ),
             selectedRange: $selectedRange,
             scrollTarget: $scrollTarget,
+            noteID: notesManager.currentNoteID,
+            viewStates: notesManager.viewStates,
             onSwipe: { direction in
                 navigate(direction)
             }

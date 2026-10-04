@@ -34,6 +34,7 @@ finding where a given piece of behaviour lives.
 | `src/EdgeReveal.swift` | Edge sidebar show/hide: generation guard and slide geometry |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/Note.swift` | The note model and its stable identity |
+| `src/NoteViewState.swift` | Each note's caret and scroll, remembered for the session |
 | `src/GlobalSearch.swift` | Cross-note search, matching every note's text directly |
 | `src/GlobalSearchView.swift` | The Cmd+Shift+F overlay |
 | `src/LinkShrink.swift` | Finds long URLs and the domain worth keeping visible |

@@ -2554,8 +2554,65 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// `PlainTextEditor.updateNSView`, kept on the view so the sequence has one
     /// home and can be driven directly by a test. Callers are responsible for
     /// only reaching it on a genuine divergence between the model and the view.
+    /// The same note's text changed underneath the view: the caret keeps
+    /// its offset, clamped. A switch to another note goes through
+    /// `openNote(_:restoring:)` instead.
     func loadNoteText(_ text: String) {
         let caret = selectedRange().location
+        replaceDocument(with: text)
+        let length = (text as NSString).length
+        setSelectedRange(NSRange(location: min(caret, length), length: 0))
+        restyleDocument()
+    }
+
+    /// Where this note was left: its selection and how far it was scrolled.
+    var viewState: NoteViewState {
+        NoteViewState(
+            selection: selectedRange(),
+            scrollOrigin: enclosingScrollView?.contentView.bounds.origin ?? .zero
+        )
+    }
+
+    /// Shows another note, with the selection and scroll it was left with
+    /// this session, or, opened for the first time, the caret at its end and
+    /// scrolled into view (design review H7). Laid out and scrolled here,
+    /// synchronously, so the first display already shows the right place:
+    /// no frame at the old offset, no visible jump.
+    func openNote(_ text: String, restoring state: NoteViewState?) {
+        replaceDocument(with: text)
+        let length = (text as NSString).length
+        let selection = state.map { clamped($0.selection) } ?? NSRange(location: length, length: 0)
+        setSelectedRange(selection)
+        restyleDocument()
+        restoreScroll(state?.scrollOrigin)
+    }
+
+    /// Scrolls to `origin`, clamped to the document, or with none, to the
+    /// top and then just far enough to show the selection.
+    func restoreScroll(_ origin: CGPoint?) {
+        guard let scrollView = enclosingScrollView else { return }
+        if let layoutManager, let textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+        }
+        sizeToFit()
+        let clip = scrollView.contentView
+        let top = -clip.contentInsets.top
+        let bottom = max(top, frame.height - clip.bounds.height + clip.contentInsets.bottom)
+        let y = min(max(origin?.y ?? top, top), bottom)
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+        scrollView.reflectScrolledClipView(clip)
+        if origin == nil {
+            scrollRangeToVisible(selectedRange())
+        }
+    }
+
+    private func restyleDocument() {
+        applyChecklistStyling()
+        recomputeLinkMatches()
+        applyLinkFolding()
+    }
+
+    private func replaceDocument(with text: String) {
         // Another note's results are a starting point, not a change to speak.
         mathSpeech.rebase()
         string = text
@@ -2569,11 +2626,6 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // notes.json 0.6s later. Undo history belongs to a note, and this is
         // where a note ends, so the stack goes with it.
         undoManager?.removeAllActions()
-        let length = (text as NSString).length
-        setSelectedRange(NSRange(location: min(caret, length), length: 0))
-        applyChecklistStyling()
-        recomputeLinkMatches()
-        applyLinkFolding()
     }
 
     func recomputeLinkMatches() {
@@ -3424,6 +3476,11 @@ struct PlainTextEditor: NSViewRepresentable {
     /// to nil in `updateNSView` once applied, so it fires exactly once per
     /// selection rather than re-scrolling on every unrelated update.
     @Binding var scrollTarget: NSRange?
+    /// The note being edited, so a switch is told apart from the same
+    /// note's text changing.
+    var noteID: UUID? = nil
+    /// Where each note's caret and scroll were left this session.
+    var viewStates: NoteViewStateStore? = nil
     var onSwipe: (SwipeDirection) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -3510,7 +3567,32 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.applyLinkFolding()
 
         scrollView.documentView = textView
+
+        // A rebuilt editor (display-mode change) reopens where the note was
+        // left, or at its end the first time. The scroll waits a tick: the
+        // scroll view has no size until SwiftUI lays it out.
+        context.coordinator.noteID = noteID
+        let state = noteID.flatMap { viewStates?[$0] }
+        let length = (text as NSString).length
+        let selection = state?.selection ?? NSRange(location: length, length: 0)
+        textView.setSelectedRange(NSRange(
+            location: min(selection.location, length),
+            length: min(selection.length, length - min(selection.location, length))
+        ))
+        if noteID != nil, viewStates != nil {
+            DispatchQueue.main.async { [weak textView] in
+                textView?.restoreScroll(state?.scrollOrigin)
+            }
+        }
         return scrollView
+    }
+
+    /// The editor going away (display-mode change) is a switch away too.
+    static func dismantleNSView(_ scrollView: SwipeScrollView, coordinator: Coordinator) {
+        guard let id = coordinator.noteID, let states = coordinator.parent.viewStates,
+              let textView = scrollView.documentView as? ChecklistTextView
+        else { return }
+        states[id] = textView.viewState
     }
 
     func updateNSView(_ scrollView: SwipeScrollView, context: Context) {
@@ -3550,33 +3632,63 @@ struct PlainTextEditor: NSViewRepresentable {
             textView.guide = guide
         }
 
-        // Only touch the text view when the model genuinely diverged (note
-        // switch). Assigning unconditionally would fight the user's typing and
-        // reset undo on every keystroke.
-        if textView.string != text {
-            textView.loadNoteText(text)
-        }
+        Self.showNote(noteID, text: text, leaving: context.coordinator.noteID, in: textView, states: viewStates)
+        context.coordinator.noteID = noteID
 
-        // Runs after the text-diff block above, so a jump into a different
-        // note lands against that note's already-current string rather than
-        // the one it's replacing.
+        // Runs after the note switch above, so a jump into a different note
+        // lands against that note's already-current string rather than the
+        // one it's replacing, and wins over the spot that note remembered.
         if let target = scrollTarget {
-            let length = (textView.string as NSString).length
-            if target.location != NSNotFound, target.location <= length {
-                let safeRange = NSRange(
-                    location: target.location,
-                    length: min(target.length, length - target.location)
-                )
-                textView.scrollRangeToVisible(safeRange)
-                textView.setSelectedRange(safeRange)
-                textView.showFindIndicator(for: safeRange)
-            }
+            Self.applyScrollTarget(target, in: textView)
             DispatchQueue.main.async { self.scrollTarget = nil }
         }
     }
 
+    /// Selects a global-search match and brings it into view.
+    static func applyScrollTarget(_ target: NSRange, in textView: ChecklistTextView) {
+        let length = (textView.string as NSString).length
+        guard target.location != NSNotFound, target.location <= length else { return }
+        let safeRange = NSRange(
+            location: target.location,
+            length: min(target.length, length - target.location)
+        )
+        textView.scrollRangeToVisible(safeRange)
+        textView.setSelectedRange(safeRange)
+        textView.showFindIndicator(for: safeRange)
+    }
+
+    /// Puts note `id` in the text view. A switch from `previous` records
+    /// where that note was left and restores where `id` was; the same note
+    /// with new text only swaps the text. Without a store (or a note id),
+    /// it is the plain text swap this always was.
+    static func showNote(
+        _ id: UUID?,
+        text: String,
+        leaving previous: UUID?,
+        in textView: ChecklistTextView,
+        states: NoteViewStateStore?
+    ) {
+        guard let id, let states else {
+            if textView.string != text { textView.loadNoteText(text) }
+            return
+        }
+        guard id != previous else {
+            // Only touch the text view when the model genuinely diverged.
+            // Assigning unconditionally would fight the user's typing and
+            // reset undo on every keystroke.
+            if textView.string != text { textView.loadNoteText(text) }
+            return
+        }
+        if let previous {
+            states[previous] = textView.viewState
+        }
+        textView.openNote(text, restoring: states[id])
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: PlainTextEditor
+        /// The note the text view is showing.
+        var noteID: UUID?
 
         init(_ parent: PlainTextEditor) {
             self.parent = parent
