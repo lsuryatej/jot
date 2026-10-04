@@ -260,7 +260,7 @@ a two-finger swipe; moving past the last note starts a new one. With the
 header hidden, a brief badge names the note you landed on. Blank notes are
 tidied away as you move between notes.
 
-**Reorder.** **Ctrl+Cmd+↑** and **Ctrl+Cmd+↓** walk the open note up or down
+**Reorder.** **Cmd+Option+↑** and **Cmd+Option+↓** walk the open note up or down
 the list one slot at a time. In the Screen Edge sidebar, hover a card and
 drag it by the grip in its corner; the stack parts around the drag and the
 order you leave it in is the saved order.
@@ -301,9 +301,9 @@ Five modes, switchable live in Settings → General:
 **Screen Edge** reveals itself when you rest the cursor against that edge or
 click the bar that sits there, and slides away when the pointer leaves. A
 hover reveal never takes the keyboard from the app you're in; click into a
-card to type. Each card has its own delete button, a grip to reorder it, and
-a handle to resize it (double-click the handle to fit the card to its
-content); a button at the top adds a note. The sidebar's width and side are in
+card to type. Each card has its own delete button (Cmd+Z brings the note
+back), a grip to reorder it, and a handle to resize it (double-click the
+handle to fit the card to its content); a button at the top adds a note. The sidebar's width and side are in
 Settings.
 
 ![The Screen Edge sidebar, holding a checklist, a math note, and a currency conversion as separate cards](docs/screenshots/screen-edge.png)
@@ -374,12 +374,14 @@ Settings → Shortcuts lists these too.
 | **Option+A** (configurable) | Show or hide Jot from anywhere on macOS |
 | **Cmd+N** | New note |
 | **Cmd+Option+→** / **Cmd+Option+←** | Next / previous note |
-| **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** | Move the current note up / down the list |
+| **Cmd+Option+↑** / **Cmd+Option+↓** | Move the current note up / down the list |
+| **Shift+Cmd+Delete** | Delete the current note (Cmd+Z brings it back) |
 | **Cmd+W** | Close the frontmost window: hides the note, or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Tab** / **Shift+Tab** | Nest / un-nest a checklist item |
 | **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** (caret in a list item) | Move the item up / down, its nested items with it |
 | **Cmd+B** / **Cmd+I** | Bold / italicise the selection or the word at the caret, again to remove |
+| **Cmd+=** (or **Cmd++**) / **Cmd+-** / **Cmd+0** | Bigger / smaller / actual text size: the current note's own size, or every card's in Screen Edge |
 | **Shift+Cmd+H** | Highlight the selection, or start one at the caret, again to remove |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+C** (nothing selected, in a `code` note) | Copy the whole code block |
@@ -388,6 +390,8 @@ Settings → Shortcuts lists these too.
 | **Cmd+E** | Use the selection for find |
 | **Shift+Cmd+F** | Search every note |
 | **Cmd+/** | Toggle the header and footer together |
+| **Ctrl+Cmd+F** | Enter or exit full screen (Dock and Menu Bar modes) |
+| **Cmd+M** | Minimize (Dock mode) |
 | **Cmd+,** | Settings |
 | **Cmd+H** | Hide Jot |
 | **Cmd+Q** | Quit |
@@ -397,6 +401,11 @@ Settings → Shortcuts lists these too.
 
 Cut, Copy, Paste, Select All, Undo and Redo are the standard
 Cmd+X/C/V/A/Z/Shift+Cmd+Z you'd expect anywhere on macOS.
+
+The menu bar only shows in Dock mode. Everywhere else, right-click in a note
+for Bold, Italic, Bigger, Smaller, Move Note Up/Down and Delete Note, and
+right-click the menu bar icon for New Note, Delete Note, Check for Updates,
+Settings and Quit.
 
 ## Accessibility
 

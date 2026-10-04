@@ -387,6 +387,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// storage delegate.
     private var isStyling = false
 
+    /// The note a Screen Edge card shows, so commands from this editor (Delete
+    /// Note, the context menu) act on that card rather than on whichever note
+    /// happens to be current. Nil in the single-note editor, which always
+    /// shows the current note.
+    var noteID: UUID?
+
     // MARK: - Pure geometry (extracted for the headless tests)
 
     /// The smallest an image may be dragged down to: below this the resize
@@ -750,19 +756,30 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
         // Ctrl-Cmd-Up/Down on a list item moves the item among its siblings,
         // the Apple Notes convention. Only the focused view acts (Screen Edge
-        // mode has one per card), and only when the caret is in a list: a
-        // caret anywhere else falls through to moving the note below.
+        // mode has one per card), and only when the caret is in a list.
+        // Moving the note itself is Option-Cmd-Up/Down, below.
         if flags == [.command, .control],
            event.keyCode == UInt16(kVK_UpArrow) || event.keyCode == UInt16(kVK_DownArrow),
            window == nil || window?.firstResponder === self,
            moveListItem(event.keyCode == UInt16(kVK_UpArrow) ? .up : .down) {
             return true
         }
-        // Ctrl-Cmd-Up/Down walk the current note through the list. Like Cmd+N
-        // and Cmd+Shift+F below, this posts rather than acts: the text view
+        // Shift-Cmd-Delete: Delete Note. Never plain Cmd-Delete, which is the
+        // text view's delete-to-start-of-line. Posted with this editor's note,
+        // and only from the focused editor: every card's text view is offered
+        // the key equivalent, and the first to claim it would win.
+        if flags == [.command, .shift], event.keyCode == UInt16(kVK_Delete),
+           window == nil || window?.firstResponder === self {
+            NotificationCenter.default.post(name: .jotRequestDeleteNote, object: noteID)
+            return true
+        }
+        // Option-Cmd-Up/Down walk the current note through the list, the
+        // same chord family as Option-Cmd-Left/Right below (Ctrl-Cmd-Up/Down
+        // is left to list items, as in Apple Notes). Like Cmd+N and
+        // Cmd+Shift+F below, this posts rather than acts: the text view
         // exists in every display mode, and AppDelegate owns the one
         // NotesManager along with the knowledge of whether the panel shows.
-        if flags == [.command, .control] {
+        if flags == [.command, .option] {
             if event.keyCode == UInt16(kVK_UpArrow) {
                 NotificationCenter.default.post(name: .jotRequestMoveNoteUp, object: nil)
                 return true
@@ -773,10 +790,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             }
         }
         // Cmd-Option-Left/Right switch which note is showing, the keyboard
-        // equivalent of a two-finger swipe. Option rather than Control, so it
-        // doesn't collide with the reordering shortcut above, and it matches
-        // Safari/Chrome's own Cmd-Option-Left/Right tab-switching muscle
-        // memory. Same posting pattern as the move above.
+        // equivalent of a two-finger swipe. It matches Safari/Chrome's own
+        // Cmd-Option-Left/Right tab-switching muscle memory. Same posting
+        // pattern as the move above.
         if flags == [.command, .option] {
             if event.keyCode == UInt16(kVK_RightArrow) {
                 NotificationCenter.default.post(name: .jotRequestNextNote, object: nil)
@@ -826,6 +842,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
             return true
         }
+        // Format › Font › Bigger (Cmd-+, and Cmd-= so Shift isn't needed),
+        // Smaller, Actual Size. + usually arrives with Shift held.
+        if let size = Self.textSizeCommand(flags: flags, key: key) {
+            NotificationCenter.default.post(name: .jotRequestTextSize, object: size.rawValue)
+            return true
+        }
         if flags == [.command], key == "/" {
             NotificationCenter.default.post(name: .jotRequestToggleChrome, object: nil)
             return true
@@ -835,6 +857,24 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// The main menu is hidden outside Dock mode, so the note commands are
+    /// appended here too; see `EditorContextMenu`. A copy, so the additions
+    /// never accumulate on a menu AppKit may hand out again.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
+        EditorContextMenu.append(to: menu, for: self)
+        return menu
+    }
+
+    static func textSizeCommand(flags: NSEvent.ModifierFlags, key: String?) -> TextSizeCommand? {
+        switch (flags, key) {
+        case ([.command], "="), ([.command], "+"), ([.command, .shift], "+"): return .bigger
+        case ([.command], "-"): return .smaller
+        case ([.command], "0"): return .actualSize
+        default: return nil
+        }
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {

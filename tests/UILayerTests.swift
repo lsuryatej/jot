@@ -173,6 +173,52 @@ func runUILayerTests() {
         check(fired, "the previous-note notification actually posted")
     }
 
+    suite("Option-Cmd-Up/Down move the note, beside Option-Cmd-Left/Right") {
+        let view = makeTextView("existing")
+        var up = 0, down = 0
+        let upToken = NotificationCenter.default.addObserver(forName: .jotRequestMoveNoteUp, object: nil, queue: nil) { _ in up += 1 }
+        let downToken = NotificationCenter.default.addObserver(forName: .jotRequestMoveNoteDown, object: nil, queue: nil) { _ in down += 1 }
+        defer {
+            NotificationCenter.default.removeObserver(upToken)
+            NotificationCenter.default.removeObserver(downToken)
+        }
+
+        check(arrowKeyEquivalent(view, keyCode: UInt16(kVK_UpArrow), modifiers: [.command, .option]),
+              "Option-Cmd-Up is claimed")
+        check(arrowKeyEquivalent(view, keyCode: UInt16(kVK_DownArrow), modifiers: [.command, .option]),
+              "Option-Cmd-Down is claimed")
+        equal(up, 1, "Option-Cmd-Up posted move-up once")
+        equal(down, 1, "Option-Cmd-Down posted move-down once")
+
+        // Ctrl-Cmd-Up/Down belong to list items now, as in Apple Notes.
+        _ = arrowKeyEquivalent(view, keyCode: UInt16(kVK_UpArrow), modifiers: [.command, .control])
+        _ = arrowKeyEquivalent(view, keyCode: UInt16(kVK_DownArrow), modifiers: [.command, .control])
+        equal(up, 1, "Ctrl-Cmd-Up no longer moves the note")
+        equal(down, 1, "Ctrl-Cmd-Down no longer moves the note")
+    }
+
+    suite("Shift-Cmd-Delete asks to delete this editor's note; Cmd-Delete stays a text edit") {
+        let view = makeTextView("existing")
+        let id = UUID()
+        view.noteID = id
+        var requests: [UUID?] = []
+        let token = NotificationCenter.default.addObserver(forName: .jotRequestDeleteNote, object: nil, queue: nil) { note in
+            requests.append(note.object as? UUID)
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        check(arrowKeyEquivalent(view, keyCode: UInt16(kVK_Delete), modifiers: [.command, .shift]),
+              "Shift-Cmd-Delete is claimed")
+        equal(requests, [id], "naming the note this editor shows, so a Screen Edge card deletes itself")
+
+        // Cmd-Delete is NSTextView's delete-to-start-of-line. Claiming it
+        // here, or giving it to a menu item (menus see key equivalents before
+        // the text view's key bindings), would delete the note instead.
+        check(!arrowKeyEquivalent(view, keyCode: UInt16(kVK_Delete), modifiers: [.command]),
+              "Cmd-Delete falls through to the text view")
+        equal(requests.count, 1, "and asks for nothing")
+    }
+
     suite("plain Right arrow (no modifiers) is not the note-switch shortcut") {
         let view = makeTextView("existing")
         let handled = arrowKeyEquivalent(view, keyCode: UInt16(kVK_RightArrow), modifiers: [])

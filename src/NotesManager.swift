@@ -90,6 +90,12 @@ final class NotesManager: ObservableObject {
     /// evaluation had its directive edited or deleted, and its notification
     /// is cancelled to match.
     private var seenReminderSources: [UUID: Set<String>] = [:]
+    /// When each reminder this session scheduled is due, per note and
+    /// source. Only so that undoing a note's deletion can put back exactly
+    /// the notifications deleting it cancelled: re-parsing "remind in 10
+    /// minutes" at undo time would move it, and "remind 3pm" after 3pm
+    /// would roll it to tomorrow.
+    private var scheduledReminderDates: [UUID: [String: Date]] = [:]
     /// A brief confirmation message ("Reminder set for Today at 3:00 PM"),
     /// set the moment a genuinely new `remind` directive is scheduled.
     /// `ContentView` shows this as a transient toast and is responsible for
@@ -121,6 +127,19 @@ final class NotesManager: ObservableObject {
     /// Configurable via Preferences; a note whose first line is this keyword
     /// is code, and none of the directives above apply inside it.
     var codeKeyword: String = CodeBlock.defaultKeyword
+
+    /// Note-level undo: deleting a note and putting it back. Separate from
+    /// the editor's typing stack, which is cleared whenever the note on
+    /// screen changes (see `ChecklistTextView.loadNoteText`) and so could
+    /// never hold an action that itself changes the note on screen.
+    /// `UndoRouter` interleaves the two behind one Edit › Undo. Grouping is
+    /// explicit rather than by event, so it behaves the same in the headless
+    /// tests as in the running app.
+    let noteUndoManager: UndoManager = {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        return manager
+    }()
 
     private let store: NoteStore
     private var pendingSave: DispatchWorkItem?
@@ -230,18 +249,48 @@ final class NotesManager: ObservableObject {
         flush()
     }
 
+    /// What Delete Note can act on: any note while there are several, and
+    /// the only one as long as it has something in it to clear.
+    func canDeleteNote(at index: Int) -> Bool {
+        guard notes.indices.contains(index) else { return false }
+        return notes.count > 1 || !notes[index].isBlank
+    }
+
+    /// Everything undoing a deletion needs to put the note back as it was.
+    private struct DeletedNote {
+        let note: Note
+        let index: Int
+        /// The only note is cleared rather than removed, so undo refills it.
+        let wasCleared: Bool
+        /// Reminders the deletion cancelled that had not fired yet.
+        let pendingReminders: [String: Date]
+    }
+
+    /// Deletes a note, undoably ("Delete Note"). The note on screen stays the
+    /// one the user was reading; if that is the note deleted, the next one
+    /// takes its place, or the previous one when it was last. The only note
+    /// is never removed, just emptied, so the model always has a note.
     func deleteNote(at index: Int) {
-        guard notes.indices.contains(index), notes.count > 1 else {
-            // Never leave the model with nothing to address.
-            if notes.indices.contains(index) {
-                let id = notes[index].id
-                notes[index].text = ""
-                forgetTimerState(for: id)
-            }
+        guard canDeleteNote(at: index) else {
             flush()
             return
         }
         let id = notes[index].id
+        let now = Date()
+        let deleted = DeletedNote(
+            note: notes[index],
+            index: index,
+            wasCleared: notes.count == 1,
+            pendingReminders: (scheduledReminderDates[id] ?? [:]).filter { $0.value > now }
+        )
+        guard notes.count > 1 else {
+            // Never leave the model with nothing to address.
+            notes[index].text = ""
+            forgetTimerState(for: id)
+            flush()
+            registerUndo(restoring: deleted)
+            return
+        }
         // Which note the user is actually looking at, captured by identity
         // before the array shifts under it. Clamping the index alone was
         // wrong for every deletion below the current one: with [A, B, C]
@@ -269,6 +318,62 @@ final class NotesManager: ObservableObject {
             currentIndex = min(currentIndex, notes.count - 1)
         }
         flush()
+        registerUndo(restoring: deleted)
+    }
+
+    private func registerUndo(restoring deleted: DeletedNote) {
+        // During an undo or redo the manager is already inside a group of its
+        // own, and nesting one here is harmless.
+        noteUndoManager.beginUndoGrouping()
+        noteUndoManager.registerUndo(withTarget: self) { $0.restore(deleted) }
+        noteUndoManager.setActionName("Delete Note")
+        noteUndoManager.endUndoGrouping()
+    }
+
+    /// The undo of `deleteNote`: the same note, id and all, back at its old
+    /// position (or the end, if the list has since grown shorter), and shown,
+    /// so the undo is visible rather than happening somewhere off screen.
+    /// Registers the redo, which is simply deleting it again.
+    private func restore(_ deleted: DeletedNote) {
+        var note = deleted.note
+        let position: Int
+        if let existing = notes.firstIndex(where: { $0.id == note.id }), notes[existing].isBlank {
+            // The cleared only-note, still there and still empty: refill it.
+            notes[existing] = note
+            position = existing
+        } else {
+            if notes.contains(where: { $0.id == note.id }) {
+                // The cleared note has been written in since. Its new text is
+                // not the undo's to overwrite, so the old content comes back
+                // beside it as a note of its own.
+                note = Note(text: note.text, fontName: note.fontName, fontSize: note.fontSize, cardHeight: note.cardHeight)
+            }
+            position = min(deleted.index, notes.count)
+            notes.insert(note, at: position)
+        }
+        // Lands on the restored note, and `currentIndex`'s didSet seeds its
+        // directives as already seen: a countdown the delete stopped stays
+        // stopped rather than starting again from the top.
+        currentIndex = position
+        // The reminders the delete cancelled, put back exactly as they were.
+        let now = Date()
+        let title = note.title == "Untitled note" ? "Reminder" : note.title
+        for (source, fireDate) in deleted.pendingReminders where fireDate > now {
+            reminderScheduler.schedule(
+                identifier: reminderIdentifier(noteID: note.id, source: source),
+                fireDate: fireDate,
+                title: title,
+                body: source
+            )
+            scheduledReminderDates[note.id, default: [:]][source] = fireDate
+        }
+        flush()
+
+        let redo = position
+        noteUndoManager.beginUndoGrouping()
+        noteUndoManager.registerUndo(withTarget: self) { $0.deleteNote(at: redo) }
+        noteUndoManager.setActionName("Delete Note")
+        noteUndoManager.endUndoGrouping()
     }
 
     /// A deleted note leaves nothing to point back to: an orphaned countdown
@@ -298,6 +403,7 @@ final class NotesManager: ObservableObject {
     /// `seenReminderSources`, whether it was scheduled this session or
     /// merely seeded from text a previous session already scheduled.
     private func forgetReminderState(for noteID: UUID) {
+        scheduledReminderDates[noteID] = nil
         guard let sources = seenReminderSources[noteID], !sources.isEmpty else {
             seenReminderSources[noteID] = nil
             return
@@ -374,10 +480,16 @@ final class NotesManager: ObservableObject {
     /// `+ 1` is the do-nothing slot — and `notes.count` itself is a legal
     /// destination meaning "to the very end".
     func moveCurrentNote(by delta: Int) {
+        moveNote(at: currentIndex, by: delta)
+    }
+
+    /// The same walk for any note, such as the Screen Edge card a context
+    /// menu was opened on. The current note stays current.
+    func moveNote(at index: Int, by delta: Int) {
         let target = delta < 0
-            ? max(0, currentIndex + delta)
-            : min(notes.count, currentIndex + delta + 1)
-        moveNote(from: currentIndex, to: target)
+            ? max(0, index + delta)
+            : min(notes.count, index + delta + 1)
+        moveNote(from: index, to: target)
     }
 
     // MARK: - Timers
@@ -557,6 +669,7 @@ final class NotesManager: ObservableObject {
         let removed = previousSources.subtracting(currentSources)
         if !removed.isEmpty {
             reminderScheduler.cancel(identifiers: removed.map { reminderIdentifier(noteID: noteID, source: $0) })
+            for source in removed { scheduledReminderDates[noteID]?[source] = nil }
         }
 
         let added = directives.filter { !previousSources.contains($0.source) }
@@ -569,6 +682,7 @@ final class NotesManager: ObservableObject {
                     title: title == "Untitled note" ? "Reminder" : title,
                     body: directive.source
                 )
+                scheduledReminderDates[noteID, default: [:]][directive.source] = directive.fireDate
             }
             // A confirmation for whichever directive was just typed, so a
             // wrong time or date is obvious immediately rather than only at

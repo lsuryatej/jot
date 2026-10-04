@@ -15,7 +15,7 @@ extension Notification.Name {
     /// "Search All Notes" item; observed by ContentView, which owns the
     /// overlay's visibility state.
     static let jotRequestGlobalSearch = Notification.Name("JotRequestGlobalSearch")
-    /// Posted by the text view's Ctrl-Cmd-Up / Ctrl-Cmd-Down handling; observed
+    /// Posted by the text view's Option-Cmd-Up / Option-Cmd-Down handling; observed
     /// by AppDelegate, which owns the one NotesManager and can see whether the
     /// panel is visible at all.
     static let jotRequestMoveNoteUp = Notification.Name("JotRequestMoveNoteUp")
@@ -24,6 +24,14 @@ extension Notification.Name {
     /// observed by AppDelegate for the same reason the move-note pair is —
     /// switching which note is on screen instead of reordering the list.
     static let jotRequestNextNote = Notification.Name("JotRequestNextNote")
+    /// Posted by the text view's Shift-Cmd-Delete and its context menu, with
+    /// the note's id as the object when the editor is a Screen Edge card (nil
+    /// means the current note); observed by AppDelegate.
+    static let jotRequestDeleteNote = Notification.Name("JotRequestDeleteNote")
+    /// Posted by the text view's Cmd-+/Cmd-=/Cmd--/Cmd-0, with a
+    /// `TextSizeCommand` raw value as the object; observed by AppDelegate,
+    /// which knows whether the size is per-note or global in this mode.
+    static let jotRequestTextSize = Notification.Name("JotRequestTextSize")
     static let jotRequestPreviousNote = Notification.Name("JotRequestPreviousNote")
     /// Posted by the text view's Cmd+/ handling and the View menu's item;
     /// observed by ContentView, which owns `showsHeader`/`showsFooter`.
@@ -453,10 +461,11 @@ struct SettingsPaneView: View {
 
             Section("Notes") {
                 ShortcutRow(action: "New note", combo: "⌘N")
-                ShortcutRow(action: "Next note", combo: "⌘⌥→")
-                ShortcutRow(action: "Previous note", combo: "⌘⌥←")
-                ShortcutRow(action: "Move note up", combo: "⌃⌘↑")
-                ShortcutRow(action: "Move note down", combo: "⌃⌘↓")
+                ShortcutRow(action: "Next note", combo: "⌥⌘→")
+                ShortcutRow(action: "Previous note", combo: "⌥⌘←")
+                ShortcutRow(action: "Move note up", combo: "⌥⌘↑")
+                ShortcutRow(action: "Move note down", combo: "⌥⌘↓")
+                ShortcutRow(action: "Delete note (undo with ⌘Z)", combo: "⇧⌘⌫")
                 ShortcutRow(action: "Close / hide", combo: "⌘W")
             }
 
@@ -465,6 +474,8 @@ struct SettingsPaneView: View {
                 ShortcutRow(action: "Toggle highlight", combo: "⇧⌘H")
                 ShortcutRow(action: "Toggle bold", combo: "⌘B")
                 ShortcutRow(action: "Toggle italic", combo: "⌘I")
+                ShortcutRow(action: "Bigger / smaller text", combo: "⌘= / ⌘-")
+                ShortcutRow(action: "Actual text size", combo: "⌘0")
                 ShortcutRow(action: "Nest / un-nest checklist item", combo: "⇥ / ⇧⇥")
                 ShortcutRow(action: "Move list item up / down", combo: "⌃⌘↑ / ⌃⌘↓")
                 ShortcutRow(action: "Read clipboard image as text (OCR)", combo: "⇧⌘V")
