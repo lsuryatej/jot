@@ -524,36 +524,37 @@ in, quick recall, in a download of about 1 MB.
 
 ### How it compares
 
-Prices and feature lists as of August 2026, pulled from each app's own site
-and App Store listing. All three are solid, well-made tools, this is just
-what you get for free with Jot versus what they charge for.
+Prices and feature lists as of October 2026, read off each app's own site.
+All three are solid, well-made tools, this is just what you get for free with
+Jot versus what they charge for.
 
 | | **Jot** | [Antinote](https://antinote.io/) | [Numi](https://numi.app/) | [Soulver 4](https://soulver.app/) |
 |---|---|---|---|---|
-| Price | Free, open source | $5 one-time | Free, $23.59 to unlock notes + sync | $59 one-time (+$26/yr optional) |
-| Size | ~1 MB download, zero dependencies | Lightweight, closed | Lightweight, closed | Lightweight, closed |
+| Price | Free, open source | $5 one-time | Free; $29.99 unlocks unlimited notes + iCloud | $59 one-time (+ optional data subscription) |
+| Size | ~1 MB download, zero dependencies | Closed | Closed | ~18 MB download, closed |
 | Inline math with variables | Yes | Yes | Yes | Yes |
 | Unit conversion | Yes, offline | Yes | Yes | Yes |
-| Currency conversion | Yes, opt-in live rates | Yes | Yes, paid tier | Yes, live by default |
+| Currency conversion | Yes, opt-in live rates | Yes, live rates, incl. crypto | Yes, live rates, incl. crypto | Yes, live by default |
 | Checklists | Yes | Yes | No | No |
-| Images pasted inline | Yes | No | No | No |
-| Screenshot to text (OCR) | Yes, offline | Yes | No | No |
-| Display modes | 5: floating, dock, menu bar, dropdown, screen edge | Menu bar only | Window | Window |
+| Images pasted inline | Yes | No (images become OCR text) | No | No |
+| Screenshot to text (OCR) | Yes, offline | Yes, offline | No | No |
+| Display modes | 5: floating, dock, menu bar, dropdown, screen edge | 3: dock, menu bar, dropdown | Window | Window |
 | Search across all notes | Yes | Yes | N/A | Yes |
 | Long links collapse to their domain | Yes | Yes | N/A | N/A |
-| Sync across devices | No | iCloud (2.0+), iOS app in progress | iCloud, paid tier | iCloud, iOS/iPad apps |
-| Scripting / themes | Themes (notes); no scripting | Yes, JS extensions + themes | No | CLI, URL schemes, Automator |
-| Apple Notes sync | Yes, opt-in, one-way | No | No | No |
-| Network requests | One daily update check (can be turned off); live rates opt-in | iCloud only, if enabled | iCloud only, if paid | Live data on by default |
-| Source | Open, MIT | Closed | Core open, paid features closed | Closed |
+| Sync across devices | No | Optional iCloud; iOS app in development | iCloud, paid | iCloud; iPhone and iPad apps |
+| Scripting / themes | Themes (notes); no scripting | JS extensions, URL schemes, CLI, Shortcuts; themes | JS plugins, CLI, Alfred | CLI, URL schemes, Automator |
+| Apple Notes | One-way sync, opt-in | One-click export (also Obsidian, Bear) | No | No |
+| Network requests | One daily update check (can be turned off); live rates opt-in | Rates, update checks, iCloud; each has its own switch | Live rates; iCloud if paid | Live data on by default |
+| Platforms | macOS | macOS | macOS, Windows, Linux | macOS, iPhone, iPad |
+| Source | Open, MIT | Closed | App closed; CLI and plugins on GitHub | Closed |
 
 Jot doesn't beat any of these on every axis. Against Antinote specifically:
-no sync across devices, no scripting, no AutoPaste. Antinote is also a
-mature, several-year-old product; Jot is new. What Jot gives you instead is
-free and open source, inline images, five display modes instead of
-menu-bar-only, search across every note, link shrink, and an explicit
-zero-telemetry stance: one anonymous update check a day that you can turn
-off, live rates opt-in, nothing bundled into iCloud.
+no sync across devices, no scripting, no AutoPaste, no export to Obsidian or
+Bear. Antinote is also a mature, several-year-old product; Jot is new. What
+Jot gives you instead is free and open source, images that stay images
+inline, five display modes including a screen-edge sidebar, sync into Apple
+Notes rather than a one-off export, and a zero-telemetry stance:
+one anonymous update check a day that you can turn off, live rates opt-in.
 
 ### Not done yet
 
