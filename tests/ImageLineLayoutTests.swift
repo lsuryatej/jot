@@ -858,3 +858,89 @@ private func writeLayoutScratchNSImage() -> NSImage {
     image.unlockFocus()
     return image
 }
+
+// Maintainer: Backspace at the start of the line below an image, "fix however
+// you think is right." It used to join that line onto the image line, putting
+// text at the foot of an image-tall line. Now: an empty line is deleted and
+// the caret lands after the image; a line with text first selects the image
+// (tinted), and a second Backspace deletes the image's line, so the text
+// moves up to where the image was. Text is never joined onto the image.
+func runImageBackspaceTests() {
+    func fixture(_ build: (String) -> String) -> (view: ChecklistTextView, md: String, range: NSRange)? {
+        let path = writeLayoutScratchImage()
+        let md = Attachments.markdown(path: path, width: 200)
+        let text = build(md)
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: md)
+        guard range.location != NSNotFound else { return nil }
+        return (view, md, range)
+    }
+
+    suite("image backspace: on the empty line under an image, Backspace deletes the line and the caret sits after the image") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\n\nafter" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "before\n\(md)\nafter", "the empty line is gone")
+        equal(view.selectedRange(), NSRange(location: NSMaxRange(range), length: 0), "the caret is after the image")
+    }
+
+    suite("image backspace: the same on an empty last line") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\n" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "before\n\(md)", "the empty line is gone")
+        equal(view.selectedRange(), NSRange(location: NSMaxRange(range), length: 0), "the caret is after the image")
+    }
+
+    suite("image backspace: before text under an image, the first Backspace selects the image, the second deletes it") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\nafter" }) else { return }
+        let provider = AtomicUndoProvider()
+        view.delegate = provider
+        view.allowsUndo = true
+        let text = view.string
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        provider.manager.beginUndoGrouping()
+        view.deleteBackward(nil)
+        provider.manager.endUndoGrouping()
+        equal(view.string, text, "nothing is deleted or joined yet")
+        equal(view.selectedRange(), range, "the image is selected")
+        equal(view.selectedImageRects().count, 1, "and drawn tinted")
+
+        provider.manager.beginUndoGrouping()
+        view.deleteBackward(nil)
+        provider.manager.endUndoGrouping()
+        equal(view.string, "before\nafter", "the image's line is gone and the text moved up")
+        equal(view.selectedRange(), NSRange(location: 7, length: 0), "the caret is still at the start of that text")
+        provider.manager.undo()
+        equal(view.string, text, "one undo brings the image back")
+        view.delegate = nil
+        _ = md
+    }
+
+    suite("image backspace: moving away after the image is selected cancels the line delete") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\nafter" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        view.setSelectedRange(range)
+        view.deleteBackward(nil)
+        equal(view.string, "before\n\nafter", "an image selected some other way deletes like any selection")
+        _ = md
+    }
+
+    suite("image backspace: under an image list item, the same two steps remove the item") {
+        guard let (view, _, range) = fixture({ "list\n- [ ] \($0)\nmilk" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        equal(view.selectedRange(), range, "the picture is selected, not the marker")
+        view.deleteBackward(nil)
+        equal(view.string, "list\nmilk", "the image item is gone")
+    }
+
+    suite("image backspace: ordinary lines still join") {
+        let view = makeTextView("abc\ndef")
+        view.setSelectedRange(NSRange(location: 4, length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "abcdef", "plain Backspace at a line start")
+    }
+}

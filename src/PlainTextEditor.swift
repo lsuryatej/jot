@@ -1916,7 +1916,57 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         return super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
     }
 
-    override func deleteBackward(_ sender: Any?) { deletingWholeImages { super.deleteBackward(sender) } }
+    override func deleteBackward(_ sender: Any?) {
+        if deleteBackwardBelowImage() { return }
+        deletingWholeImages { super.deleteBackward(sender) }
+    }
+
+    /// The image the last Backspace selected from the line below it, while
+    /// it is still the selection. A second Backspace then deletes the
+    /// image's whole line.
+    private var imageSelectedByBackspace: NSRange?
+
+    /// Backspace at the start of the line under an image (one alone on its
+    /// line, or the content of a list item). Joining would put that line's
+    /// text at the foot of the image-tall line, so instead the first
+    /// Backspace selects the image, drawn tinted, and a second deletes the
+    /// image's line, moving the text up to where the image was; one undo
+    /// brings it back. An empty line under the image is not handled here:
+    /// the ordinary Backspace already deletes it and leaves the caret after
+    /// the image. False means "Backspace as usual".
+    private func deleteBackwardBelowImage() -> Bool {
+        let selection = selectedRange()
+        let ns = string as NSString
+
+        if let pending = imageSelectedByBackspace, selection == pending, NSMaxRange(pending) <= ns.length {
+            imageSelectedByBackspace = nil
+            let line = ns.lineRange(for: pending)
+            let endsInNewline = line.length > 0 && ns.character(at: NSMaxRange(line) - 1) == 0x0A
+            if endsInNewline {
+                replace(range: line, with: "", selecting: NSRange(location: line.location, length: 0))
+            } else {
+                let target = line.location > 0
+                    ? NSRange(location: line.location - 1, length: line.length + 1)
+                    : line
+                replace(range: target, with: "", selecting: NSRange(location: target.location, length: 0))
+            }
+            return true
+        }
+
+        guard selection.length == 0, selection.location > 0, selection.location < ns.length,
+              ns.character(at: selection.location - 1) == 0x0A,
+              ns.character(at: selection.location) != 0x0A else { return false }
+        let above = NSRange(location: selection.location - 1, length: 0)
+        guard let atom = loadedImageReferences(touching: above).first(where: { atom in
+            (atom.isAloneOnLine || atom.isAloneInItem)
+                && ns.substring(with: NSRange(location: NSMaxRange(atom.markdownRange),
+                                              length: selection.location - 1 - NSMaxRange(atom.markdownRange)))
+                    .trimmingCharacters(in: .whitespaces).isEmpty
+        }) else { return false }
+        setSelectedRange(atom.markdownRange)
+        imageSelectedByBackspace = atom.markdownRange
+        return true
+    }
     override func deleteForward(_ sender: Any?) { deletingWholeImages { super.deleteForward(sender) } }
     override func deleteWordBackward(_ sender: Any?) { deletingWholeImages { super.deleteWordBackward(sender) } }
     override func deleteWordForward(_ sender: Any?) { deletingWholeImages { super.deleteWordForward(sender) } }
@@ -2164,6 +2214,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         affinity: NSSelectionAffinity,
         stillSelecting: Bool
     ) {
+        if let pending = imageSelectedByBackspace, ranges.first?.rangeValue != pending {
+            imageSelectedByBackspace = nil
+        }
         let before = expandedLinkRanges
         // Snapped before AppKit sees them, so a caret inside a hidden image
         // reference is never drawn, not even for one frame.
