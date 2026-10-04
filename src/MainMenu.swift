@@ -12,6 +12,7 @@ enum MainMenu {
         preferencesAction: Selector,
         checkForUpdatesAction: Selector,
         newNoteAction: Selector,
+        deleteNoteAction: Selector,
         globalSearchAction: Selector,
         moveNoteUpAction: Selector,
         moveNoteDownAction: Selector,
@@ -31,6 +32,7 @@ enum MainMenu {
         mainMenu.addItem(fileMenuItem(
             target: target,
             newNoteAction: newNoteAction,
+            deleteNoteAction: deleteNoteAction,
             moveNoteUpAction: moveNoteUpAction,
             moveNoteDownAction: moveNoteDownAction,
             nextNoteAction: nextNoteAction,
@@ -163,6 +165,7 @@ enum MainMenu {
     private static func fileMenuItem(
         target: AnyObject,
         newNoteAction: Selector,
+        deleteNoteAction: Selector,
         moveNoteUpAction: Selector,
         moveNoteDownAction: Selector,
         nextNoteAction: Selector,
@@ -204,6 +207,20 @@ enum MainMenu {
             move.target = target
             menu.addItem(move)
         }
+
+        menu.addItem(.separator())
+
+        // Shift-Cmd-Delete, not Cmd-Delete: a menu sees key equivalents before
+        // the text view's key bindings do, and Cmd-Delete there is "delete to
+        // the start of the line". Undoable, so no confirmation.
+        let delete = NSMenuItem(
+            title: "Delete Note",
+            action: deleteNoteAction,
+            keyEquivalent: String(Character(UnicodeScalar(NSBackspaceCharacter)!))
+        )
+        delete.keyEquivalentModifierMask = [.command, .shift]
+        delete.target = target
+        menu.addItem(delete)
 
         menu.addItem(.separator())
 

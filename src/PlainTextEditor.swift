@@ -387,6 +387,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// storage delegate.
     private var isStyling = false
 
+    /// The note a Screen Edge card shows, so commands from this editor (Delete
+    /// Note, the context menu) act on that card rather than on whichever note
+    /// happens to be current. Nil in the single-note editor, which always
+    /// shows the current note.
+    var noteID: UUID?
+
     // MARK: - Pure geometry (extracted for the headless tests)
 
     /// The smallest an image may be dragged down to: below this the resize
@@ -746,6 +752,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
         if flags == [.command, .shift], key == "v" {
             extractTextFromClipboardImage(nil)
+            return true
+        }
+        // Shift-Cmd-Delete: Delete Note. Never plain Cmd-Delete, which is the
+        // text view's delete-to-start-of-line. Posted with this editor's note,
+        // and only from the focused editor: every card's text view is offered
+        // the key equivalent, and the first to claim it would win.
+        if flags == [.command, .shift], event.keyCode == UInt16(kVK_Delete),
+           window == nil || window?.firstResponder === self {
+            NotificationCenter.default.post(name: .jotRequestDeleteNote, object: noteID)
             return true
         }
         // Option-Cmd-Up/Down walk the current note through the list, the

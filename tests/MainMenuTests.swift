@@ -18,6 +18,7 @@ func makeTestMainMenu() -> NSMenu {
         preferencesAction: #selector(MainMenuTestTarget.noop),
         checkForUpdatesAction: #selector(MainMenuTestTarget.noop),
         newNoteAction: #selector(MainMenuTestTarget.noop),
+        deleteNoteAction: #selector(MainMenuTestTarget.noop),
         globalSearchAction: #selector(MainMenuTestTarget.noop),
         moveNoteUpAction: #selector(MainMenuTestTarget.noop),
         moveNoteDownAction: #selector(MainMenuTestTarget.noop),
@@ -142,6 +143,25 @@ func runMainMenuTests() {
             equal(item?.keyEquivalent, String(UnicodeScalar(key)!), "\(title) shows its arrow")
             equal(item?.keyEquivalentModifierMask, [.command, .option], "\(title) uses Option-Cmd, like Next/Previous Note")
         }
+    }
+
+    suite("File > Delete Note is Shift-Cmd-Delete, never Cmd-Delete") {
+        let menu = makeTestMainMenu()
+        let item = menuItem("Delete Note", in: submenu("File", of: menu))
+        check(item != nil, "Delete Note is in the File menu")
+        equal(item?.keyEquivalent, "\u{8}", "the Delete key")
+        equal(item?.keyEquivalentModifierMask, [.command, .shift], "with Shift-Cmd")
+        var plainCmdDelete = 0
+        func walk(_ menu: NSMenu) {
+            for item in menu.items {
+                if let sub = item.submenu { walk(sub) }
+                if ["\u{8}", "\u{7f}"].contains(item.keyEquivalent), item.keyEquivalentModifierMask == [.command] {
+                    plainCmdDelete += 1
+                }
+            }
+        }
+        walk(menu)
+        equal(plainCmdDelete, 0, "Cmd-Delete is left to the text view, where it deletes to the start of the line")
     }
 
     suite("no two items in the menu bar share a key equivalent") {

@@ -122,6 +122,7 @@ struct NoteCard: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             NoteCardEditor(
+                noteID: noteID,
                 text: Binding(
                     get: { notesManager.text(at: index) },
                     set: { notesManager.setText($0, at: index) }
@@ -331,6 +332,9 @@ private struct NoteCardDropDelegate: DropDelegate {
 /// SwiftUI's `.frame` on this view ends up giving it, a scroller appears only
 /// when the content actually overflows it.
 struct NoteCardEditor: NSViewRepresentable {
+    /// Which note this card shows; handed to the text view so its commands
+    /// act on this card. See `ChecklistTextView.noteID`.
+    var noteID: UUID
     @Binding var text: String
     var lineHeightMultiple: Double
     var baseFont: NSFont
@@ -356,6 +360,7 @@ struct NoteCardEditor: NSViewRepresentable {
 
         let textView = ChecklistTextView()
         textView.delegate = context.coordinator
+        textView.noteID = noteID
 
         textView.isRichText = false
         // See the matching comment in PlainTextEditor.swift: `isRichText`
@@ -405,6 +410,7 @@ struct NoteCardEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ChecklistTextView else { return }
         textView.onHeightChange = onHeightChange
+        textView.noteID = noteID
 
         textView.listKeyword = listKeyword
         textView.codeKeyword = codeKeyword

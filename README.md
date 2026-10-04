@@ -298,9 +298,9 @@ Five modes, switchable live in Settings → General:
 **Screen Edge** reveals itself when you rest the cursor against that edge or
 click the bar that sits there, and slides away when the pointer leaves. A
 hover reveal never takes the keyboard from the app you're in; click into a
-card to type. Each card has its own delete button, a grip to reorder it, and
-a handle to resize it (double-click the handle to fit the card to its
-content); a button at the top adds a note. The sidebar's width and side are in
+card to type. Each card has its own delete button (Cmd+Z brings the note
+back), a grip to reorder it, and a handle to resize it (double-click the
+handle to fit the card to its content); a button at the top adds a note. The sidebar's width and side are in
 Settings.
 
 ![The Screen Edge sidebar, holding a checklist, a math note, and a currency conversion as separate cards](docs/screenshots/screen-edge.png)
@@ -372,6 +372,7 @@ Settings → Shortcuts lists these too.
 | **Cmd+N** | New note |
 | **Cmd+Option+→** / **Cmd+Option+←** | Next / previous note |
 | **Cmd+Option+↑** / **Cmd+Option+↓** | Move the current note up / down the list |
+| **Shift+Cmd+Delete** | Delete the current note (Cmd+Z brings it back) |
 | **Cmd+W** | Close the frontmost window: hides the note, or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Tab** / **Shift+Tab** | Nest / un-nest a checklist item |

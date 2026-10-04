@@ -24,6 +24,10 @@ extension Notification.Name {
     /// observed by AppDelegate for the same reason the move-note pair is —
     /// switching which note is on screen instead of reordering the list.
     static let jotRequestNextNote = Notification.Name("JotRequestNextNote")
+    /// Posted by the text view's Shift-Cmd-Delete and its context menu, with
+    /// the note's id as the object when the editor is a Screen Edge card (nil
+    /// means the current note); observed by AppDelegate.
+    static let jotRequestDeleteNote = Notification.Name("JotRequestDeleteNote")
     static let jotRequestPreviousNote = Notification.Name("JotRequestPreviousNote")
     /// Posted by the text view's Cmd+/ handling and the View menu's item;
     /// observed by ContentView, which owns `showsHeader`/`showsFooter`.
@@ -535,10 +539,11 @@ struct PreferencesView: View {
 
             Section("Notes") {
                 ShortcutRow(action: "New note", combo: "⌘N")
-                ShortcutRow(action: "Next note", combo: "⌘⌥→")
-                ShortcutRow(action: "Previous note", combo: "⌘⌥←")
+                ShortcutRow(action: "Next note", combo: "⌥⌘→")
+                ShortcutRow(action: "Previous note", combo: "⌥⌘←")
                 ShortcutRow(action: "Move note up", combo: "⌥⌘↑")
                 ShortcutRow(action: "Move note down", combo: "⌥⌘↓")
+                ShortcutRow(action: "Delete note (undo with ⌘Z)", combo: "⇧⌘⌫")
                 ShortcutRow(action: "Close / hide", combo: "⌘W")
             }
 

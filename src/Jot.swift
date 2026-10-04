@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             preferencesAction: #selector(showPreferences),
             checkForUpdatesAction: #selector(updateFromMenu),
             newNoteAction: #selector(newNoteFromMenu),
+            deleteNoteAction: #selector(deleteNoteFromMenu(_:)),
             globalSearchAction: #selector(requestGlobalSearch),
             moveNoteUpAction: #selector(moveNoteUp(_:)),
             moveNoteDownAction: #selector(moveNoteDown(_:)),
@@ -75,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         panel = FloatingPanel(rootView: contentView())
         panel.delegate = self
+        panel.undoRouter = UndoRouter(notes: notesManager.noteUndoManager)
         if let saved = settings.windowedFrame {
             panel.setFrame(saved, display: false)
         }
@@ -261,6 +263,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: +1) }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .jotRequestDeleteNote)
+            .sink { [weak self] note in self?.deleteNote(id: note.object as? UUID) }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .jotRequestNextNote)
             .sink { [weak self] _ in self?.switchNoteIfVisible(by: +1) }
             .store(in: &cancellables)
@@ -310,6 +316,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func moveCurrentNoteIfVisible(by delta: Int) {
         guard isInterfaceVisible else { return }
         notesManager.moveCurrentNote(by: delta)
+    }
+
+    // MARK: - Deleting
+
+    /// File › Delete Note.
+    @objc func deleteNoteFromMenu(_ sender: Any?) {
+        deleteNote(id: nil)
+    }
+
+    /// Which note a Delete Note means: the one named (a Screen Edge card's
+    /// own shortcut or context menu), else the focused card in Screen Edge
+    /// mode, else the current note. Nil when there is nothing it can safely
+    /// mean, such as the sidebar with no card focused: guessing there would
+    /// delete a note the user isn't looking at.
+    private func deletionIndex(for id: UUID?) -> Int? {
+        guard isInterfaceVisible else { return nil }
+        let target = id ?? (settings.displayMode.isEdgeDocked ? focusedCardNoteID : nil)
+        let index: Int?
+        if let target {
+            index = notesManager.notes.firstIndex { $0.id == target }
+        } else {
+            index = settings.displayMode.isEdgeDocked ? nil : notesManager.currentIndex
+        }
+        guard let index, notesManager.canDeleteNote(at: index) else { return nil }
+        return index
+    }
+
+    private var focusedCardNoteID: UUID? {
+        (panel?.firstResponder as? ChecklistTextView)?.noteID
+    }
+
+    /// Undoable through Edit › Undo Delete Note; see `NotesManager.deleteNote`.
+    private func deleteNote(id: UUID?) {
+        guard let index = deletionIndex(for: id) else { return }
+        notesManager.deleteNote(at: index)
     }
 
     // MARK: - Switching
@@ -365,6 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let state = currentUpdateItemState
             menuItem.title = state.title
             return state.isEnabled
+        case #selector(deleteNoteFromMenu(_:)):
+            return deletionIndex(for: nil) != nil
         case #selector(moveNoteUp(_:)):
             return isInterfaceVisible && notesManager.currentIndex > 0
         case #selector(moveNoteDown(_:)):
@@ -999,6 +1042,38 @@ final class FloatingPanel: NSPanel {
     /// Which Window and View menu commands apply. Set by `apply(mode:)`.
     private var mode: DisplayMode = .floating
 
+    /// Edit › Undo and Redo span the editor's typing and the notes list
+    /// (deleting a note). Set once by AppDelegate.
+    var undoRouter: UndoRouter? {
+        didSet {
+            undoRouter?.observeText(undoManager)
+            undoRouter?.onNotesAction = { [weak self] in
+                // Typing after a delete is a new step, not more of the run
+                // the delete interrupted.
+                (self?.firstResponder as? NSTextView)?.breakUndoCoalescing()
+            }
+        }
+    }
+
+    /// NSWindow's own `undo:`/`redo:` (which Edit › Undo reaches through the
+    /// responder chain) only know this window's undo manager; these defer to
+    /// the router so a note deletion can be undone too.
+    @objc func undo(_ sender: Any?) {
+        currentUndoManager(for: .undo)?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        currentUndoManager(for: .redo)?.redo()
+    }
+
+    private func currentUndoManager(for direction: UndoRouter.Direction) -> UndoManager? {
+        guard let undoRouter else {
+            let own = undoManager
+            return (direction == .undo ? own?.canUndo : own?.canRedo) == true ? own : nil
+        }
+        return undoRouter.manager(for: direction, text: undoManager)
+    }
+
     /// Window level, Spaces behaviour, and focus-stealing all differ per mode.
     func apply(mode: DisplayMode) {
         self.mode = mode
@@ -1120,6 +1195,14 @@ final class FloatingPanel: NSPanel {
     /// docked to an edge or a dropdown pinned under the menu bar icon.
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(undo(_:)):
+            let manager = currentUndoManager(for: .undo)
+            menuItem.title = manager?.undoMenuItemTitle ?? "Undo"
+            return manager != nil
+        case #selector(redo(_:)):
+            let manager = currentUndoManager(for: .redo)
+            menuItem.title = manager?.redoMenuItemTitle ?? "Redo"
+            return manager != nil
         case #selector(performMiniaturize(_:)):
             return mode.allowsMinimize && super.validateMenuItem(menuItem)
         case #selector(performZoom(_:)):
