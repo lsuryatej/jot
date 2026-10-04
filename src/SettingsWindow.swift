@@ -256,6 +256,11 @@ final class SettingsTabViewController: NSTabViewController {
         title = category.title
         view.window?.title = category.title
         if remembersSelection { category.remember(in: defaults) }
+        // No control holds focus until the person presses Tab, as in the
+        // system's own settings windows. Left to AppKit, the pane's first
+        // control (General's Mode radio) took focus on some switches and not
+        // others, so a focus ring faded in on a control nobody had touched.
+        view.window?.makeFirstResponder(nil)
         fitToSelectedPane(animated: view.window?.isVisible == true)
         paneDidChange?(category)
     }
@@ -355,6 +360,9 @@ final class SettingsWindowController: NSWindowController {
     func show(pane: SettingsCategory? = nil) {
         if let pane { tabs.select(pane) }
         window?.makeKeyAndOrderFront(nil)
+        // Ordering front hands focus to the initial first responder; clear
+        // it for the same reason as on a pane switch.
+        window?.makeFirstResponder(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }
