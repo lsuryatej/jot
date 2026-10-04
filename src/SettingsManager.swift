@@ -65,6 +65,27 @@ enum DisplayMode: String, CaseIterable, Identifiable {
     var wantsFloatingLevel: Bool {
         self == .floating || self == .dropdown || self == .edge
     }
+
+    /// Dock and Menu Bar windows are ordinary windows and carry
+    /// `.fullScreenPrimary`; the floating-level modes are auxiliary to
+    /// whatever app is full screen and cannot take a Space of their own.
+    var allowsFullScreen: Bool {
+        !wantsFloatingLevel
+    }
+
+    /// Window › Zoom. Never while docked (the sidebar's frame is derived from
+    /// the screen edge) or anchored under the status item (the dropdown's
+    /// frame is derived from the icon), where a zoom would tear the panel
+    /// away from the thing it belongs to.
+    var allowsZoom: Bool {
+        !isEdgeDocked && !anchorsToStatusItem
+    }
+
+    /// Window › Minimize. Only Dock mode has a Dock icon to come back from;
+    /// a minimised accessory window would leave nothing obvious to click.
+    var allowsMinimize: Bool {
+        self == .dock
+    }
 }
 
 /// What text is painted with on a surface.

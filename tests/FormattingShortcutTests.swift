@@ -41,10 +41,6 @@ private func formattingKey(_ view: ChecklistTextView, _ chars: String, _ modifie
     return view.performKeyEquivalent(with: event)
 }
 
-private final class MenuTarget: NSObject {
-    @objc func noop() {}
-}
-
 func runFormattingShortcutTests() {
 
     // MARK: - Wrapping a selection
@@ -307,19 +303,7 @@ func runFormattingShortcutTests() {
     }
 
     suite("the Format menu offers Bold and Italic") {
-        let menu = MainMenu.build(
-            target: MenuTarget(),
-            preferencesAction: #selector(MenuTarget.noop),
-            newNoteAction: #selector(MenuTarget.noop),
-            globalSearchAction: #selector(MenuTarget.noop),
-            moveNoteUpAction: #selector(MenuTarget.noop),
-            moveNoteDownAction: #selector(MenuTarget.noop),
-            nextNoteAction: #selector(MenuTarget.noop),
-            previousNoteAction: #selector(MenuTarget.noop),
-            toggleChromeAction: #selector(MenuTarget.noop),
-            toggleChecklistAction: #selector(MenuTarget.noop),
-            toggleHighlightAction: #selector(MenuTarget.noop)
-        )
+        let menu = makeTestMainMenu()
         let format = menu.items.first { $0.submenu?.title == "Format" }?.submenu
         let bold = format?.items.first { $0.title == "Bold" }
         let italic = format?.items.first { $0.title == "Italic" }

@@ -384,6 +384,8 @@ Settings → Shortcuts lists these too.
 | **Cmd+E** | Use the selection for find |
 | **Shift+Cmd+F** | Search every note |
 | **Cmd+/** | Toggle the header and footer together |
+| **Ctrl+Cmd+F** | Enter or exit full screen (Dock and Menu Bar modes) |
+| **Cmd+M** | Minimize (Dock mode) |
 | **Cmd+,** | Settings |
 | **Cmd+H** | Hide Jot |
 | **Cmd+Q** | Quit |

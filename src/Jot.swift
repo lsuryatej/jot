@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.mainMenu = MainMenu.build(
             target: self,
             preferencesAction: #selector(showPreferences),
+            checkForUpdatesAction: #selector(updateFromMenu),
             newNoteAction: #selector(newNoteFromMenu),
             globalSearchAction: #selector(requestGlobalSearch),
             moveNoteUpAction: #selector(moveNoteUp(_:)),
@@ -65,8 +66,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             previousNoteAction: #selector(previousNote(_:)),
             toggleChromeAction: #selector(toggleChromeFromMenu),
             toggleChecklistAction: #selector(toggleChecklistFromMenu),
-            toggleHighlightAction: #selector(toggleHighlightFromMenu)
+            toggleHighlightAction: #selector(toggleHighlightFromMenu),
+            showHelpAction: #selector(showHelp)
         )
+        if let mainMenu = NSApp.mainMenu {
+            MainMenu.registerSystemMenus(of: mainMenu, with: NSApp)
+        }
 
         panel = FloatingPanel(rootView: contentView())
         panel.delegate = self
@@ -103,8 +108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func rememberWindowedFrame() {
         // Only windowed modes have a size worth keeping; the docked frame is
-        // derived from the screen.
-        guard !settings.displayMode.isEdgeDocked, panel?.isVisible == true else { return }
+        // derived from the screen, and a full-screen frame is the screen's,
+        // not one the user chose (it would come back as a screen-sized window
+        // after the next relaunch).
+        guard !settings.displayMode.isEdgeDocked, panel?.isVisible == true,
+              panel?.styleMask.contains(.fullScreen) == false
+        else { return }
         settings.windowedFrame = panel.frame
     }
 
@@ -340,10 +349,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     /// Greys out the move items at the ends of the list, or whenever the panel
-    /// is hidden, instead of letting them click into nothing. Every other item
-    /// targeted here was always enabled and stays that way.
+    /// is hidden, instead of letting them click into nothing, and retitles the
+    /// items whose wording follows state. Every other item targeted here is
+    /// always enabled.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(toggleChromeFromMenu):
+            menuItem.title = MainMenu.chromeToggleTitle(
+                showsHeader: settings.showsHeader,
+                showsFooter: settings.showsFooter
+            )
+            // The edge stack has no header or footer to show or hide.
+            return !settings.displayMode.isEdgeDocked
+        case #selector(updateFromMenu):
+            let state = currentUpdateItemState
+            menuItem.title = state.title
+            return state.isEnabled
         case #selector(moveNoteUp(_:)):
             return isInterfaceVisible && notesManager.currentIndex > 0
         case #selector(moveNoteDown(_:)):
@@ -764,22 +785,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         menu.addItem(.separator())
 
-        if UpdateChecker.shared.isUpdating {
-            // No action, so the menu auto-disables it and a second run can't start.
-            menu.addItem(NSMenuItem(title: "Updating…", action: nil, keyEquivalent: ""))
-        } else if let version = UpdateChecker.shared.availableVersion {
-            let update = NSMenuItem(
-                title: "Update Available (v\(version))…",
-                action: #selector(performUpdate),
-                keyEquivalent: ""
-            )
-            update.target = self
-            menu.addItem(update)
-        } else {
-            let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow), keyEquivalent: "")
-            check.target = self
-            menu.addItem(check)
-        }
+        // Same item, same rules as the app menu's; `validateMenuItem`
+        // disables it while an update runs, so a second run can't start.
+        let update = NSMenuItem(
+            title: currentUpdateItemState.title,
+            action: #selector(updateFromMenu),
+            keyEquivalent: ""
+        )
+        update.target = self
+        menu.addItem(update)
 
         menu.addItem(.separator())
 
@@ -806,21 +820,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.terminate(nil)
     }
 
-    @objc private func performUpdate() {
-        UpdateChecker.shared.performUpdate()
+    private var currentUpdateItemState: MainMenu.UpdateItemState {
+        MainMenu.updateItemState(
+            isUpdating: UpdateChecker.shared.isUpdating,
+            availableVersion: UpdateChecker.shared.availableVersion
+        )
     }
 
-    @objc private func checkForUpdatesNow() {
+    /// The update row in both the app menu and the status item's menu.
+    @objc private func updateFromMenu() {
+        switch currentUpdateItemState.action {
+        case .install: UpdateChecker.shared.performUpdate()
+        case .check: checkForUpdatesNow()
+        }
+    }
+
+    /// A check someone asked for always answers: up to date, or what is
+    /// available with the choice to install it now. Before, a check that
+    /// found something said nothing, and the news only surfaced the next
+    /// time the status item's menu happened to be opened.
+    private func checkForUpdatesNow() {
         Task {
             await UpdateChecker.shared.forceCheck()
-            if UpdateChecker.shared.availableVersion == nil {
-                let alert = NSAlert()
+            // An accessory app's alert would otherwise open behind whatever
+            // app is frontmost.
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            if UpdateChecker.shared.availableVersion != nil, UpdateChecker.brewForCaskInstall() == nil {
+                // Not a Homebrew install: performUpdate's own alert already
+                // says what is available and offers the download.
+                UpdateChecker.shared.performUpdate()
+            } else if let available = UpdateChecker.shared.availableVersion {
+                alert.messageText = "Jot \(available) is available"
+                alert.informativeText = "Install it now? Jot relaunches when the update finishes."
+                alert.addButton(withTitle: "Install Update")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    UpdateChecker.shared.performUpdate()
+                }
+            } else {
                 let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
                 alert.messageText = "You're up to date"
                 alert.informativeText = "Jot \(version) is the latest version."
                 alert.runModal()
             }
         }
+    }
+
+    /// Help › Jot Help. The README is the manual.
+    @objc private func showHelp() {
+        NSWorkspace.shared.open(UpdateChecker.helpPage)
     }
 
     // MARK: - Preferences
@@ -947,8 +996,12 @@ final class FloatingPanel: NSPanel {
         contentView = NSHostingView(rootView: rootView)
     }
 
+    /// Which Window and View menu commands apply. Set by `apply(mode:)`.
+    private var mode: DisplayMode = .floating
+
     /// Window level, Spaces behaviour, and focus-stealing all differ per mode.
     func apply(mode: DisplayMode) {
+        self.mode = mode
         hidesOnDeactivate = mode.hidesOnDeactivate
         animationBehavior = mode.windowAnimationBehavior
 
@@ -965,6 +1018,13 @@ final class FloatingPanel: NSPanel {
         // it stranded off its edge until the next reveal snapped it back.
         isMovable = mode.allowsWindowDrag
         isMovableByWindowBackground = mode.allowsWindowDrag
+        // Dock mode is a normal app window, so its yellow button and
+        // Window › Minimize work; elsewhere there is no Dock icon to return to.
+        if mode.allowsMinimize {
+            styleMask.insert(.miniaturizable)
+        } else {
+            styleMask.remove(.miniaturizable)
+        }
 
         if mode.wantsFloatingLevel {
             level = .floating
@@ -1052,6 +1112,25 @@ final class FloatingPanel: NSPanel {
         guard let event, event.type == .keyDown || event.type == .keyUp else { return false }
         guard event.modifierFlags.contains(.command) else { return false }
         return event.charactersIgnoringModifiers == "."
+    }
+
+    /// The Window menu's Minimize and Zoom and the View menu's Enter Full
+    /// Screen reach this window whenever it is key. AppKit's own validation
+    /// only looks at the style mask, which says nothing about a sidebar
+    /// docked to an edge or a dropdown pinned under the menu bar icon.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(performMiniaturize(_:)):
+            return mode.allowsMinimize && super.validateMenuItem(menuItem)
+        case #selector(performZoom(_:)):
+            return mode.allowsZoom && super.validateMenuItem(menuItem)
+        case #selector(toggleFullScreen(_:)):
+            // super first: it is what retitles Enter/Exit Full Screen.
+            let allowed = super.validateMenuItem(menuItem)
+            return mode.allowsFullScreen && allowed
+        default:
+            return super.validateMenuItem(menuItem)
+        }
     }
 
     override var canBecomeKey: Bool { true }

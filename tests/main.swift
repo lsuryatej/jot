@@ -45,6 +45,7 @@ runAccentInkTests()
 runMotionTests()
 runEdgeRevealTests()
 runVoiceOverTests()
+runMainMenuTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
