@@ -28,6 +28,10 @@ extension Notification.Name {
     /// the note's id as the object when the editor is a Screen Edge card (nil
     /// means the current note); observed by AppDelegate.
     static let jotRequestDeleteNote = Notification.Name("JotRequestDeleteNote")
+    /// Posted by the text view's Cmd-+/Cmd-=/Cmd--/Cmd-0, with a
+    /// `TextSizeCommand` raw value as the object; observed by AppDelegate,
+    /// which knows whether the size is per-note or global in this mode.
+    static let jotRequestTextSize = Notification.Name("JotRequestTextSize")
     static let jotRequestPreviousNote = Notification.Name("JotRequestPreviousNote")
     /// Posted by the text view's Cmd+/ handling and the View menu's item;
     /// observed by ContentView, which owns `showsHeader`/`showsFooter`.
@@ -552,6 +556,8 @@ struct PreferencesView: View {
                 ShortcutRow(action: "Toggle highlight", combo: "⇧⌘H")
                 ShortcutRow(action: "Toggle bold", combo: "⌘B")
                 ShortcutRow(action: "Toggle italic", combo: "⌘I")
+                ShortcutRow(action: "Bigger / smaller text", combo: "⌘= / ⌘-")
+                ShortcutRow(action: "Actual text size", combo: "⌘0")
                 ShortcutRow(action: "Nest / un-nest checklist item", combo: "⇥ / ⇧⇥")
                 ShortcutRow(action: "Read clipboard image as text (OCR)", combo: "⇧⌘V")
             }

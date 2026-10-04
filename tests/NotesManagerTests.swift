@@ -873,7 +873,7 @@ func runAllTests() {
     }
 
     suite("a wild stored font size is clamped at init") {
-        equal(makeSettings(seedSize: 200).noteFontSize, 24, "too large comes down")
+        equal(makeSettings(seedSize: 200).noteFontSize, 32, "too large comes down")
         equal(makeSettings(seedSize: 2).noteFontSize, 11, "too small comes up")
         equal(makeSettings().noteFontSize, 13, "absent keeps the default")
 

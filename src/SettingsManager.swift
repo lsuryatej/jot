@@ -783,8 +783,13 @@ final class SettingsManager: ObservableObject {
         didSet { defaults.set(noteFontSize, forKey: Key.noteFontSize) }
     }
 
-    /// The bounds `noteFontSize` is held to.
-    static let fontSizeRange: ClosedRange<Double> = 11...24
+    /// The bounds `noteFontSize` and every per-note size are held to. 32
+    /// clears Apple's 200% guidance for the 13pt default with room to spare.
+    static let fontSizeRange: ClosedRange<Double> = 11...32
+
+    /// What a fresh install uses, and what Format › Font › Actual Size
+    /// returns the editor to where there is no per-note size to drop.
+    static let defaultFontSize: Double = 13
 
     /// Font sizes arriving from anywhere (theme notes included) pass through
     /// the same clamp the slider does.
@@ -943,7 +948,7 @@ final class SettingsManager: ObservableObject {
         self.lineSpacing = defaults.object(forKey: Key.lineSpacing) as? Double ?? 1.0
         self.noteFontName = defaults.string(forKey: Key.noteFontName) ?? NoteFont.defaultName
         self.noteFontSize = Self.clamped(
-            defaults.object(forKey: Key.noteFontSize) as? Double ?? 13,
+            defaults.object(forKey: Key.noteFontSize) as? Double ?? Self.defaultFontSize,
             to: Self.fontSizeRange
         )
         self.letterSpacing = defaults.object(forKey: Key.letterSpacing) as? Double ?? 0
@@ -1160,11 +1165,46 @@ final class SettingsManager: ObservableObject {
         themeOverride?.fontName ?? perNote ?? noteFontName
     }
 
+    /// A per-note size comes from notes.json, which may predate the current
+    /// range or have been edited by hand, so it is clamped here on the way
+    /// to the screen, the same as the global size is at load.
     func resolvedFontSize(perNote: Double?) -> Double {
-        themeOverride?.fontSize ?? perNote ?? noteFontSize
+        themeOverride?.fontSize ?? perNote.map(Self.clampedFontSize) ?? noteFontSize
     }
 
     func resolvedEditorFont(perNoteName: String?, perNoteSize: Double?) -> NSFont {
         NoteFont.resolved(resolvedFontName(perNote: perNoteName), size: CGFloat(resolvedFontSize(perNote: perNoteSize)))
+    }
+}
+
+/// Format › Font › Bigger, Smaller and Actual Size, as pure arithmetic on a
+/// size that may be absent (nil: the note has no size of its own and shows
+/// the inherited one). The raw value travels in `.jotRequestTextSize`.
+enum TextSizeCommand: String {
+    case bigger
+    case smaller
+    case actualSize
+
+    /// The size after the command: a whole point up or down, held to
+    /// `SettingsManager.fontSizeRange`; nil for Actual Size, meaning "drop
+    /// the override and inherit".
+    func resized(_ current: Double?, inherited: Double) -> Double? {
+        let size = (current ?? inherited).rounded()
+        switch self {
+        case .bigger: return SettingsManager.clampedFontSize(size + 1)
+        case .smaller: return SettingsManager.clampedFontSize(size - 1)
+        case .actualSize: return nil
+        }
+    }
+
+    /// False where the command would change nothing, so its menu item is
+    /// disabled rather than doing nothing when chosen.
+    func canApply(to current: Double?, inherited: Double) -> Bool {
+        let size = current ?? inherited
+        switch self {
+        case .bigger: return size < SettingsManager.fontSizeRange.upperBound
+        case .smaller: return size > SettingsManager.fontSizeRange.lowerBound
+        case .actualSize: return current != nil
+        }
     }
 }

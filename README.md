@@ -377,6 +377,7 @@ Settings → Shortcuts lists these too.
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Tab** / **Shift+Tab** | Nest / un-nest a checklist item |
 | **Cmd+B** / **Cmd+I** | Bold / italicise the selection or the word at the caret, again to remove |
+| **Cmd+=** (or **Cmd++**) / **Cmd+-** / **Cmd+0** | Bigger / smaller / actual text size: the current note's own size, or every card's in Screen Edge |
 | **Shift+Cmd+H** | Highlight the selection, or start one at the caret, again to remove |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+C** (nothing selected, in a `code` note) | Copy the whole code block |

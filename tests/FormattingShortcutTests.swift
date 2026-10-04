@@ -302,9 +302,10 @@ func runFormattingShortcutTests() {
         equal(edits, 1, "exactly one text change was made")
     }
 
-    suite("the Format menu offers Bold and Italic") {
+    suite("the Format menu offers Bold and Italic, under Font") {
         let menu = makeTestMainMenu()
-        let format = menu.items.first { $0.submenu?.title == "Format" }?.submenu
+        let format = menu.items.first { $0.submenu?.title == "Format" }?.submenu?
+            .items.first { $0.title == "Font" }?.submenu
         let bold = format?.items.first { $0.title == "Bold" }
         let italic = format?.items.first { $0.title == "Italic" }
         equal(bold?.keyEquivalent, "b", "Bold shows Cmd+B")
@@ -312,7 +313,10 @@ func runFormattingShortcutTests() {
         equal(italic?.keyEquivalent, "i", "Italic shows Cmd+I")
         check(bold?.action == #selector(ChecklistTextView.toggleBold(_:)), "Bold reaches the editor")
         check(italic?.action == #selector(ChecklistTextView.toggleItalic(_:)), "Italic reaches the editor")
-        let allItems = menu.items.flatMap { $0.submenu?.items ?? [] }
+        func everyItem(_ menu: NSMenu) -> [NSMenuItem] {
+            menu.items.flatMap { [$0] + ($0.submenu.map(everyItem) ?? []) }
+        }
+        let allItems = everyItem(menu)
         equal(allItems.filter { $0.keyEquivalent == "b" && $0.keyEquivalentModifierMask == [.command] }.count, 1,
               "nothing else in the menu bar claims Cmd+B")
         equal(allItems.filter { $0.keyEquivalent == "i" && $0.keyEquivalentModifierMask == [.command] }.count, 1,

@@ -27,6 +27,7 @@ func makeTestMainMenu() -> NSMenu {
         toggleChromeAction: #selector(MainMenuTestTarget.noop),
         toggleChecklistAction: #selector(MainMenuTestTarget.noop),
         toggleHighlightAction: #selector(MainMenuTestTarget.noop),
+        textSizeAction: #selector(MainMenuTestTarget.noop),
         showHelpAction: #selector(MainMenuTestTarget.noop)
     )
 }

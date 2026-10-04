@@ -21,6 +21,7 @@ enum MainMenu {
         toggleChromeAction: Selector,
         toggleChecklistAction: Selector,
         toggleHighlightAction: Selector,
+        textSizeAction: Selector,
         showHelpAction: Selector
     ) -> NSMenu {
         let mainMenu = NSMenu()
@@ -44,7 +45,8 @@ enum MainMenu {
         mainMenu.addItem(formatMenuItem(
             target: target,
             toggleChecklistAction: toggleChecklistAction,
-            toggleHighlightAction: toggleHighlightAction
+            toggleHighlightAction: toggleHighlightAction,
+            textSizeAction: textSizeAction
         ))
         mainMenu.addItem(viewMenuItem(target: target, toggleChromeAction: toggleChromeAction))
         mainMenu.addItem(windowMenuItem())
@@ -321,7 +323,8 @@ enum MainMenu {
     private static func formatMenuItem(
         target: AnyObject,
         toggleChecklistAction: Selector,
-        toggleHighlightAction: Selector
+        toggleHighlightAction: Selector,
+        textSizeAction: Selector
     ) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Format")
@@ -335,13 +338,7 @@ enum MainMenu {
         highlight.target = target
         menu.addItem(highlight)
 
-        // nil target, like Extract Text below: these act on whichever note
-        // editor is first responder, which matters in Screen Edge mode where
-        // several are on screen. As with the two above, the text view's
-        // `performKeyEquivalent` claims Cmd+B / Cmd+I itself, so the menu is
-        // for discoverability and mouse use.
-        menu.addItem(withTitle: "Bold", action: #selector(ChecklistTextView.toggleBold(_:)), keyEquivalent: "b")
-        menu.addItem(withTitle: "Italic", action: #selector(ChecklistTextView.toggleItalic(_:)), keyEquivalent: "i")
+        menu.addItem(fontMenuItem(target: target, textSizeAction: textSizeAction))
         menu.addItem(.separator())
 
         // Cmd+V keeps a pasted image; this reads it instead.
@@ -352,6 +349,42 @@ enum MainMenu {
         )
         extract.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(extract)
+        item.submenu = menu
+        return item
+    }
+
+    /// Format › Font, as the HIG lays it out: Bold and Italic, then the size.
+    private static func fontMenuItem(target: AnyObject, textSizeAction: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: "Font", action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: "Font")
+
+        // nil target, like Extract Text: these act on whichever note editor
+        // is first responder, which matters in Screen Edge mode where several
+        // are on screen. As with Toggle Checklist and Toggle Highlight, the
+        // text view's `performKeyEquivalent` claims Cmd+B / Cmd+I itself, so
+        // the menu is for discoverability and mouse use.
+        menu.addItem(withTitle: "Bold", action: #selector(ChecklistTextView.toggleBold(_:)), keyEquivalent: "b")
+        menu.addItem(withTitle: "Italic", action: #selector(ChecklistTextView.toggleItalic(_:)), keyEquivalent: "i")
+        menu.addItem(.separator())
+
+        // One action; the command rides in representedObject. AppDelegate
+        // decides whether the size is the note's own or the global one.
+        func sizeItem(_ title: String, _ command: TextSizeCommand, _ key: String) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: textSizeAction, keyEquivalent: key)
+            item.target = target
+            item.representedObject = command.rawValue
+            return item
+        }
+        menu.addItem(sizeItem("Bigger", .bigger, "+"))
+        // Cmd-= as well, so Bigger doesn't need Shift on layouts where + is
+        // Shift-=. Hidden: one visible Bigger, two chords.
+        let biggerAlias = sizeItem("Bigger", .bigger, "=")
+        biggerAlias.isHidden = true
+        biggerAlias.allowsKeyEquivalentWhenHidden = true
+        menu.addItem(biggerAlias)
+        menu.addItem(sizeItem("Smaller", .smaller, "-"))
+        menu.addItem(sizeItem("Actual Size", .actualSize, "0"))
+
         item.submenu = menu
         return item
     }

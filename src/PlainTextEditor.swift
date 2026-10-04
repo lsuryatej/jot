@@ -832,6 +832,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
             return true
         }
+        // Format › Font › Bigger (Cmd-+, and Cmd-= so Shift isn't needed),
+        // Smaller, Actual Size. + usually arrives with Shift held.
+        if let size = Self.textSizeCommand(flags: flags, key: key) {
+            NotificationCenter.default.post(name: .jotRequestTextSize, object: size.rawValue)
+            return true
+        }
         if flags == [.command], key == "/" {
             NotificationCenter.default.post(name: .jotRequestToggleChrome, object: nil)
             return true
@@ -841,6 +847,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    static func textSizeCommand(flags: NSEvent.ModifierFlags, key: String?) -> TextSizeCommand? {
+        switch (flags, key) {
+        case ([.command], "="), ([.command], "+"), ([.command, .shift], "+"): return .bigger
+        case ([.command], "-"): return .smaller
+        case ([.command], "0"): return .actualSize
+        default: return nil
+        }
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {

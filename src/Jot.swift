@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             toggleChromeAction: #selector(toggleChromeFromMenu),
             toggleChecklistAction: #selector(toggleChecklistFromMenu),
             toggleHighlightAction: #selector(toggleHighlightFromMenu),
+            textSizeAction: #selector(textSizeFromMenu(_:)),
             showHelpAction: #selector(showHelp)
         )
         if let mainMenu = NSApp.mainMenu {
@@ -267,6 +268,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] note in self?.deleteNote(id: note.object as? UUID) }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .jotRequestTextSize)
+            .sink { [weak self] note in
+                guard let raw = note.object as? String, let command = TextSizeCommand(rawValue: raw) else { return }
+                self?.applyTextSize(command)
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .jotRequestNextNote)
             .sink { [weak self] _ in self?.switchNoteIfVisible(by: +1) }
             .store(in: &cancellables)
@@ -353,6 +361,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         notesManager.deleteNote(at: index)
     }
 
+    // MARK: - Text size
+
+    /// Format › Font › Bigger, Smaller, Actual Size.
+    @objc func textSizeFromMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let command = TextSizeCommand(rawValue: raw)
+        else { return }
+        applyTextSize(command)
+    }
+
+    /// The single-note editor shows the current note's own size when it has
+    /// one, so that is what changes there, the same value the header's size
+    /// slider sets. Screen Edge cards all draw at the global size, so there
+    /// it is the global size that changes. A theme note that sets a size
+    /// overrides both, so nothing applies while one does.
+    private func textSizeCanApply(_ command: TextSizeCommand) -> Bool {
+        guard isInterfaceVisible, settings.themeOverride?.fontSize == nil else { return false }
+        if settings.displayMode.isEdgeDocked {
+            let global = settings.noteFontSize
+            return command.canApply(
+                to: global == SettingsManager.defaultFontSize ? nil : global,
+                inherited: SettingsManager.defaultFontSize
+            )
+        }
+        return command.canApply(to: notesManager.currentFontSize, inherited: settings.noteFontSize)
+    }
+
+    private func applyTextSize(_ command: TextSizeCommand) {
+        guard textSizeCanApply(command) else { return }
+        if settings.displayMode.isEdgeDocked {
+            settings.noteFontSize = command.resized(settings.noteFontSize, inherited: SettingsManager.defaultFontSize)
+                ?? SettingsManager.defaultFontSize
+        } else {
+            notesManager.currentFontSize = command.resized(
+                notesManager.currentFontSize,
+                inherited: settings.noteFontSize
+            )
+        }
+    }
+
     // MARK: - Switching
 
     @objc func nextNote(_ sender: Any?) {
@@ -408,6 +456,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return state.isEnabled
         case #selector(deleteNoteFromMenu(_:)):
             return deletionIndex(for: nil) != nil
+        case #selector(textSizeFromMenu(_:)):
+            guard let raw = menuItem.representedObject as? String,
+                  let command = TextSizeCommand(rawValue: raw)
+            else { return false }
+            return textSizeCanApply(command)
         case #selector(moveNoteUp(_:)):
             return isInterfaceVisible && notesManager.currentIndex > 0
         case #selector(moveNoteDown(_:)):
