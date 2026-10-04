@@ -160,5 +160,55 @@ func runEdgeStackTests() {
             let after = harness.onScreenFrame(15)?.minY ?? -1
             check(abs(after - before) < 1, "card 15 stays put on screen (\(before) -> \(after))")
         }
+
+        // MARK: - H6: one keystroke, one card
+
+        suite("typing in one edge card updates only that card") {
+            EdgeCardHeights.shared.removeAll()
+            let harness = EdgeStackHarness(notes: edgeStackSeed(12), height: 2000)
+            harness.pump()
+            guard let editor = harness.card(4)?.documentView as? ChecklistTextView else {
+                check(false, "card 4 hosted")
+                return
+            }
+            NoteCardEditor.updateCount = 0
+            NoteCardEditor.measureCount = 0
+            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            editor.insertText("x", replacementRange: editor.selectedRange())
+            harness.pump()
+            print("         per keystroke: \(NoteCardEditor.updateCount) updateNSView, \(NoteCardEditor.measureCount) measured")
+            check(harness.manager.text(at: 4).hasSuffix("x"), "the keystroke reached the note")
+            check(NoteCardEditor.updateCount <= 1,
+                  "at most the edited card's editor is updated (\(NoteCardEditor.updateCount) of 12)")
+            equal(NoteCardEditor.measureCount, 0,
+                  "and it is not re-measured from the update: the edit itself already did that")
+        }
+
+        suite("a note changed elsewhere still reaches its card, and only its card") {
+            EdgeCardHeights.shared.removeAll()
+            let harness = EdgeStackHarness(notes: edgeStackSeed(12), height: 2000)
+            harness.pump()
+            NoteCardEditor.updateCount = 0
+            NoteCardEditor.measureCount = 0
+            harness.manager.setText("Replaced\nfrom elsewhere", at: 7)
+            harness.pump()
+            let editor = harness.card(7)?.documentView as? ChecklistTextView
+            equal(editor?.string, "Replaced\nfrom elsewhere", "the card shows the new text")
+            // Once for the text, once more as its own new height lands.
+            check(NoteCardEditor.updateCount <= 2,
+                  "only that card's editor is updated (\(NoteCardEditor.updateCount) of 12)")
+            equal(NoteCardEditor.measureCount, 1, "and measured once, for the new text")
+        }
+
+        suite("a setting every card shows still reaches every card") {
+            EdgeCardHeights.shared.removeAll()
+            let harness = EdgeStackHarness(notes: edgeStackSeed(5), height: 2000)
+            harness.pump()
+            let spacing = harness.settings.lineSpacing + 0.3
+            harness.settings.lineSpacing = spacing
+            harness.pump()
+            let applied = harness.cards().values.compactMap { ($0.documentView as? ChecklistTextView)?.lineHeightMultiple }
+            equal(applied, Array(repeating: spacing, count: 5), "all five cards take the new line spacing")
+        }
     }
 }

@@ -40,12 +40,21 @@ struct EdgeStackView: View {
                         // measured height and hover state belong to its note,
                         // so they must travel with it through a reorder
                         // instead of staying with the slot it used to sit in.
+                        //
+                        // Each card is handed only its own note and the
+                        // resolved look every card shares, and is compared
+                        // by those values (`.equatable()`): a keystroke
+                        // republishes `notes`, and only the card whose note
+                        // changed then re-renders and touches its editor.
+                        let style = EdgeCardStyle(settings: settings)
+                        let count = notesManager.notes.count
                         ForEach(Array(notesManager.notes.enumerated()), id: \.element.id) { index, note in
                             NoteCard(
                                 notesManager: notesManager,
-                                settings: settings,
+                                note: note,
                                 index: index,
-                                noteID: note.id,
+                                count: count,
+                                style: style,
                                 baseFont: NoteFont.resolved(
                                     settings.effectiveNoteFontName,
                                     // Cards stay compact previews: the chosen
@@ -53,9 +62,11 @@ struct EdgeStackView: View {
                                     // fixed 12pt body no matter the size setting.
                                     size: min(12, settings.effectiveFontSize)
                                 ),
+                                isCarried: draggingNoteID == note.id,
                                 draggingNoteID: $draggingNoteID,
                                 scrollAnchor: scrollAnchor
                             )
+                            .equatable()
                         }
                     }
                     .padding(.horizontal, 10)
@@ -100,17 +111,64 @@ struct EdgeStackView: View {
     }
 }
 
+/// Everything about a card's look that comes from settings rather than from
+/// its note, resolved once per stack render instead of read by every card
+/// observing `SettingsManager` (which re-rendered all of them on any change).
+struct EdgeCardStyle: Equatable {
+    var editorFont: NSFont
+    var lineHeightMultiple: Double
+    var listKeyword: String
+    var codeKeyword: String
+    var ink: InkTheme
+    var cardColor: NSColor
+    var opaqueCards: Bool
+    var hairlineColor: NSColor
+    var restingHairlineOpacity: Double
+    var hoveredHairlineOpacity: Double
+
+    @MainActor
+    init(settings: SettingsManager) {
+        editorFont = settings.effectiveEditorFont
+        lineHeightMultiple = settings.effectiveLineSpacing
+        listKeyword = settings.effectiveListKeyword
+        codeKeyword = settings.effectiveCodeKeyword
+        ink = settings.effectiveInk
+        cardColor = settings.effectiveCardColor
+        opaqueCards = settings.effectiveWantsOpaqueCards
+        hairlineColor = settings.effectiveHairlineColor
+        restingHairlineOpacity = settings.hairlineOpacity(settings.effectiveWantsLitEdge ? 0.16 : 0.10)
+        hoveredHairlineOpacity = settings.hairlineOpacity(0.16)
+    }
+}
+
 /// One note, in a card sized to its content.
-struct NoteCard: View {
-    @ObservedObject var notesManager: NotesManager
-    @ObservedObject var settings: SettingsManager
+///
+/// Deliberately not observing `NotesManager` or `SettingsManager`: it is
+/// handed its own note and the shared style as values and compared on them,
+/// so editing one note leaves every other card alone. `notesManager` is
+/// only here for the actions a card performs.
+struct NoteCard: View, Equatable {
+    let notesManager: NotesManager
+    let note: Note
     let index: Int
-    /// This card's note by identity — what drag and drop resolve through,
-    /// since `index` shifts underneath a live reorder.
-    let noteID: UUID
+    /// How many notes there are, for "Note 3 of 7".
+    let count: Int
+    let style: EdgeCardStyle
     let baseFont: NSFont
+    /// Whether this card is the one a drag is carrying right now.
+    let isCarried: Bool
     @Binding var draggingNoteID: UUID?
     let scrollAnchor: EdgeScrollAnchor
+
+    /// This card's note by identity — what drag and drop resolve through,
+    /// since `index` shifts underneath a live reorder.
+    private var noteID: UUID { note.id }
+
+    nonisolated static func == (lhs: NoteCard, rhs: NoteCard) -> Bool {
+        lhs.note == rhs.note && lhs.index == rhs.index && lhs.count == rhs.count
+            && lhs.style == rhs.style && lhs.baseFont == rhs.baseFont
+            && lhs.isCarried == rhs.isCarried
+    }
 
     /// The height the note's content actually needs — kept current
     /// regardless of whether a fixed height is in effect, so a fresh drag
@@ -124,18 +182,22 @@ struct NoteCard: View {
 
     init(
         notesManager: NotesManager,
-        settings: SettingsManager,
+        note: Note,
         index: Int,
-        noteID: UUID,
+        count: Int,
+        style: EdgeCardStyle,
         baseFont: NSFont,
+        isCarried: Bool,
         draggingNoteID: Binding<UUID?>,
         scrollAnchor: EdgeScrollAnchor
     ) {
         self.notesManager = notesManager
-        self.settings = settings
+        self.note = note
         self.index = index
-        self.noteID = noteID
+        self.count = count
+        self.style = style
         self.baseFont = baseFont
+        self.isCarried = isCarried
         self._draggingNoteID = draggingNoteID
         self.scrollAnchor = scrollAnchor
         // The first frame is drawn at whatever this says, before the editor
@@ -143,20 +205,17 @@ struct NoteCard: View {
         // there is one, otherwise a line-count estimate: either is far
         // closer than a fixed placeholder, which every card then grew out
         // of in view.
-        self._contentHeight = State(initialValue: EdgeCardHeights.shared.height(for: noteID)
+        self._contentHeight = State(initialValue: EdgeCardHeights.shared.height(for: note.id)
             ?? EdgeCardHeights.estimate(
-                text: notesManager.text(at: index),
+                text: note.text,
                 font: baseFont,
-                lineHeightMultiple: settings.effectiveLineSpacing
+                lineHeightMultiple: style.lineHeightMultiple
             ))
     }
 
-    /// Whether this card is the one a drag is carrying right now.
-    private var isCarried: Bool { draggingNoteID == noteID }
-
     /// Nil means "size to content" — this card's own persisted override, if
     /// the resize handle has ever been dragged.
-    private var fixedHeight: Double? { notesManager.cardHeight(at: index) }
+    private var fixedHeight: Double? { note.cardHeight }
 
     /// What actually gets asked of the editor's frame: the persisted fixed
     /// height if there is one, otherwise the content's own natural height.
@@ -165,15 +224,13 @@ struct NoteCard: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             NoteCardEditor(
-                text: Binding(
-                    get: { notesManager.text(at: index) },
-                    set: { notesManager.setText($0, at: index) }
-                ),
-                lineHeightMultiple: settings.effectiveLineSpacing,
-                baseFont: settings.effectiveEditorFont,
-                listKeyword: settings.effectiveListKeyword,
-                codeKeyword: settings.effectiveCodeKeyword,
-                ink: settings.effectiveInk,
+                text: note.text,
+                onTextChange: { [notesManager, index] in notesManager.setText($0, at: index) },
+                lineHeightMultiple: style.lineHeightMultiple,
+                baseFont: style.editorFont,
+                listKeyword: style.listKeyword,
+                codeKeyword: style.codeKeyword,
+                ink: style.ink,
                 onHeightChange: { height, editor in
                     let before = displayedHeight
                     let after = fixedHeight.map { CGFloat($0) } ?? height
@@ -191,7 +248,7 @@ struct NoteCard: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 13))
-                        .foregroundStyle(Color(nsColor: settings.effectiveInk.secondary).opacity(0.9))
+                        .foregroundStyle(Color(nsColor: style.ink.secondary).opacity(0.9))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -206,10 +263,8 @@ struct NoteCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    Color(nsColor: settings.effectiveHairlineColor)
-                        .opacity(settings.hairlineOpacity(
-                            settings.effectiveWantsLitEdge ? 0.16 : (isHovered ? 0.16 : 0.10)
-                        )),
+                    Color(nsColor: style.hairlineColor)
+                        .opacity(isHovered ? style.hoveredHairlineOpacity : style.restingHairlineOpacity),
                     lineWidth: 1
                 )
         )
@@ -233,14 +288,14 @@ struct NoteCard: View {
         // pointer, which VoiceOver never moves. The same actions live on the
         // card itself so they are reachable from the Actions menu (VO-Cmd-Space).
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Note \(index + 1) of \(notesManager.notes.count)")
+        .accessibilityLabel("Note \(index + 1) of \(count)")
         .accessibilityAction(named: "Delete note") { notesManager.deleteNote(at: index) }
         .accessibilityAction(named: "Move up") {
             guard index > 0 else { return }
             notesManager.moveNote(from: index, to: index - 1)
         }
         .accessibilityAction(named: "Move down") {
-            guard index < notesManager.notes.count - 1 else { return }
+            guard index < count - 1 else { return }
             notesManager.moveNote(from: index, to: index + 2)
         }
         .accessibilityAction(named: "Fit height to content") { notesManager.setCardHeight(nil, at: index) }
@@ -258,7 +313,7 @@ struct NoteCard: View {
         if isHovered {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 13))
-                .foregroundStyle(Color(nsColor: settings.effectiveInk.secondary).opacity(0.9))
+                .foregroundStyle(Color(nsColor: style.ink.secondary).opacity(0.9))
                 .padding(7)
                 .contentShape(Rectangle())
                 .onDrag {
@@ -291,7 +346,7 @@ struct NoteCard: View {
         // crossed the card's edge, which is exactly the reported friction.
         if isHovered || dragStartHeight != nil {
             Rectangle()
-                .fill(Color(nsColor: settings.effectiveInk.secondary).opacity(0.35))
+                .fill(Color(nsColor: style.ink.secondary).opacity(0.35))
                 .frame(height: 3)
                 .clipShape(Capsule())
                 .padding(.horizontal, 44)
@@ -321,8 +376,8 @@ struct NoteCard: View {
     /// Cards sit on the window's own material, so they need their own surface
     /// to read as separate pieces of paper rather than panels of the same glass.
     private var cardBackground: some View {
-        Color(nsColor: settings.effectiveCardColor)
-            .opacity(settings.effectiveWantsOpaqueCards ? 1.0 : 0.55)
+        Color(nsColor: style.cardColor)
+            .opacity(style.opaqueCards ? 1.0 : 0.55)
     }
 }
 
@@ -520,7 +575,11 @@ struct EdgeScrollAnchorProbe: NSViewRepresentable {
 /// SwiftUI's `.frame` on this view ends up giving it, a scroller appears only
 /// when the content actually overflows it.
 struct NoteCardEditor: NSViewRepresentable {
-    @Binding var text: String
+    /// The note's text as a value, not a binding into the notes array: a
+    /// binding's getter is a closure SwiftUI cannot compare, so every card
+    /// counted as changed whenever any note did.
+    var text: String
+    var onTextChange: (String) -> Void
     var lineHeightMultiple: Double
     var baseFont: NSFont
     var listKeyword: String
@@ -593,18 +652,35 @@ struct NoteCardEditor: NSViewRepresentable {
         return scrollView
     }
 
+    /// How many times SwiftUI has pushed new values into a card editor, and
+    /// how many of those made it measure its text. Read by the tests, which
+    /// hold a keystroke to touching one card, not all of them.
+    static var updateCount = 0
+    static var measureCount = 0
+
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        Self.updateCount += 1
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ChecklistTextView else { return }
 
-        textView.listKeyword = listKeyword
-        textView.codeKeyword = codeKeyword
+        // Anything that can change the text's height. The text view
+        // re-measures on its own when its width changes (`layout()`) and
+        // when the user types (`textDidChange` below), so an update that
+        // changes none of these has nothing to measure.
+        var needsMeasure = false
+        if textView.listKeyword != listKeyword || textView.codeKeyword != codeKeyword {
+            textView.listKeyword = listKeyword
+            textView.codeKeyword = codeKeyword
+            needsMeasure = true
+        }
         if textView.lineHeightMultiple != lineHeightMultiple {
             textView.lineHeightMultiple = lineHeightMultiple
             textView.applyChecklistStyling()
+            needsMeasure = true
         }
         if textView.baseFont != baseFont {
             textView.baseFont = baseFont
+            needsMeasure = true
         }
         if textView.ink != ink {
             textView.ink = ink
@@ -623,8 +699,12 @@ struct NoteCardEditor: NSViewRepresentable {
             textView.recomputeLinkMatches()
             textView.applyLinkFolding()
             textView.needsDisplay = true
+            needsMeasure = true
         }
-        textView.reportHeight()
+        if needsMeasure {
+            Self.measureCount += 1
+            textView.reportHeight()
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -643,7 +723,7 @@ struct NoteCardEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? ChecklistTextView else { return }
-            parent.text = textView.string
+            parent.onTextChange(textView.string)
             textView.reportHeight()
         }
     }
