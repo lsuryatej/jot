@@ -171,6 +171,24 @@ struct SwipeAccumulator {
     }
 }
 
+/// The extra buttons on a mouse's side, read as a browser reads them: Back to
+/// the previous note, Forward to the next. AppKit numbers buttons from zero,
+/// so the ones people call 4 and 5 arrive as 3 and 4.
+enum MouseNavigationButton {
+    static let back = 3
+    static let forward = 4
+
+    /// The swipe this button stands for, or nil when the button is not a
+    /// navigation button at all and belongs to whoever handled it before.
+    static func direction(forButtonNumber buttonNumber: Int) -> SwipeDirection? {
+        switch buttonNumber {
+        case back: return .right
+        case forward: return .left
+        default: return nil
+        }
+    }
+}
+
 /// Scroll view that turns a horizontal two-finger swipe, or a horizontal
 /// mouse-wheel burst, into a note-navigation event instead of a horizontal
 /// scroll.
@@ -199,6 +217,21 @@ final class SwipeScrollView: NSScrollView {
         case .passThrough:
             super.scrollWheel(with: event)
         }
+    }
+
+    /// A mouse's Back/Forward buttons switch notes the way they move through
+    /// a browser's history, by the same closure a swipe calls: same "past the
+    /// last note starts a new one" rule, same landing chip with the header
+    /// hidden. A press over the text arrives here because the text view
+    /// leaves other-button presses to its next responder. Only buttons 3 and 4
+    /// are claimed, and only on press, so clicks, drags and selection, all
+    /// primary-button events, never come near this.
+    override func otherMouseDown(with event: NSEvent) {
+        guard let direction = MouseNavigationButton.direction(forButtonNumber: event.buttonNumber) else {
+            super.otherMouseDown(with: event)
+            return
+        }
+        onSwipe?(direction)
     }
 }
 

@@ -220,6 +220,45 @@ func runInteractionTests() {
         equal(swipes.last, .right, "and toward positive x goes back")
     }
 
+    // MARK: - Mouse Back/Forward buttons (issue #12)
+
+    suite("side buttons map like a browser's history") {
+        equal(MouseNavigationButton.direction(forButtonNumber: 3), .right, "Back (button 4 to a human, 3 to AppKit) goes to the previous note")
+        equal(MouseNavigationButton.direction(forButtonNumber: 4), .left, "Forward goes to the next note")
+        equal(MouseNavigationButton.direction(forButtonNumber: 0), nil, "the primary button is text selection's")
+        equal(MouseNavigationButton.direction(forButtonNumber: 1), nil, "the secondary button is the context menu's")
+        equal(MouseNavigationButton.direction(forButtonNumber: 2), nil, "the middle button is not navigation")
+        equal(MouseNavigationButton.direction(forButtonNumber: 5), nil, "nor is any button past Forward")
+    }
+
+    suite("Back/Forward over the editor take the swipe path, and leave the text alone") {
+        let scrollView = SwipeScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        let textView = ChecklistTextView(frame: scrollView.bounds)
+        scrollView.documentView = textView
+        textView.string = "first line\nsecond line"
+        textView.setSelectedRange(NSRange(location: 2, length: 5))
+
+        let parent = OtherMouseRecorder(frame: scrollView.frame)
+        parent.addSubview(scrollView)
+
+        var swipes: [SwipeDirection] = []
+        scrollView.onSwipe = { swipes.append($0) }
+
+        func press(_ button: Int64) {
+            if let event = otherMouseDown(button: button) { textView.otherMouseDown(with: event) }
+        }
+
+        press(3)
+        press(4)
+        equal(swipes, [.right, .left], "Back then Forward, delivered over the text, reach the same closure a swipe does")
+        equal(textView.selectedRange(), NSRange(location: 2, length: 5), "the selection is untouched")
+        equal(parent.buttons, [], "and neither press leaked further up")
+
+        press(2)
+        equal(swipes.count, 2, "a middle click switches nothing")
+        equal(parent.buttons, [2], "and carries on up the responder chain as before")
+    }
+
     // MARK: - Image resize
 
     suite("image resize drags wide but never narrow past the floor") {
@@ -270,5 +309,25 @@ extension SwipeAccumulator.Outcome {
     var isFire: Bool {
         if case .fire = self { return true }
         return false
+    }
+}
+
+/// A real `.otherMouseDown` event for one button. `NSEvent.mouseEvent` has no
+/// button-number parameter, so it goes through Core Graphics, the same way
+/// the window server builds a real one.
+func otherMouseDown(button: Int64) -> NSEvent? {
+    guard let mouseButton = CGMouseButton(rawValue: UInt32(button)),
+          let cg = CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: mouseButton)
+    else { return nil }
+    cg.setIntegerValueField(.mouseEventButtonNumber, value: button)
+    return NSEvent(cgEvent: cg)
+}
+
+/// Stands where the rest of the responder chain would be, and records what
+/// reaches it.
+final class OtherMouseRecorder: NSView {
+    private(set) var buttons: [Int] = []
+    override func otherMouseDown(with event: NSEvent) {
+        buttons.append(event.buttonNumber)
     }
 }

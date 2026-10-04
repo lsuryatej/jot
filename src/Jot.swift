@@ -965,6 +965,9 @@ final class FloatingPanel: NSPanel {
         // it stranded off its edge until the next reveal snapped it back.
         isMovable = mode.allowsWindowDrag
         isMovableByWindowBackground = mode.allowsWindowDrag
+        // Every note is already on screen as a card; there is no "current
+        // note" for Back/Forward to move between.
+        handlesNavigationButtons = !mode.isEdgeDocked
 
         if mode.wantsFloatingLevel {
             level = .floating
@@ -1001,6 +1004,27 @@ final class FloatingPanel: NSPanel {
             if let found = firstTextView(in: subview) { return found }
         }
         return nil
+    }
+
+    /// False while docked to a screen edge; see `apply(mode:)`.
+    private(set) var handlesNavigationButtons = true
+
+    /// A mouse's Back/Forward buttons anywhere on the panel the editor does not
+    /// cover: the header, the footer, the margins. Over the text,
+    /// `SwipeScrollView` answers first, through the swipe path. Here, with no
+    /// swipe to borrow, the press posts exactly what Cmd-Option-Left/Right
+    /// post, so all three inputs land on `NotesManager`'s one rule for the ends.
+    override func otherMouseDown(with event: NSEvent) {
+        guard handlesNavigationButtons,
+              let direction = MouseNavigationButton.direction(forButtonNumber: event.buttonNumber)
+        else {
+            super.otherMouseDown(with: event)
+            return
+        }
+        NotificationCenter.default.post(
+            name: direction == .left ? .jotRequestNextNote : .jotRequestPreviousNote,
+            object: nil
+        )
     }
 
     // Closing must only hide. Outside Dock mode there is no Dock icon, so a real
