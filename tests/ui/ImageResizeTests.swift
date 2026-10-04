@@ -170,5 +170,40 @@ func runImageResizeTests() {
             equal(Attachments.references(in: view.string).first?.path, "Attachments/test.png",
                   "typing after a click never lands in the file name")
         }
+
+        // Maintainer hand-test: "not able to resize." The natural grab point
+        // is the picture's right edge, and a press a point or two past it
+        // used to start a text selection instead.
+        suite("dragging from just past an image's right edge resizes it") {
+            _ = writeTestImage(width: 200, height: 100)
+            let text = "before\n![](Attachments/test.png)\nafter"
+            let (window, view) = makeHostedImageView(text)
+            defer { window.close() }
+            guard let placed = view.placedImages().first else {
+                check(false, "the image is found on layout")
+                return
+            }
+            let start = view.convert(NSPoint(x: placed.rect.maxX + 3, y: placed.rect.midY), to: nil)
+            drag(window, from: start, to: NSPoint(x: start.x - 60, y: start.y))
+            let width = Attachments.references(in: view.string).first?.width
+            check(width != nil && width! < placed.rect.width,
+                  "the edge drag shrank the image (now \(String(describing: width)), was \(placed.rect.width))")
+        }
+
+        suite("a click with a little hand jitter on an image places the caret and leaves the width alone") {
+            _ = writeTestImage(width: 200, height: 100)
+            let text = "before\n![](Attachments/test.png)\nafter"
+            let (window, view) = makeHostedImageView(text)
+            defer { window.close() }
+            guard let placed = view.placedImages().first else {
+                check(false, "the image is found on layout")
+                return
+            }
+            let press = view.convert(NSPoint(x: placed.rect.maxX - 20, y: placed.rect.midY), to: nil)
+            drag(window, from: press, to: NSPoint(x: press.x + 2, y: press.y + 1), steps: 2)
+            equal(view.string, text, "no width was written")
+            equal(view.selectedRange(), NSRange(location: NSMaxRange(placed.markdownRange), length: 0),
+                  "right half: the caret is after the image")
+        }
     }
 }

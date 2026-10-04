@@ -626,3 +626,58 @@ func runImageSelectionTests() {
         check((bandColor(view)?.alphaComponent ?? 0) > 0, "and the band colour is restored for the next selection")
     }
 }
+
+// Maintainer hand-test: "not able to resize." Driving the real app with real
+// window-server drags resized fine from the middle of a picture, so the
+// tracking loop was never the problem; reaching it was. The resize cursor
+// never showed (NSTextView's own cursor update puts the I-beam back over any
+// cursor rect), so nothing said where to grab, and the natural grab point,
+// the picture's right edge, missed by a point: a real press at x=345.7 on a
+// picture ending at 345 started a text selection instead (probe log). In the
+// maintainer's 360pt window a 320pt picture also overran the 310pt column.
+func runImageResizeHandleTests() {
+    func fixture() -> (view: ChecklistTextView, placed: ChecklistTextView.PlacedImage)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let view = makeTextView("before line\n\(markdown)\nafter line")
+        guard let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return nil
+        }
+        return (view, placed)
+    }
+
+    suite("image resize: the grab zone reaches a few points past the picture's right edge") {
+        guard let (view, placed) = fixture() else { return }
+        check(view.imageForResize(at: NSPoint(x: placed.rect.midX, y: placed.rect.midY)) != nil, "on the picture")
+        check(view.imageForResize(at: NSPoint(x: placed.rect.maxX + 4, y: placed.rect.midY)) != nil,
+              "just past its right edge, where a resize is grabbed")
+        check(view.imageForResize(at: NSPoint(x: placed.rect.maxX + 20, y: placed.rect.midY)) == nil,
+              "but not the empty line beyond, which still places the caret")
+        check(view.imageForResize(at: NSPoint(x: placed.rect.midX, y: placed.rect.maxY + 30)) == nil,
+              "nor the line below")
+    }
+
+    suite("image resize: the pointer says resize over the picture and its edge, I-beam elsewhere") {
+        guard let (view, placed) = fixture() else { return }
+        check(view.wantsResizeCursor(at: NSPoint(x: placed.rect.midX, y: placed.rect.midY)), "over the picture")
+        check(view.wantsResizeCursor(at: NSPoint(x: placed.rect.maxX + 3, y: placed.rect.midY)), "over its edge")
+        check(!view.wantsResizeCursor(at: NSPoint(x: 10, y: 4)), "not over text")
+    }
+
+    suite("image resize: a press that moves less than the drag threshold is a click") {
+        check(!ChecklistTextView.isResizeDrag(from: NSPoint(x: 100, y: 50), to: NSPoint(x: 102, y: 51)),
+              "2pt of hand jitter is still a click, so the caret is placed and the width left alone")
+        check(ChecklistTextView.isResizeDrag(from: NSPoint(x: 100, y: 50), to: NSPoint(x: 104, y: 50)),
+              "a few points sideways is a drag")
+    }
+
+    suite("image resize: a drag never makes a picture wider than the room left on its line") {
+        guard let (view, placed) = fixture() else { return }
+        let room = view.resizeRoom(for: placed)
+        check(room > placed.rect.width && room <= view.imageColumnWidth,
+              "the room (\(room)) is more than the picture and no more than the column")
+        equal(ChecklistTextView.resizedWidth(from: 0, to: 5000, starting: placed.rect.width, maximum: room), room,
+              "an enormous rightward drag stops at the room")
+    }
+}

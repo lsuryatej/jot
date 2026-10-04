@@ -372,9 +372,32 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// The width an in-progress image resize should preview, given where the
     /// drag started and where it is now. One-sided on purpose — images may
     /// grow without limit but never shrink past the minimum.
-    static func resizedWidth(from startX: CGFloat, to x: CGFloat, starting startWidth: CGFloat) -> CGFloat {
-        max(minimumImageWidth, startWidth + (x - startX))
+    /// `maximum` is the room left on the image's line: a picture is never
+    /// drawn wider than its column, so a width past it would only be
+    /// written to the file and never seen.
+    static func resizedWidth(
+        from startX: CGFloat,
+        to x: CGFloat,
+        starting startWidth: CGFloat,
+        maximum: CGFloat = .greatestFiniteMagnitude
+    ) -> CGFloat {
+        max(minimumImageWidth, min(maximum, startWidth + (x - startX)))
     }
+
+    /// How far the pointer has to travel sideways before a press on an
+    /// image is a resize rather than a click. A hand never releases exactly
+    /// where it pressed, and a click must place the caret, not nudge the
+    /// width by a point and rewrite the markdown.
+    static let resizeDragThreshold: CGFloat = 3
+
+    static func isResizeDrag(from start: NSPoint, to point: NSPoint) -> Bool {
+        abs(point.x - start.x) >= resizeDragThreshold
+    }
+
+    /// How far past a picture's right edge a press still grabs it to resize.
+    /// The edge is where a resize is reached for, and a press that lands a
+    /// point outside it used to start a text selection.
+    static let resizeHandleOverhang: CGFloat = 6
 
     /// Where an inline math result sits horizontally: just past the end of
     /// its line, but never further right than the container's edge. Bounded
@@ -1185,7 +1208,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// `NSEvent.modifierFlags`, so a test can say whether Cmd was down.
     @discardableResult
     func handleSpecialClick(at point: NSPoint, modifiers: NSEvent.ModifierFlags = []) -> Bool {
-        if let placed = image(at: point) {
+        if let placed = imageForResize(at: point) {
             beginResize(placed, from: point)
             return true
         }
@@ -1764,26 +1787,62 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         deletingWholeImages { super.deleteBackwardByDecomposingPreviousCharacter(sender) }
     }
 
-    /// Returns the image under `point`, if any.
-    private func image(at point: NSPoint) -> PlacedImage? {
-        placedImages().first { $0.rect.contains(point) }
-    }
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        for placed in placedImages() {
-            addCursorRect(placed.rect, cursor: .resizeLeftRight)
+    /// The image a press at `point` grabs: the picture itself, or the
+    /// strip just past its right edge.
+    func imageForResize(at point: NSPoint) -> PlacedImage? {
+        placedImages().first { placed in
+            var zone = placed.rect
+            zone.size.width += Self.resizeHandleOverhang
+            return zone.contains(point)
         }
     }
+
+    /// Whether the pointer at `point` should say "resize". Set from
+    /// `mouseMoved` and `cursorUpdate`, not cursor rects: NSTextView sets the
+    /// I-beam itself on every cursor update, which overrode the old cursor
+    /// rects, so the resize cursor never showed and nothing said an image
+    /// could be dragged at all.
+    func wantsResizeCursor(at point: NSPoint) -> Bool {
+        imageForResize(at: point) != nil
+    }
+
+    /// The widest `placed` can be dragged: the rest of its line's column.
+    func resizeRoom(for placed: PlacedImage) -> CGFloat {
+        let column = imageColumnWidth
+        guard column > 48, let textContainer else { return .greatestFiniteMagnitude }
+        let columnRight = textContainerInset.width + textContainer.lineFragmentPadding + column
+        return max(Self.minimumImageWidth, columnRight - placed.rect.minX - 1)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if wantsResizeCursor(at: convert(event.locationInWindow, from: nil)) {
+            NSCursor.resizeLeftRight.set()
+            showsResizeCursor = true
+            return
+        }
+        super.cursorUpdate(with: event)
+    }
+
+    private var showsResizeCursor = false
 
     /// Drag an image left or right to resize it. The width lives in the text,
     /// so the result is still something you could have typed by hand.
     private func beginResize(_ placed: PlacedImage, from startPoint: NSPoint) {
         let startWidth = placed.rect.width
+        let room = resizeRoom(for: placed)
         resizingRange = placed.markdownRange
         previewWidth = startWidth
+        var isDragging = false
 
-        window?.trackEvents(matching: [.leftMouseDragged, .leftMouseUp], timeout: .infinity, mode: .default) { event, stop in
+        // A left-mouse-down is matched too, though one cannot arrive while
+        // the button is held: if an up is ever lost, the next press ends this
+        // loop and is handed back to the window, instead of the loop quietly
+        // swallowing every drag that follows.
+        window?.trackEvents(
+            matching: [.leftMouseDragged, .leftMouseUp, .leftMouseDown],
+            timeout: .infinity,
+            mode: .default
+        ) { event, stop in
             guard let event else {
                 stop.pointee = true
                 return
@@ -1791,17 +1850,23 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let point = self.convert(event.locationInWindow, from: nil)
 
             if event.type == .leftMouseDragged {
-                self.previewWidth = Self.resizedWidth(from: startPoint.x, to: point.x, starting: startWidth)
+                isDragging = isDragging || Self.isResizeDrag(from: startPoint, to: point)
+                guard isDragging else { return }
+                self.previewWidth = Self.resizedWidth(from: startPoint.x, to: point.x, starting: startWidth, maximum: room)
                 self.needsDisplay = true
                 return
             }
 
             stop.pointee = true
+            if event.type == .leftMouseDown {
+                NSApp.postEvent(event, atStart: true)
+            }
             defer {
                 self.resizingRange = nil
                 self.previewWidth = nil
+                self.needsDisplay = true
             }
-            guard let finalWidth = self.previewWidth, abs(finalWidth - startWidth) > 1 else {
+            guard isDragging, let finalWidth = self.previewWidth, abs(finalWidth - startWidth) > 1 else {
                 // A click, not a drag: the image is one character, so the
                 // caret goes before or after it by which half was clicked.
                 self.window?.makeFirstResponder(self)
@@ -2304,9 +2369,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// stuck on whatever the pointer moves over next.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        if showsLinkCursor {
+        if showsLinkCursor || showsResizeCursor {
             NSCursor.arrow.set()
             showsLinkCursor = false
+            showsResizeCursor = false
         }
     }
 
@@ -2314,9 +2380,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         if wantsLinkCursor(at: point, modifiers: modifiers) {
             NSCursor.pointingHand.set()
             showsLinkCursor = true
-        } else if showsLinkCursor {
+            showsResizeCursor = false
+        } else if wantsResizeCursor(at: point) {
+            NSCursor.resizeLeftRight.set()
+            showsResizeCursor = true
+            showsLinkCursor = false
+        } else if showsLinkCursor || showsResizeCursor {
             NSCursor.iBeam.set()
             showsLinkCursor = false
+            showsResizeCursor = false
         }
     }
 
