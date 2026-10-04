@@ -889,7 +889,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Shift-Cmd-V needed for the same class of menu-routing doubt.
         settingsCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
             guard window?.isKeyWindow == true,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.modifierFlags.shortcutModifiers == .command,
                   event.charactersIgnoringModifiers?.lowercased() == "w"
             else { return event }
             window?.performClose(nil)

@@ -741,7 +741,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// dispatch key equivalents there is a bet not worth making. Handling them
     /// here means Cmd+L and Shift-Cmd-V behave the same in every display mode.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let flags = event.modifierFlags.shortcutModifiers
         let key = event.charactersIgnoringModifiers?.lowercased()
 
         if flags == [.command, .shift], key == "v" {
@@ -3311,5 +3311,17 @@ struct PlainTextEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             parent.selectedRange = textView.selectedRange()
         }
+    }
+}
+
+extension NSEvent.ModifierFlags {
+    /// Just the chord keys, for comparing an event against a shortcut.
+    ///
+    /// `.deviceIndependentFlagsMask` is not enough: it keeps `.capsLock`, so
+    /// every exact-match shortcut failed with Caps Lock on, and it keeps
+    /// `.numericPad` and `.function`, which AppKit sets on every arrow key,
+    /// so an arrow chord could never match a real event (design review M5).
+    var shortcutModifiers: NSEvent.ModifierFlags {
+        intersection([.command, .option, .control, .shift])
     }
 }
