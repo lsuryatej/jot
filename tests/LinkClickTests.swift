@@ -75,6 +75,16 @@ func runLinkClickTests() {
         check(LinkShrink.link(containing: (text as NSString).length - 1, in: text) == nil, "the ? itself is not a link")
     }
 
+    suite("a scheme-less link ending in ? keeps its scheme") {
+        // The detector keeps the ? on links with a path; trimming it must
+        // not drop the http it added.
+        let bare = LinkShrink.link(containing: 6, in: "see example.com/page?")
+        equal(bare?.url.absoluteString, "http://example.com/page", "a bare domain with a path keeps http, minus the ?")
+        check(bare.map { LinkShrink.isSafeToOpen($0.url) } ?? false, "and Cmd+click can open it")
+        let www = LinkShrink.link(containing: 8, in: "go to www.example.com/a?")
+        equal(www?.url.absoluteString, "http://www.example.com/a", "a www link keeps http too")
+    }
+
     suite("only http, https and mailto are safe to open") {
         check(LinkShrink.isSafeToOpen(URL(string: "https://example.com")!), "https")
         check(LinkShrink.isSafeToOpen(URL(string: "http://example.com")!), "http")

@@ -62,7 +62,11 @@ final class MathResultSpeech {
     func resultsUpdated(_ results: [SpokenMathResult]) {
         latest = results
         guard VoiceOver.isRunning else {
-            committed = nil
+            // Keep the baseline current while VoiceOver is off. Cleared here,
+            // the first edit after VoiceOver came on would be snapshotted as
+            // its own baseline (the storage delegate recomputes before
+            // `didChangeText`) and its new result never announced.
+            committed = Self.snapshot(results)
             return
         }
         if committed == nil { committed = Self.snapshot(results) }

@@ -45,6 +45,19 @@ func runVoiceOverTests() {
         }
     }
 
+    suite("VoiceOver: turned on after the note loaded, the first edit is still announced") {
+        let view = makeTextView("price = 12\nprice * 4")
+        var heard: [String] = []
+        view.mathSpeech.post = { heard.append($0) }
+        withVoiceOver(false) { view.recomputeMathResults() }
+        withVoiceOver(true) {
+            caretAtEnd(of: view)
+            type("0", into: view)  // price * 40 = 480
+            view.mathSpeech.speakPending(caretLocation: view.selectedRange().location, in: view.string as NSString)
+            equal(heard, ["equals 480"], "compared with the result before the edit, not after")
+        }
+    }
+
     suite("VoiceOver: only the caret line, and only real changes") {
         withVoiceOver(true) {
             let view = makeTextView("a = 2\nb = a * 3\nnotes")

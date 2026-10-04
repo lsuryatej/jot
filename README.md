@@ -426,8 +426,9 @@ normally and 7:1 under Increase Contrast.
 
 ## Privacy & permissions
 
-Jot makes **zero network requests by default.** The only two things that can
-ever leave your machine, both toggleable in Settings → Privacy & Sync:
+By default, Jot's only network request is **one anonymous update check a
+day**. The only two things that can ever leave your machine, both toggleable
+in Settings → Privacy & Sync:
 
 - **Live currency rates**, off by default. On, it's one request a day to a
   public, key-free exchange-rate API. Nothing about you or your notes is in

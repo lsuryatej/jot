@@ -85,7 +85,19 @@ extension LinkShrink {
             guard NSLocationInRange(index, range) else { return }
             // Re-derive the URL when a `?` came off, so what opens is what
             // shows as the link.
-            let url = trimmed ? (URL(string: ns.substring(with: range)) ?? detected) : detected
+            // A scheme-less link (`example.com?`, `me@example.com?`) rebuilds
+            // without its scheme, which `isSafeToOpen` refuses; trim the
+            // detector's own URL instead so it keeps http or mailto.
+            var url = detected
+            if trimmed {
+                if let rebuilt = URL(string: ns.substring(with: range)), rebuilt.scheme != nil {
+                    url = rebuilt
+                } else {
+                    var absolute = detected.absoluteString
+                    while absolute.hasSuffix("?") { absolute.removeLast() }
+                    url = URL(string: absolute) ?? detected
+                }
+            }
             found = (range, url)
             stop.pointee = true
         }
