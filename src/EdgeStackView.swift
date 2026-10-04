@@ -131,6 +131,7 @@ struct NoteCard: View {
                 listKeyword: settings.effectiveListKeyword,
                 codeKeyword: settings.effectiveCodeKeyword,
                 ink: settings.effectiveInk,
+                highlightsCurrentLine: settings.highlightsCurrentLine,
                 onHeightChange: { contentHeight = $0 }
             )
             .frame(height: displayedHeight)
@@ -337,6 +338,7 @@ struct NoteCardEditor: NSViewRepresentable {
     var listKeyword: String
     var codeKeyword: String
     var ink: InkTheme
+    var highlightsCurrentLine: Bool = false
     var onHeightChange: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -387,6 +389,7 @@ struct NoteCardEditor: NSViewRepresentable {
         textView.codeKeyword = codeKeyword
         // Repaints text and caret itself, superseding the labelColor above.
         textView.ink = ink
+        textView.highlightsCurrentLine = highlightsCurrentLine
         textView.lineHeightMultiple = lineHeightMultiple
         textView.onHeightChange = onHeightChange
         textView.textStorage?.delegate = textView
@@ -417,6 +420,9 @@ struct NoteCardEditor: NSViewRepresentable {
         }
         if textView.ink != ink {
             textView.ink = ink
+        }
+        if textView.highlightsCurrentLine != highlightsCurrentLine {
+            textView.highlightsCurrentLine = highlightsCurrentLine
         }
         if textView.string != text {
             textView.string = text

@@ -179,6 +179,7 @@ struct ContentView: View {
             letterSpacing: settings.effectiveLetterSpacing,
             ink: settings.effectiveInk,
             guide: settings.effectiveGuide,
+            highlightsCurrentLine: settings.highlightsCurrentLine,
             listKeyword: settings.effectiveListKeyword,
             codeKeyword: settings.effectiveCodeKeyword,
             topInset: settings.showsHeader ? 12 : 38,

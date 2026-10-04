@@ -479,6 +479,27 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
     }
 
+    /// A faint band behind the line the caret is on (Settings, "Highlight
+    /// current line"). See the "Current line highlight" extension.
+    var highlightsCurrentLine = false {
+        didSet {
+            guard highlightsCurrentLine != oldValue else { return }
+            refreshCurrentLineHighlight()
+        }
+    }
+
+    /// The band as last drawn and invalidated, in view coordinates; nil when
+    /// none is showing.
+    private(set) var displayedCurrentLineRect: NSRect?
+
+    /// What the last refresh invalidated, so a test can see a caret move
+    /// repaint exactly the two bands and nothing else.
+    private(set) var lastCurrentLineInvalidation: [NSRect] = []
+
+    /// Stands in for "is first responder" in the headless tests, which have
+    /// no window. Always nil in the app.
+    var currentLineFocusOverride: Bool?
+
     /// Whether the note was in list mode at the last edit, so the switch can be
     /// noticed and the existing body converted once.
     private var wasListMode = false
@@ -2251,6 +2272,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return snapped == proposed ? value : NSValue(range: snapped)
         }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        refreshCurrentLineHighlight()
         if !imageAtoms.isEmpty || !tintedImageRects.isEmpty || hiddenSelectionBackground != nil {
             refreshImageSelection()
         }
@@ -3122,6 +3144,157 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     }
 }
 
+// MARK: - Current line highlight
+
+/// "Highlight current line" (issue #12): a faint band behind the whole logical
+/// line the caret is on, every wrapped fragment of it, across the text
+/// container's full width, so the caret is easy to find in long wrapped lines.
+///
+/// Drawn in `drawBackground(in:)`, under the selection and the glyphs, so no
+/// text moves. Hidden with a selection (the selection is what to look at) and
+/// whenever the view is not first responder.
+///
+/// No residue: both edges of the band are snapped to device pixels, and a
+/// move invalidates exactly the band as drawn plus the new one, so the region
+/// AppKit repaints always contains everything that was painted. This is the
+/// pixel-snapping rule `TextHeightBackgroundLayoutManager.selectionRect`
+/// arrived at for selections. Typing along a line leaves the band where it
+/// is, so nothing is invalidated and nothing flickers.
+extension ChecklistTextView {
+    /// The band for a caret's line fragments (container coordinates), in
+    /// view coordinates, every edge on a device pixel. Nil when there is
+    /// nothing with height to cover.
+    static func currentLineRect(
+        lineFragments: [NSRect],
+        containerOrigin: NSPoint,
+        containerWidth: CGFloat,
+        scale: CGFloat
+    ) -> NSRect? {
+        let heights = lineFragments.filter { $0.height > 0 }
+        guard let top = heights.map(\.minY).min(), let bottom = heights.map(\.maxY).max() else { return nil }
+        let pixels = max(1, scale)
+        func snap(_ value: CGFloat) -> CGFloat { (value * pixels).rounded() / pixels }
+        let minY = snap(containerOrigin.y + top), maxY = snap(containerOrigin.y + bottom)
+        let minX = snap(containerOrigin.x), maxX = snap(containerOrigin.x + containerWidth)
+        guard maxY > minY, maxX > minX else { return nil }
+        return NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// Whether the band shows at all: the setting is on, the view has the
+    /// keyboard, and the selection is a single bare caret.
+    static func showsCurrentLine(enabled: Bool, selections: [NSRange], isFocused: Bool) -> Bool {
+        enabled && isFocused && selections.count == 1 && selections[0].length == 0
+    }
+
+    /// What to invalidate when the band goes from `old` to `new`: nothing
+    /// when it stays put, otherwise each band that is or was on screen.
+    static func currentLineInvalidation(from old: NSRect?, to new: NSRect?) -> [NSRect] {
+        guard old != new else { return [] }
+        return [old, new].compactMap { $0 }
+    }
+
+    /// The band's colour: the paper's own ink, faint. Ink rather than a
+    /// fixed grey so it works on every paper, theme notes included, light or
+    /// dark; a little stronger under Increase Contrast.
+    static func currentLineColor(ink: NSColor, increaseContrast: Bool) -> NSColor {
+        ink.withAlphaComponent(increaseContrast ? 0.10 : 0.055)
+    }
+
+    /// The band for the caret's logical line, ignoring focus and selection.
+    func caretLineRect(scale: CGFloat) -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        let ns = string as NSString
+        let caret = min(selectedRange().location, ns.length)
+        let paragraph = ns.paragraphRange(for: NSRange(location: caret, length: 0))
+        var fragments: [NSRect] = []
+        if paragraph.length > 0 {
+            let glyphs = layoutManager.glyphRange(forCharacterRange: paragraph, actualCharacterRange: nil)
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                fragments.append(rect)
+            }
+        } else {
+            // The empty line after a trailing newline (or an empty note) has
+            // no glyphs; AppKit lays it out as the extra line fragment.
+            layoutManager.ensureLayout(for: textContainer)
+            if layoutManager.extraLineFragmentTextContainer != nil {
+                fragments.append(layoutManager.extraLineFragmentRect)
+            }
+        }
+        return Self.currentLineRect(
+            lineFragments: fragments,
+            containerOrigin: textContainerOrigin,
+            containerWidth: textContainer.size.width,
+            scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        )
+    }
+
+    private var hasCurrentLineFocus: Bool {
+        currentLineFocusOverride ?? (window?.firstResponder === self)
+    }
+
+    /// The band that should be on screen right now, or nil.
+    private func currentLineRectToShow() -> NSRect? {
+        guard Self.showsCurrentLine(
+            enabled: highlightsCurrentLine,
+            selections: selectedRanges.map(\.rangeValue),
+            isFocused: hasCurrentLineFocus
+        ) else { return nil }
+        return caretLineRect(scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
+    }
+
+    /// Moves the band: invalidates the old and new rects only. Layout can't
+    /// be asked for in the middle of an edit, so a change arriving inside one
+    /// is handled as soon as the edit closes (the band is drawn from fresh
+    /// layout anyway, so it is never drawn in a stale place meanwhile).
+    func refreshCurrentLineHighlight() {
+        guard highlightsCurrentLine || displayedCurrentLineRect != nil else {
+            lastCurrentLineInvalidation = []
+            return
+        }
+        guard textStorage?.editedMask.isEmpty ?? true else {
+            DispatchQueue.main.async { [weak self] in self?.refreshCurrentLineHighlight() }
+            return
+        }
+        moveCurrentLineHighlight(to: currentLineRectToShow())
+    }
+
+    private func moveCurrentLineHighlight(to new: NSRect?) {
+        let invalidation = Self.currentLineInvalidation(from: displayedCurrentLineRect, to: new)
+        lastCurrentLineInvalidation = invalidation
+        displayedCurrentLineRect = new
+        for rect in invalidation { setNeedsDisplay(rect) }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard highlightsCurrentLine || displayedCurrentLineRect != nil else { return }
+        // Drawn from the layout as it is now. If something other than a
+        // caret move shifted the line (a resize rewrapping it, a font
+        // change), the band moves here and the old one is invalidated.
+        let band = currentLineRectToShow()
+        if band != displayedCurrentLineRect { moveCurrentLineHighlight(to: band) }
+        guard let band, band.intersects(rect) else { return }
+        Self.currentLineColor(
+            ink: ink.text,
+            increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        ).setFill()
+        band.intersection(rect).fill(using: .sourceOver)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        // The window only records the new first responder after this returns.
+        if became { DispatchQueue.main.async { [weak self] in self?.refreshCurrentLineHighlight() } }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { DispatchQueue.main.async { [weak self] in self?.refreshCurrentLineHighlight() } }
+        return resigned
+    }
+}
+
 /// Plain-text editor backed by `NSTextView`.
 ///
 /// SwiftUI's `TextEditor` exposes neither the caret position nor scroll events,
@@ -3132,6 +3305,7 @@ struct PlainTextEditor: NSViewRepresentable {
     var letterSpacing: Double = 0
     var ink: InkTheme = .system
     var guide: PaperGuide = .none
+    var highlightsCurrentLine: Bool = false
     var listKeyword: String = "list"
     var codeKeyword: String = CodeBlock.defaultKeyword
     /// Extra room at the top when the header bar is hidden, so the first line
@@ -3219,6 +3393,7 @@ struct PlainTextEditor: NSViewRepresentable {
         // above only covers the moment before it.
         textView.ink = ink
         textView.guide = guide
+        textView.highlightsCurrentLine = highlightsCurrentLine
         textView.textStorage?.delegate = textView
         textView.enableImageDrops()
         textView.enableHeaderToggleButtons()
@@ -3267,6 +3442,9 @@ struct PlainTextEditor: NSViewRepresentable {
         }
         if textView.guide != guide {
             textView.guide = guide
+        }
+        if textView.highlightsCurrentLine != highlightsCurrentLine {
+            textView.highlightsCurrentLine = highlightsCurrentLine
         }
 
         // Only touch the text view when the model genuinely diverged (note

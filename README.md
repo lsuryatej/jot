@@ -321,6 +321,11 @@ held to readable contrast on every paper.
 **Guides.** Optional writing guides under the text, dot grid or square
 grid, drawn to follow your font and line spacing.
 
+**Highlight current line.** Off by default. Turn it on in Settings →
+Appearance and a faint band sits behind the line the caret is on, every
+wrapped part of it, so the caret is easy to find in a long paragraph. It
+hides while you have a selection.
+
 **Header and footer.** The header shows "Note N of M", the Checklist and
 Highlight buttons, this note's font and size, and Share. The footer shows the
 counts. Hide either in Settings, or both at once with **Cmd+/**, down to

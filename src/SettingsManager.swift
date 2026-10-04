@@ -688,6 +688,7 @@ final class SettingsManager: ObservableObject {
         static let noteFontSize   = "noteFontSize"
         static let letterSpacing  = "letterSpacing"
         static let guide          = "paperGuide"
+        static let highlightsCurrentLine = "highlightsCurrentLine"
         static let celebrationStyle = "celebrationStyle"
         static let timerSound     = "timerSound"
 
@@ -699,7 +700,7 @@ final class SettingsManager: ObservableObject {
             displayMode, hotKeyCode, hotKeyMods, timerKeyword, pomodoroKeyword, reminderKeyword, showsFooter,
             screenEdge, edgeWidth, appearance, appearanceTint, showsHeader, lineSpacing,
             windowFrame, syncsToNotes, listKeyword, codeKeyword, fetchesLiveRates, checksForUpdates,
-            noteFontName, noteFontSize, letterSpacing, guide,
+            noteFontName, noteFontSize, letterSpacing, guide, highlightsCurrentLine,
             celebrationStyle, timerSound,
         ]
     }
@@ -817,6 +818,11 @@ final class SettingsManager: ObservableObject {
     /// Writing guides under the text.
     @Published var guide: PaperGuide {
         didSet { defaults.set(guide.rawValue, forKey: Key.guide) }
+    }
+
+    /// A faint band behind the line the caret is on. Off by default.
+    @Published var highlightsCurrentLine: Bool {
+        didSet { defaults.set(highlightsCurrentLine, forKey: Key.highlightsCurrentLine) }
     }
 
     /// The editor's font, resolved from the stored name. Unknown names
@@ -960,6 +966,7 @@ final class SettingsManager: ObservableObject {
         )
         self.letterSpacing = defaults.object(forKey: Key.letterSpacing) as? Double ?? 0
         self.guide = PaperGuide(rawValue: defaults.string(forKey: Key.guide) ?? "") ?? .none
+        self.highlightsCurrentLine = defaults.object(forKey: Key.highlightsCurrentLine) as? Bool ?? false
 
         self.syncsToAppleNotes = defaults.object(forKey: Key.syncsToNotes) as? Bool ?? false
         self.listKeyword = defaults.string(forKey: Key.listKeyword) ?? "list"
