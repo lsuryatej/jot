@@ -398,6 +398,11 @@ Settings → Shortcuts lists these too.
 Cut, Copy, Paste, Select All, Undo and Redo are the standard
 Cmd+X/C/V/A/Z/Shift+Cmd+Z you'd expect anywhere on macOS.
 
+The menu bar only shows in Dock mode. Everywhere else, right-click in a note
+for Bold, Italic, Bigger, Smaller, Move Note Up/Down and Delete Note, and
+right-click the menu bar icon for New Note, Delete Note, Check for Updates,
+Settings and Quit.
+
 ## Accessibility
 
 **VoiceOver.**

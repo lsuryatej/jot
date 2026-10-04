@@ -69,6 +69,41 @@ enum MainMenu {
         }
     }
 
+    /// The status item's menu. Outside Dock mode the menu bar isn't shown,
+    /// so this and the editor's context menu are where the key commands
+    /// live. Every item targets `target`, whose `validateMenuItem` decides
+    /// what is enabled, the same as for the main menu.
+    static func buildStatusMenu(
+        target: AnyObject,
+        isInterfaceVisible: Bool,
+        updateTitle: String,
+        toggleAction: Selector,
+        newNoteAction: Selector,
+        deleteNoteAction: Selector,
+        updateAction: Selector,
+        preferencesAction: Selector,
+        quitAction: Selector
+    ) -> NSMenu {
+        let menu = NSMenu()
+        func add(_ title: String, _ action: Selector, _ key: String = "",
+                 _ mask: NSEvent.ModifierFlags = [.command]) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = mask
+            item.target = target
+            menu.addItem(item)
+        }
+        add(isInterfaceVisible ? "Hide Jot" : "Show Jot", toggleAction)
+        menu.addItem(.separator())
+        add("New Note", newNoteAction, "n")
+        add("Delete Note", deleteNoteAction, String(Character(UnicodeScalar(NSBackspaceCharacter)!)), [.command, .shift])
+        menu.addItem(.separator())
+        add(updateTitle, updateAction)
+        add("Settings…", preferencesAction, ",")
+        menu.addItem(.separator())
+        add("Quit Jot", quitAction, "q")
+        return menu
+    }
+
     // MARK: - State-dependent titles
 
     /// View › Show/Hide Header & Footer. Says what choosing it will do, the

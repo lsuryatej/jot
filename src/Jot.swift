@@ -78,6 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel = FloatingPanel(rootView: contentView())
         panel.delegate = self
         panel.undoRouter = UndoRouter(notes: notesManager.noteUndoManager)
+        EditorContextMenu.isAvailable = { [weak self] command, noteID in
+            self?.editorCommandAvailable(command, noteID: noteID) ?? false
+        }
         if let saved = settings.windowedFrame {
             panel.setFrame(saved, display: false)
         }
@@ -256,12 +259,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] _ in self?.openPreferences(pane: .privacy) }
             .store(in: &cancellables)
 
+        // The object is a note id when a Screen Edge card's context menu
+        // asked; the keyboard's request has none and means the current note.
         NotificationCenter.default.publisher(for: .jotRequestMoveNoteUp)
-            .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: -1) }
+            .sink { [weak self] note in self?.moveNoteIfVisible(id: note.object as? UUID, by: -1) }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: .jotRequestMoveNoteDown)
-            .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: +1) }
+            .sink { [weak self] note in self?.moveNoteIfVisible(id: note.object as? UUID, by: +1) }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: .jotRequestDeleteNote)
@@ -322,8 +327,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// A move aimed at a note nobody can see would read as the shortcut doing
     /// nothing at best, and as cards shuffling in the dark at worst.
     private func moveCurrentNoteIfVisible(by delta: Int) {
-        guard isInterfaceVisible else { return }
-        notesManager.moveCurrentNote(by: delta)
+        moveNoteIfVisible(id: nil, by: delta)
+    }
+
+    private func moveNoteIfVisible(id: UUID?, by delta: Int) {
+        guard isInterfaceVisible, let index = noteIndex(for: id) else { return }
+        notesManager.moveNote(at: index, by: delta)
+    }
+
+    /// A named note's position, or the current note's when none is named.
+    private func noteIndex(for id: UUID?) -> Int? {
+        guard let id else {
+            return notesManager.notes.indices.contains(notesManager.currentIndex) ? notesManager.currentIndex : nil
+        }
+        return notesManager.notes.firstIndex { $0.id == id }
+    }
+
+    /// What the editor's context menu shows; it hides what can't act.
+    private func editorCommandAvailable(_ command: EditorCommand, noteID: UUID?) -> Bool {
+        switch command {
+        case .bigger: return textSizeCanApply(.bigger)
+        case .smaller: return textSizeCanApply(.smaller)
+        case .deleteNote: return deletionIndex(for: noteID) != nil
+        case .moveUp, .moveDown:
+            guard isInterfaceVisible, let index = noteIndex(for: noteID) else { return false }
+            return command == .moveUp ? index > 0 : index < notesManager.notes.count - 1
+        }
     }
 
     // MARK: - Deleting
@@ -863,39 +892,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func showStatusMenu() {
-        let menu = NSMenu()
-
-        let toggle = NSMenuItem(
-            title: isInterfaceVisible ? "Hide Jot" : "Show Jot",
-            action: #selector(toggleFromMenu),
-            keyEquivalent: ""
+        // validateMenuItem retitles the update row and disables it while an
+        // update runs, so a second run can't start.
+        let menu = MainMenu.buildStatusMenu(
+            target: self,
+            isInterfaceVisible: isInterfaceVisible,
+            updateTitle: currentUpdateItemState.title,
+            toggleAction: #selector(toggleFromMenu),
+            newNoteAction: #selector(newNoteFromMenu),
+            deleteNoteAction: #selector(deleteNoteFromMenu(_:)),
+            updateAction: #selector(updateFromMenu),
+            preferencesAction: #selector(showPreferences),
+            quitAction: #selector(quit)
         )
-        toggle.target = self
-        menu.addItem(toggle)
-
-        menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showPreferences), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-
-        // Same item, same rules as the app menu's; `validateMenuItem`
-        // disables it while an update runs, so a second run can't start.
-        let update = NSMenuItem(
-            title: currentUpdateItemState.title,
-            action: #selector(updateFromMenu),
-            keyEquivalent: ""
-        )
-        update.target = self
-        menu.addItem(update)
-
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Quit Jot", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
 
         statusItem?.menu = menu
         statusItem?.button?.performClick(nil)

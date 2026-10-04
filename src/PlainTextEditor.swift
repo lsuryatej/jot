@@ -849,6 +849,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         return super.performKeyEquivalent(with: event)
     }
 
+    /// The main menu is hidden outside Dock mode, so the note commands are
+    /// appended here too; see `EditorContextMenu`. A copy, so the additions
+    /// never accumulate on a menu AppKit may hand out again.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
+        EditorContextMenu.append(to: menu, for: self)
+        return menu
+    }
+
     static func textSizeCommand(flags: NSEvent.ModifierFlags, key: String?) -> TextSizeCommand? {
         switch (flags, key) {
         case ([.command], "="), ([.command], "+"), ([.command, .shift], "+"): return .bigger

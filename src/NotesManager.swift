@@ -470,10 +470,16 @@ final class NotesManager: ObservableObject {
     /// `+ 1` is the do-nothing slot — and `notes.count` itself is a legal
     /// destination meaning "to the very end".
     func moveCurrentNote(by delta: Int) {
+        moveNote(at: currentIndex, by: delta)
+    }
+
+    /// The same walk for any note, such as the Screen Edge card a context
+    /// menu was opened on. The current note stays current.
+    func moveNote(at index: Int, by delta: Int) {
         let target = delta < 0
-            ? max(0, currentIndex + delta)
-            : min(notes.count, currentIndex + delta + 1)
-        moveNote(from: currentIndex, to: target)
+            ? max(0, index + delta)
+            : min(notes.count, index + delta + 1)
+        moveNote(from: index, to: target)
     }
 
     // MARK: - Timers

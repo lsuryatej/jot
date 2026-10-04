@@ -11,6 +11,7 @@ finding where a given piece of behaviour lives.
 | `src/main.swift` | AppKit entry point |
 | `src/Jot.swift` | App delegate, display modes, panel, status item |
 | `src/MainMenu.swift` | Menu bar, including the Find items that drive Cmd+F |
+| `src/EditorContextMenu.swift` | The editor's right-click note commands, for modes without a menu bar |
 | `src/UndoRouter.swift` | One Edit › Undo over the editor's typing and note deletion |
 | `src/SettingsManager.swift` | Preferences, display-mode and privacy-toggle definitions |
 | `src/PreferencesView.swift` | Settings window and the shortcut recorder |
