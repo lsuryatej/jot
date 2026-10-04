@@ -748,6 +748,16 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             extractTextFromClipboardImage(nil)
             return true
         }
+        // Ctrl-Cmd-Up/Down on a list item moves the item among its siblings,
+        // the Apple Notes convention. Only the focused view acts (Screen Edge
+        // mode has one per card), and only when the caret is in a list: a
+        // caret anywhere else falls through to moving the note below.
+        if flags == [.command, .control],
+           event.keyCode == UInt16(kVK_UpArrow) || event.keyCode == UInt16(kVK_DownArrow),
+           window == nil || window?.firstResponder === self,
+           moveListItem(event.keyCode == UInt16(kVK_UpArrow) ? .up : .down) {
+            return true
+        }
         // Ctrl-Cmd-Up/Down walk the current note through the list. Like Cmd+N
         // and Cmd+Shift+F below, this posts rather than acts: the text view
         // exists in every display mode, and AppDelegate owns the one
@@ -1239,6 +1249,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
 
         let point = convert(event.locationInWindow, from: nil)
+        // A press on a list marker might be a click (toggle the box, place
+        // the caret) or the start of a drag to reorder; only movement past
+        // the threshold tells them apart. Any modifier keeps the ordinary
+        // meaning (Shift extends a selection, Cmd opens a link).
+        if event.modifierFlags.shortcutModifiers.isEmpty, imageForResize(at: point) == nil,
+           let hit = listMarkerHit(at: point) {
+            trackListMarker(hit, from: point)
+            return
+        }
         guard handleSpecialClick(at: point, modifiers: event.modifierFlags) else {
             isTrackingClick = true
             defer { isTrackingClick = false }
@@ -1319,6 +1338,251 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let updated = Checklist.toggled(block: line)
         replace(range: lineRange, with: updated, selecting: selectedRange())
         return true
+    }
+
+    // MARK: - Moving list items
+
+    /// Called where a list move is refused. A seam so tests can count beeps.
+    var beep: () -> Void = { NSSound.beep() }
+
+    /// Ctrl-Cmd-Up/Down. True when the chord was the list's: the item moved,
+    /// or it was already at the end of its list and the move beeped. False
+    /// when the caret is not in a list item, so the chord can mean Move Note.
+    @discardableResult
+    func moveListItem(_ direction: ListMove.Direction) -> Bool {
+        guard !isCodeMode else { return false }
+        switch ListMove.move(direction, in: string, selection: selectedRange()) {
+        case .notInList:
+            return false
+        case .atBoundary:
+            beep()
+            return true
+        case .moved(let edit):
+            applyListMove(edit)
+            // Only scrolls when the item left the visible area; a move inside
+            // it leaves the view exactly where it was.
+            scrollRangeToVisible(selectedRange())
+            return true
+        }
+    }
+
+    /// One `replace`, so one undo step, with coalescing broken first so it
+    /// never merges into the typing before it.
+    private func applyListMove(_ edit: ListMove.Edit) {
+        breakUndoCoalescing()
+        replace(range: edit.range, with: edit.replacement, selecting: edit.selection)
+        undoManager?.setActionName("Move Item")
+        let edited = NSRange(location: edit.range.location, length: (edit.replacement as NSString).length)
+        applyLinkFolding(in: (string as NSString).lineRange(for: edited))
+    }
+
+    /// A press on a list item's marker.
+    struct ListMarkerHit: Equatable {
+        /// Where the item's line starts.
+        var lineLocation: Int
+        /// A checkbox toggles on a plain click; a bullet or number places
+        /// the caret.
+        var isCheckbox: Bool
+    }
+
+    /// The list marker under `point` (checkbox, bullet or number), if any.
+    /// The marker's own glyphs plus a few points either side, on its line.
+    func listMarkerHit(at point: NSPoint) -> ListMarkerHit? {
+        guard !isCodeMode, let layoutManager, let textContainer else { return nil }
+        let ns = string as NSString
+        guard ns.length > 0 else { return nil }
+        let lineRange = contentRange(forLineAt: characterIndexForInsertion(at: point))
+        let line = ns.substring(with: lineRange)
+
+        let marker: NSRange
+        let isCheckbox: Bool
+        if let item = Checklist.item(in: line) {
+            (marker, isCheckbox) = (item.markerRange, true)
+        } else if let item = OrderedList.item(in: line) {
+            (marker, isCheckbox) = (item.markerRange, false)
+        } else if let item = Bullet.item(in: line) {
+            (marker, isCheckbox) = (item.markerRange, false)
+        } else {
+            return nil
+        }
+
+        let absolute = NSRange(location: lineRange.location + marker.location, length: marker.length)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: absolute, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return nil }
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            .offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            .offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        guard point.x >= rect.minX - 4, point.x <= rect.maxX + 4,
+              point.y >= fragment.minY, point.y <= fragment.maxY
+        else { return nil }
+        return ListMarkerHit(lineLocation: lineRange.location, isCheckbox: isCheckbox)
+    }
+
+    /// Pointing hand over a checkbox (it is a button first, and draggable),
+    /// open hand over a bullet or number (draggable only).
+    private func listMarkerCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> NSCursor? {
+        guard modifiers.shortcutModifiers.isEmpty, let hit = listMarkerHit(at: point) else { return nil }
+        return hit.isCheckbox ? .pointingHand : .openHand
+    }
+
+    private var showsMarkerCursor = false
+
+    /// How far the pointer travels before a press on a marker is a drag. A
+    /// hand never releases exactly where it pressed, and a click on a
+    /// checkbox must toggle it, not nudge the item.
+    static let listDragThreshold: CGFloat = 4
+
+    static func isListDrag(from start: NSPoint, to point: NSPoint) -> Bool {
+        hypot(point.x - start.x, point.y - start.y) >= listDragThreshold
+    }
+
+    /// The slot whose line is nearest `y`.
+    static func nearestSlot(toY y: CGFloat, slotYs: [CGFloat]) -> Int {
+        slotYs.indices.min(by: { abs(slotYs[$0] - y) < abs(slotYs[$1] - y) }) ?? 0
+    }
+
+    /// The y of each drop slot in view coordinates: the top of each
+    /// sibling's first line, then the foot of the last sibling's last line.
+    func listDropSlotYs(for context: ListMove.DragContext) -> [CGFloat] {
+        guard let layoutManager, let textContainer else { return [] }
+        layoutManager.ensureLayout(for: textContainer)
+        func fragment(at location: Int) -> NSRect {
+            let glyph = layoutManager.glyphIndexForCharacter(at: location)
+            return layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                .offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        }
+        var ys = context.itemRanges.map { fragment(at: $0.location).minY }
+        if let last = context.itemRanges.last {
+            ys.append(fragment(at: max(last.location, NSMaxRange(last) - 1)).maxY)
+        }
+        return ys
+    }
+
+    /// A press on a marker that never became a drag.
+    func finishListMarkerClick(_ hit: ListMarkerHit, at point: NSPoint) {
+        let ns = string as NSString
+        guard hit.lineLocation <= ns.length else { return }
+        if hit.isCheckbox {
+            let lineRange = contentRange(forLineAt: hit.lineLocation)
+            let line = ns.substring(with: lineRange)
+            replace(range: lineRange, with: Checklist.toggled(block: line), selecting: selectedRange())
+        } else {
+            window?.makeFirstResponder(self)
+            setSelectedRange(NSRange(location: characterIndexForInsertion(at: point), length: 0))
+        }
+    }
+
+    /// Drops the item on the line starting at `lineLocation` into `slot`.
+    /// False when the drop changes nothing.
+    @discardableResult
+    func dropListItem(lineLocation: Int, toSlot slot: Int) -> Bool {
+        guard let edit = ListMove.move(in: string, itemAt: lineLocation, toSlot: slot, selection: selectedRange()) else {
+            return false
+        }
+        applyListMove(edit)
+        return true
+    }
+
+    /// Where the insertion line is drawn while an item is dragged.
+    private var listDropIndicator: NSRect? {
+        didSet {
+            guard listDropIndicator != oldValue else { return }
+            if let oldValue { setNeedsDisplay(oldValue.insetBy(dx: -2, dy: -2)) }
+            if let listDropIndicator { setNeedsDisplay(listDropIndicator.insetBy(dx: -2, dy: -2)) }
+        }
+    }
+
+    private static let dropIndicatorHeight: CGFloat = 6
+
+    private func dropIndicatorRect(atY y: CGFloat, context: ListMove.DragContext) -> NSRect {
+        guard let layoutManager, let textContainer, let first = context.itemRanges.first else { return .zero }
+        let indentEnd = (string as NSString).substring(with: first).prefix { $0 == " " || $0 == "\t" }.utf16.count
+        let markerGlyph = layoutManager.glyphIndexForCharacter(at: first.location + indentEnd)
+        let markerX = layoutManager.boundingRect(forGlyphRange: NSRange(location: markerGlyph, length: 1), in: textContainer).minX
+        let left = textContainerInset.width + markerX - Self.dropIndicatorHeight / 2
+        let right = textContainerInset.width + textContainer.size.width - textContainer.lineFragmentPadding
+        let height = Self.dropIndicatorHeight
+        return NSRect(x: left, y: y - height / 2, width: max(height, right - left), height: height)
+    }
+
+    /// The standard Mac insertion mark: a small ring where the item will
+    /// land, and a line running out from it.
+    private func drawListDropIndicator(_ rect: NSRect) {
+        ink.accent.set()
+        let ring = NSBezierPath(ovalIn: NSRect(x: rect.minX, y: rect.minY, width: rect.height, height: rect.height).insetBy(dx: 1, dy: 1))
+        ring.lineWidth = 1.5
+        ring.stroke()
+        NSBezierPath(
+            roundedRect: NSRect(x: rect.minX + rect.height - 1, y: rect.midY - 1, width: rect.width - rect.height + 1, height: 2),
+            xRadius: 1, yRadius: 1
+        ).fill()
+    }
+
+    /// Follows a press on a marker until release: a click if it stayed put,
+    /// a reorder if it travelled. Escape cancels a drag.
+    private func trackListMarker(_ hit: ListMarkerHit, from start: NSPoint) {
+        let context = ListMove.dragContext(in: string, itemAt: hit.lineLocation)
+        var travelled = false
+        var isDragging = false
+        var slot: Int?
+
+        func endDrag() {
+            if isDragging { NSCursor.pop() }
+            listDropIndicator = nil
+        }
+
+        // As in `beginResize`: a stray left-mouse-down ends the loop and is
+        // handed back, so a lost mouse-up can never strand it.
+        window?.trackEvents(
+            matching: [.leftMouseDragged, .leftMouseUp, .leftMouseDown, .keyDown],
+            timeout: .infinity,
+            mode: .default
+        ) { event, stop in
+            guard let event else {
+                endDrag()
+                stop.pointee = true
+                return
+            }
+            switch event.type {
+            case .leftMouseDragged:
+                let point = self.convert(event.locationInWindow, from: nil)
+                travelled = travelled || Self.isListDrag(from: start, to: point)
+                guard travelled, let context, context.itemRanges.count > 1 else { return }
+                if !isDragging {
+                    isDragging = true
+                    NSCursor.closedHand.push()
+                }
+                self.autoscroll(with: event)
+                // Recomputed after the autoscroll, which may have moved the
+                // view under a pointer that stayed still.
+                let current = self.convert(event.locationInWindow, from: nil)
+                let ys = self.listDropSlotYs(for: context)
+                guard !ys.isEmpty else { return }
+                let nearest = Self.nearestSlot(toY: current.y, slotYs: ys)
+                slot = nearest
+                self.listDropIndicator = context.isNoOp(slot: nearest)
+                    ? nil
+                    : self.dropIndicatorRect(atY: ys[nearest], context: context)
+            case .keyDown:
+                guard event.keyCode == UInt16(kVK_Escape) else { return }
+                endDrag()
+                stop.pointee = true
+            default:
+                stop.pointee = true
+                if event.type == .leftMouseDown {
+                    NSApp.postEvent(event, atStart: true)
+                }
+                let wasDragging = isDragging
+                endDrag()
+                guard event.type == .leftMouseUp else { return }
+                if wasDragging {
+                    if let slot { self.dropListItem(lineLocation: hit.lineLocation, toSlot: slot) }
+                } else if !travelled {
+                    self.finishListMarkerClick(hit, at: start)
+                }
+            }
+        }
     }
 
     // MARK: - Caret
@@ -1495,6 +1759,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 imageSelectionTint.setFill()
                 placed.rect.fill(using: .sourceOver)
             }
+        }
+        if let indicator = listDropIndicator, indicator.intersects(dirtyRect) {
+            drawListDropIndicator(indicator)
         }
     }
 
@@ -2030,9 +2297,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        if wantsResizeCursor(at: convert(event.locationInWindow, from: nil)) {
+        let point = convert(event.locationInWindow, from: nil)
+        if wantsResizeCursor(at: point) {
             NSCursor.resizeLeftRight.set()
             showsResizeCursor = true
+            return
+        }
+        if let cursor = listMarkerCursor(at: point, modifiers: event.modifierFlags) {
+            cursor.set()
+            showsMarkerCursor = true
             return
         }
         super.cursorUpdate(with: event)
@@ -2587,10 +2860,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// stuck on whatever the pointer moves over next.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        if showsLinkCursor || showsResizeCursor {
+        if showsLinkCursor || showsResizeCursor || showsMarkerCursor {
             NSCursor.arrow.set()
             showsLinkCursor = false
             showsResizeCursor = false
+            showsMarkerCursor = false
         }
     }
 
@@ -2603,10 +2877,17 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             NSCursor.resizeLeftRight.set()
             showsResizeCursor = true
             showsLinkCursor = false
-        } else if showsLinkCursor || showsResizeCursor {
+            showsMarkerCursor = false
+        } else if let cursor = listMarkerCursor(at: point, modifiers: modifiers) {
+            cursor.set()
+            showsMarkerCursor = true
+            showsLinkCursor = false
+            showsResizeCursor = false
+        } else if showsLinkCursor || showsResizeCursor || showsMarkerCursor {
             NSCursor.iBeam.set()
             showsLinkCursor = false
             showsResizeCursor = false
+            showsMarkerCursor = false
         }
     }
 

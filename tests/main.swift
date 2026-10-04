@@ -46,6 +46,7 @@ runMotionTests()
 runEdgeRevealTests()
 runVoiceOverTests()
 runModifierMaskTests()
+runListMoveTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

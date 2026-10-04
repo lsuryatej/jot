@@ -23,6 +23,7 @@ finding where a given piece of behaviour lives.
 | `src/Checklist.swift` | Checklist parsing, rewriting, and list mode |
 | `src/CodeBlock.swift` | Code-block keyword matching and the copyable body |
 | `src/OrderedList.swift` | Numbered/lettered/roman list parsing and continuation |
+| `src/ListMove.swift` | Moving list items (keyboard and drag), nesting and renumbering |
 | `src/Headings.swift` | Heading line parsing and marker ranges |
 | `src/ThemeNote.swift` | Theme-as-note parsing and derived palettes |
 | `src/GlassTint.swift` | Tint choices for the translucent papers |
@@ -53,7 +54,7 @@ finding where a given piece of behaviour lives.
 
 ## Test isolation
 
-`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `CodeBlock`, `OrderedList`,
+`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `CodeBlock`, `OrderedList`, `ListMove`,
 `GlobalSearch`, `LinkShrink`, and `Attachments` are deliberately free of
 SwiftUI and AppKit, so every rule in them is covered by a dependency-free
 test. The theme parser, glass tints, and celebration configuration touch

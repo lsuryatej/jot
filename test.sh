@@ -50,6 +50,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/Checklist.swift \
     src/CodeBlock.swift \
     src/OrderedList.swift \
+    src/ListMove.swift \
     src/KeyCombo.swift \
     src/SettingsManager.swift \
     src/GlassTint.swift \
@@ -92,6 +93,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/EdgeRevealTests.swift \
     tests/VoiceOverTests.swift \
     tests/ModifierMaskTests.swift \
+    tests/ListMoveTests.swift \
     tests/main.swift \
     -o "$OUT"
 

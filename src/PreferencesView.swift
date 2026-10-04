@@ -548,6 +548,7 @@ struct PreferencesView: View {
                 ShortcutRow(action: "Toggle bold", combo: "⌘B")
                 ShortcutRow(action: "Toggle italic", combo: "⌘I")
                 ShortcutRow(action: "Nest / un-nest checklist item", combo: "⇥ / ⇧⇥")
+                ShortcutRow(action: "Move list item up / down", combo: "⌃⌘↑ / ⌃⌘↓")
                 ShortcutRow(action: "Read clipboard image as text (OCR)", combo: "⇧⌘V")
             }
 

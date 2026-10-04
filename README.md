@@ -93,7 +93,9 @@ making more. Pasting multi-line text splits it into items, one per line.
 Outside a list note, any `- [ ]` line is a checkbox too, and **Cmd+L** (or the
 header's Checklist button) turns the current line or a whole selection into
 items, then checks and unchecks them. Click a checkbox to toggle it,
-Tab/Shift-Tab nest items, completed items dim and strike through. The file
+Tab/Shift-Tab nest items, completed items dim and strike through. To
+rearrange, drag an item by its checkbox, bullet or number, or press
+**Ctrl+Cmd+↑/↓** with the caret in it; nested items move with their parent. The file
 stays plain markdown (`- [ ]` / `- [x]`), so it renders as a real task list
 elsewhere.
 
@@ -107,7 +109,8 @@ counts: `*` and `+` are already spent on emphasis and math.
 anywhere in any note, and it's a list item. Return continues it, `2.`, then
 `3.`, or `b.`, or `iii.`, case preserved, and Return on an empty item ends
 the list. Markers render bold beside their text. The file keeps exactly what
-you typed; nothing is renumbered behind your back.
+you typed; nothing is renumbered behind your back. The one exception is
+moving an item: a list numbered in sequence is renumbered to stay in order.
 
 ![Numbered, lettered, and roman-numeral lists in the same note](docs/screenshots/ordered-lists.png)
 
@@ -375,6 +378,7 @@ Settings → Shortcuts lists these too.
 | **Cmd+W** | Close the frontmost window: hides the note, or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Tab** / **Shift+Tab** | Nest / un-nest a checklist item |
+| **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** (caret in a list item) | Move the item up / down, its nested items with it |
 | **Cmd+B** / **Cmd+I** | Bold / italicise the selection or the word at the caret, again to remove |
 | **Shift+Cmd+H** | Highlight the selection, or start one at the caret, again to remove |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
