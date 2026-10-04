@@ -514,10 +514,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return isInterfaceVisible && notesManager.currentIndex > 0
         case #selector(moveNoteDown(_:)):
             return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+        // The same answers the header chevrons, swipes and side buttons use.
+        // Next stays enabled at the last note because it starts a new one
+        // there, exactly as a swipe always has; only a blank last note is the
+        // end of the line.
         case #selector(previousNote(_:)):
-            return isInterfaceVisible && notesManager.currentIndex > 0
+            return isInterfaceVisible && notesManager.canGoToPreviousNote
         case #selector(nextNote(_:)):
-            return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+            return isInterfaceVisible && notesManager.canGoToNextNote
         default:
             return true
         }
@@ -1218,6 +1222,9 @@ final class FloatingPanel: NSPanel {
         } else {
             styleMask.remove(.miniaturizable)
         }
+        // Every note is already on screen as a card; there is no "current
+        // note" for Back/Forward to move between.
+        handlesNavigationButtons = !mode.isEdgeDocked
 
         if mode.wantsFloatingLevel {
             level = .floating
@@ -1254,6 +1261,27 @@ final class FloatingPanel: NSPanel {
             if let found = firstTextView(in: subview) { return found }
         }
         return nil
+    }
+
+    /// False while docked to a screen edge; see `apply(mode:)`.
+    private(set) var handlesNavigationButtons = true
+
+    /// A mouse's Back/Forward buttons anywhere on the panel the editor does not
+    /// cover: the header, the footer, the margins. Over the text,
+    /// `SwipeScrollView` answers first, through the swipe path. Here, with no
+    /// swipe to borrow, the press posts exactly what Cmd-Option-Left/Right
+    /// post, so all three inputs land on `NotesManager`'s one rule for the ends.
+    override func otherMouseDown(with event: NSEvent) {
+        guard handlesNavigationButtons,
+              let direction = MouseNavigationButton.direction(forButtonNumber: event.buttonNumber)
+        else {
+            super.otherMouseDown(with: event)
+            return
+        }
+        NotificationCenter.default.post(
+            name: direction == .left ? .jotRequestNextNote : .jotRequestPreviousNote,
+            object: nil
+        )
     }
 
     // Closing must only hide. Outside Dock mode there is no Dock icon, so a real

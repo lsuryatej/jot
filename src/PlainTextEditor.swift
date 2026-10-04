@@ -8,15 +8,69 @@ enum SwipeDirection {
     case right
 }
 
+/// One scroll-wheel event, reduced to what swipe recognition reads from it.
+///
+/// A value rather than an `NSEvent` so the tests can describe a trackpad
+/// gesture, its momentum, or a mouse wheel's notches exactly, with timestamps
+/// they choose, instead of synthesising events against a window server.
+struct ScrollSample {
+    var deltaX: CGFloat
+    var deltaY: CGFloat
+    /// Non-empty only for a trackpad (or Magic Mouse) gesture's own events.
+    var phase: NSEvent.Phase = []
+    /// Non-empty only for the inertia the system adds after lift-off.
+    var momentumPhase: NSEvent.Phase = []
+    /// Seconds, on the same clock as `NSEvent.timestamp`.
+    var timestamp: TimeInterval
+
+    init(deltaX: CGFloat, deltaY: CGFloat, phase: NSEvent.Phase = [], momentumPhase: NSEvent.Phase = [], timestamp: TimeInterval) {
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.phase = phase
+        self.momentumPhase = momentumPhase
+        self.timestamp = timestamp
+    }
+
+    init(_ event: NSEvent) {
+        self.init(
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY,
+            phase: event.phase,
+            momentumPhase: event.momentumPhase,
+            timestamp: event.timestamp
+        )
+    }
+}
+
 /// The swipe-recognition state machine behind `SwipeScrollView`, extracted so
 /// the rules are testable without synthesising scroll events against a real
 /// scroll view (which needs a window server).
 ///
-/// A gesture accumulates horizontal deltas until they cross the threshold,
-/// fires exactly once, then goes quiet until the fingers lift or a new gesture
-/// begins. Vertical-dominant deltas are not swipes at all.
+/// Three kinds of event arrive through the one `scrollWheel(with:)`:
+///
+/// - A trackpad gesture has phases. It accumulates horizontal deltas until
+///   they cross `threshold`, fires exactly once, mid-gesture, then goes quiet
+///   until the fingers lift or a new gesture begins.
+/// - Momentum, the inertia after lift-off, never navigates (H4). It used to
+///   accumulate from zero after the reset at lift-off and could cross the
+///   threshold a second time: one swipe, two notes.
+/// - A mouse wheel has no phase at all: Shift+wheel, a tilt wheel, a thumb
+///   wheel. Nothing ever says such a gesture ended, so a burst of notches is
+///   delimited by time instead. The first notch of a burst fires, the rest
+///   are absorbed, and `wheelIdleGap` of silence starts the next burst.
+///
+/// Vertical-dominant deltas are never swipes, from any source.
 struct SwipeAccumulator {
+    /// Trackpad points of horizontal travel before a gesture switches notes.
     static let threshold: CGFloat = 55
+    /// A wheel delta is in lines, not points: one notch is about 1, and some
+    /// mice report a slow single notch as a fraction of that. Any real notch
+    /// counts, so one click of the wheel is one switch.
+    static let wheelThreshold: CGFloat = 0.1
+    /// Long enough to join the notches of one flick or one continuous spin
+    /// (they arrive 10-60ms apart), short enough that a deliberate second
+    /// flick switches again without feeling ignored.
+    static let defaultWheelIdleGap: TimeInterval = 0.3
 
     enum Outcome: Equatable {
         /// Crossed the threshold this event: navigate, and consume the event.
@@ -28,9 +82,39 @@ struct SwipeAccumulator {
         case passThrough
     }
 
+    let wheelIdleGap: TimeInterval
+
     private var accumulatedX: CGFloat = 0
     private var didFire = false
 
+    private var wheelAccumulatedX: CGFloat = 0
+    private var wheelDidFire = false
+    private var lastWheelTimestamp: TimeInterval?
+
+    init(wheelIdleGap: TimeInterval = SwipeAccumulator.defaultWheelIdleGap) {
+        self.wheelIdleGap = wheelIdleGap
+    }
+
+    /// The scroll view's single entry point: routes one event by its kind.
+    mutating func receive(_ sample: ScrollSample) -> Outcome {
+        if !sample.momentumPhase.isEmpty {
+            return receiveMomentum(deltaX: sample.deltaX, deltaY: sample.deltaY)
+        }
+        if sample.phase.isEmpty {
+            return receiveWheel(deltaX: sample.deltaX, deltaY: sample.deltaY, timestamp: sample.timestamp)
+        }
+
+        if sample.phase.contains(.began) {
+            begin()
+        }
+        let outcome = receive(deltaX: sample.deltaX, deltaY: sample.deltaY)
+        if sample.phase.contains(.ended) || sample.phase.contains(.cancelled) {
+            end()
+        }
+        return outcome
+    }
+
+    /// One trackpad gesture event. Unchanged since before wheels were handled.
     mutating func receive(deltaX: CGFloat, deltaY: CGFloat) -> Outcome {
         guard abs(deltaX) > abs(deltaY) else { return .passThrough }
 
@@ -39,7 +123,7 @@ struct SwipeAccumulator {
             didFire = true
             // Natural scrolling: fingers moving right (positive dx) means
             // "go back", matching the direction pages move under your fingers.
-            return .fire(accumulatedX > 0 ? .right : .left)
+            return .fire(Self.direction(of: accumulatedX))
         }
         return .absorb
     }
@@ -53,37 +137,101 @@ struct SwipeAccumulator {
     mutating func end() {
         begin()
     }
+
+    /// Inertia is the system's, not the user's: a horizontal coast is
+    /// swallowed, so it neither switches a note nor scrolls the text
+    /// sideways, and a vertical one keeps scrolling the note.
+    private func receiveMomentum(deltaX: CGFloat, deltaY: CGFloat) -> Outcome {
+        abs(deltaX) > abs(deltaY) ? .absorb : .passThrough
+    }
+
+    private mutating func receiveWheel(deltaX: CGFloat, deltaY: CGFloat, timestamp: TimeInterval) -> Outcome {
+        guard abs(deltaX) > abs(deltaY) else { return .passThrough }
+
+        // Measured from the previous notch, not the first, so one long spin
+        // stays one burst however long it lasts.
+        if let last = lastWheelTimestamp, timestamp - last <= wheelIdleGap {
+            // Same burst.
+        } else {
+            wheelAccumulatedX = 0
+            wheelDidFire = false
+        }
+        lastWheelTimestamp = timestamp
+
+        wheelAccumulatedX += deltaX
+        if !wheelDidFire, abs(wheelAccumulatedX) >= Self.wheelThreshold {
+            wheelDidFire = true
+            return .fire(Self.direction(of: wheelAccumulatedX))
+        }
+        return .absorb
+    }
+
+    private static func direction(of accumulatedX: CGFloat) -> SwipeDirection {
+        accumulatedX > 0 ? .right : .left
+    }
 }
 
-/// Scroll view that turns a horizontal two-finger swipe into a note-navigation
-/// event instead of a horizontal scroll.
+/// The extra buttons on a mouse's side, read as a browser reads them: Back to
+/// the previous note, Forward to the next. AppKit numbers buttons from zero,
+/// so the ones people call 4 and 5 arrive as 3 and 4.
+enum MouseNavigationButton {
+    static let back = 3
+    static let forward = 4
+
+    /// The swipe this button stands for, or nil when the button is not a
+    /// navigation button at all and belongs to whoever handled it before.
+    static func direction(forButtonNumber buttonNumber: Int) -> SwipeDirection? {
+        switch buttonNumber {
+        case back: return .right
+        case forward: return .left
+        default: return nil
+        }
+    }
+}
+
+/// Scroll view that turns a horizontal two-finger swipe, or a horizontal
+/// mouse-wheel burst, into a note-navigation event instead of a horizontal
+/// scroll.
 ///
 /// SwiftUI's `DragGesture` cannot do this: trackpad swipes arrive as
 /// scroll-wheel events, which `DragGesture` never receives, and the text view
 /// swallows real drags for text selection.
+///
+/// Not `NSEvent.trackSwipeEvent` (H4's other suggestion). That API is gated on
+/// System Settings' "Swipe between pages", so anyone who set it to three
+/// fingers, or off, would lose two-finger note switching entirely. It also
+/// only completes after lift-off and its settle animation, where this fires
+/// mid-gesture at 55pt. Both change how switching feels, and the momentum fix
+/// above already closes the double-fire it was meant to prevent.
 final class SwipeScrollView: NSScrollView {
     var onSwipe: ((SwipeDirection) -> Void)?
 
     private var accumulator = SwipeAccumulator()
 
     override func scrollWheel(with event: NSEvent) {
-        if event.phase.contains(.began) {
-            accumulator.begin()
-        }
-
-        switch accumulator.receive(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
+        switch accumulator.receive(ScrollSample(event)) {
         case .fire(let direction):
             onSwipe?(direction)
         case .absorb:
             break  // consumed: never scroll the text view sideways
         case .passThrough:
             super.scrollWheel(with: event)
+        }
+    }
+
+    /// A mouse's Back/Forward buttons switch notes the way they move through
+    /// a browser's history, by the same closure a swipe calls: same "past the
+    /// last note starts a new one" rule, same landing chip with the header
+    /// hidden. A press over the text arrives here because the text view
+    /// leaves other-button presses to its next responder. Only buttons 3 and 4
+    /// are claimed, and only on press, so clicks, drags and selection, all
+    /// primary-button events, never come near this.
+    override func otherMouseDown(with event: NSEvent) {
+        guard let direction = MouseNavigationButton.direction(forButtonNumber: event.buttonNumber) else {
+            super.otherMouseDown(with: event)
             return
         }
-
-        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
-            accumulator.end()
-        }
+        onSwipe?(direction)
     }
 }
 

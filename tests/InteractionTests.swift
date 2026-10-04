@@ -61,6 +61,204 @@ func runInteractionTests() {
         equal(accumulator.receive(deltaX: 50, deltaY: 0), .absorb, "half a cancelled gesture does not carry over")
     }
 
+    // MARK: - Mouse wheels (issue #12): Shift+wheel, tilt wheels, thumb wheels
+
+    // A discrete wheel's events carry no phase at all, so nothing ever said
+    // "the gesture ended". The first notch fired, `didFire` stuck, and every
+    // later Shift+wheel was absorbed in silence until a trackpad swipe happened
+    // to reset it.
+    suite("each Shift+wheel burst switches exactly one note, every time") {
+        var accumulator = SwipeAccumulator(wheelIdleGap: 0.3)
+        // Shift+wheel down: macOS turns the vertical notch into a horizontal one.
+        equal(accumulator.receive(ScrollSample(deltaX: -1, deltaY: 0, timestamp: 10.00)),
+              SwipeAccumulator.Outcome.fire(.left), "the first notch switches straight away")
+        equal(accumulator.receive(ScrollSample(deltaX: -1, deltaY: 0, timestamp: 10.05)), .absorb,
+              "the rest of the burst is one switch, not one per notch")
+        equal(accumulator.receive(ScrollSample(deltaX: -3, deltaY: 0, timestamp: 10.10)), .absorb,
+              "an accelerated notch inside the burst too")
+
+        // A pause longer than the idle gap: the next notch is a new burst.
+        equal(accumulator.receive(ScrollSample(deltaX: -1, deltaY: 0, timestamp: 10.50)),
+              SwipeAccumulator.Outcome.fire(.left), "after a pause, the next burst switches again")
+        equal(accumulator.receive(ScrollSample(deltaX: 1, deltaY: 0, timestamp: 11.00)),
+              SwipeAccumulator.Outcome.fire(.right), "and the other way, as many times as you like")
+        equal(accumulator.receive(ScrollSample(deltaX: 1, deltaY: 0, timestamp: 11.50)),
+              SwipeAccumulator.Outcome.fire(.right), "the third burst is not the last one either")
+    }
+
+    suite("a continuous wheel spin is still one burst") {
+        var accumulator = SwipeAccumulator(wheelIdleGap: 0.3)
+        var fires = 0
+        // A free-spinning thumb wheel: forty notches, 50ms apart, two seconds
+        // in all. Measured from the last notch, not the first, so it never
+        // reaches the gap and never switches twice.
+        for i in 0..<40 {
+            if accumulator.receive(ScrollSample(deltaX: -1, deltaY: 0, timestamp: 20 + Double(i) * 0.05)).isFire {
+                fires += 1
+            }
+        }
+        equal(fires, 1, "one switch for one spin")
+    }
+
+    suite("the wheel's idle gap is injectable") {
+        var short = SwipeAccumulator(wheelIdleGap: 0.1)
+        check(short.receive(ScrollSample(deltaX: 1, deltaY: 0, timestamp: 1.0)).isFire, "first notch")
+        check(short.receive(ScrollSample(deltaX: 1, deltaY: 0, timestamp: 1.2)).isFire, "0.2s apart clears a 0.1s gap")
+
+        var long = SwipeAccumulator(wheelIdleGap: 0.5)
+        check(long.receive(ScrollSample(deltaX: 1, deltaY: 0, timestamp: 1.0)).isFire, "first notch")
+        check(!long.receive(ScrollSample(deltaX: 1, deltaY: 0, timestamp: 1.2)).isFire, "0.2s apart is inside a 0.5s gap")
+
+        let standard = SwipeAccumulator()
+        check(standard.wheelIdleGap >= 0.25 && standard.wheelIdleGap <= 0.35, "the shipped gap sits between 0.25s and 0.35s")
+    }
+
+    suite("a plain vertical wheel still scrolls the note") {
+        var accumulator = SwipeAccumulator(wheelIdleGap: 0.3)
+        equal(accumulator.receive(ScrollSample(deltaX: 0, deltaY: -1, timestamp: 1.0)),
+              SwipeAccumulator.Outcome.passThrough, "a vertical notch is the text view's")
+        equal(accumulator.receive(ScrollSample(deltaX: 0, deltaY: 3, timestamp: 1.05)), .passThrough, "every one of them")
+        check(accumulator.receive(ScrollSample(deltaX: -1, deltaY: 0, timestamp: 1.1)).isFire,
+              "and a horizontal notch straight after still switches")
+    }
+
+    suite("wheel bursts and trackpad gestures keep separate books") {
+        var accumulator = SwipeAccumulator(wheelIdleGap: 0.3)
+        // A trackpad swipe fires and is still in flight...
+        _ = accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .began, timestamp: 1.0))
+        check(accumulator.receive(ScrollSample(deltaX: 60, deltaY: 0, phase: .changed, timestamp: 1.02)).isFire,
+              "the trackpad swipe fires")
+        // ...which must not swallow a wheel notch, and a wheel burst must not
+        // leave a later trackpad gesture deaf.
+        check(accumulator.receive(ScrollSample(deltaX: -1, deltaY: 0, timestamp: 1.05)).isFire,
+              "a wheel notch is its own burst")
+        _ = accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .ended, timestamp: 1.1))
+        _ = accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .began, timestamp: 1.12))
+        check(accumulator.receive(ScrollSample(deltaX: -60, deltaY: 0, phase: .changed, timestamp: 1.14)).isFire,
+              "the next trackpad swipe fires as normal")
+    }
+
+    // MARK: - Trackpad, through the same entry point the scroll view uses
+
+    suite("a trackpad swipe fires once mid-gesture, as it always has") {
+        var accumulator = SwipeAccumulator()
+        equal(accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .mayBegin, timestamp: 0.99)),
+              SwipeAccumulator.Outcome.passThrough, "fingers resting is not a swipe")
+        equal(accumulator.receive(ScrollSample(deltaX: 20, deltaY: 0, phase: .began, timestamp: 1.00)),
+              SwipeAccumulator.Outcome.absorb, "short of the threshold")
+        equal(accumulator.receive(ScrollSample(deltaX: 20, deltaY: 0, phase: .changed, timestamp: 1.01)), .absorb, "still short")
+        equal(accumulator.receive(ScrollSample(deltaX: 20, deltaY: 0, phase: .changed, timestamp: 1.02)),
+              SwipeAccumulator.Outcome.fire(.right), "55pt crossed: fires mid-gesture")
+        equal(accumulator.receive(ScrollSample(deltaX: 40, deltaY: 0, phase: .changed, timestamp: 1.03)), .absorb,
+              "the rest of the gesture is quiet")
+        equal(accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .ended, timestamp: 1.04)),
+              SwipeAccumulator.Outcome.passThrough, "lift-off carries no delta")
+        check(accumulator.receive(ScrollSample(deltaX: 60, deltaY: 0, phase: .began, timestamp: 2.0)).isFire,
+              "the next gesture starts from zero")
+    }
+
+    // H4. After lift-off the accumulator resets, and the momentum that follows
+    // used to accumulate from zero and could cross 55pt again: one swipe, two
+    // notes.
+    suite("trackpad momentum never switches a second note") {
+        var accumulator = SwipeAccumulator()
+        _ = accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .began, timestamp: 1.0))
+        check(accumulator.receive(ScrollSample(deltaX: -70, deltaY: 0, phase: .changed, timestamp: 1.01)).isFire, "the swipe")
+        _ = accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .ended, timestamp: 1.02))
+
+        var momentumFires = 0
+        var outcomes: [SwipeAccumulator.Outcome] = []
+        for (i, dx) in [CGFloat(-40), -30, -20, -12, -6, -2].enumerated() {
+            let phase: NSEvent.Phase = i == 0 ? .began : .changed
+            let outcome = accumulator.receive(ScrollSample(deltaX: dx, deltaY: 0, momentumPhase: phase, timestamp: 1.03 + Double(i) * 0.016))
+            if outcome.isFire { momentumFires += 1 }
+            outcomes.append(outcome)
+        }
+        equal(momentumFires, 0, "110pt of horizontal inertia switches nothing")
+        check(outcomes.allSatisfy { $0 == .absorb }, "and is absorbed, so the text never scrolls sideways")
+        _ = accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, momentumPhase: .ended, timestamp: 1.2))
+
+        check(accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, phase: .began, timestamp: 2.0)) == .passThrough
+              && accumulator.receive(ScrollSample(deltaX: -60, deltaY: 0, phase: .changed, timestamp: 2.01)).isFire,
+              "the next real swipe still fires")
+    }
+
+    suite("vertical momentum still belongs to the text view") {
+        var accumulator = SwipeAccumulator()
+        equal(accumulator.receive(ScrollSample(deltaX: 0, deltaY: -30, momentumPhase: .changed, timestamp: 1.0)),
+              SwipeAccumulator.Outcome.passThrough, "inertial scrolling keeps coasting")
+        equal(accumulator.receive(ScrollSample(deltaX: 0, deltaY: 0, momentumPhase: .ended, timestamp: 1.1)),
+              SwipeAccumulator.Outcome.passThrough, "and ends normally")
+    }
+
+    // The wiring, with real NSEvents through the real scroll view: the fix is
+    // worthless if `scrollWheel(with:)` never hands the accumulator a phase.
+    suite("SwipeScrollView: Shift+wheel switches on every burst, not just the first") {
+        let scrollView = SwipeScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        var swipes: [SwipeDirection] = []
+        scrollView.onSwipe = { swipes.append($0) }
+
+        func wheel(_ dx: Int32, at time: TimeInterval) -> NSEvent? {
+            guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: 0, wheel2: dx, wheel3: 0)
+            else { return nil }
+            cg.timestamp = CGEventTimestamp(time * 1_000_000_000)
+            return NSEvent(cgEvent: cg)
+        }
+
+        guard let probe = wheel(-1, at: 1) else {
+            check(false, "could not synthesise a wheel event")
+            return
+        }
+        check(probe.phase.isEmpty && probe.momentumPhase.isEmpty && !probe.hasPreciseScrollingDeltas,
+              "a synthesised wheel notch looks like a real mouse: no phase, no momentum, line deltas")
+
+        for time in [1.0, 1.05, 1.1] { if let e = wheel(-1, at: time) { scrollView.scrollWheel(with: e) } }
+        for time in [2.0, 2.05] { if let e = wheel(-1, at: time) { scrollView.scrollWheel(with: e) } }
+        for time in [3.0] { if let e = wheel(1, at: time) { scrollView.scrollWheel(with: e) } }
+        equal(swipes.count, 3, "three bursts, three switches")
+        equal(swipes.first, .left, "a notch toward negative x goes forward, like a swipe")
+        equal(swipes.last, .right, "and toward positive x goes back")
+    }
+
+    // MARK: - Mouse Back/Forward buttons (issue #12)
+
+    suite("side buttons map like a browser's history") {
+        equal(MouseNavigationButton.direction(forButtonNumber: 3), .right, "Back (button 4 to a human, 3 to AppKit) goes to the previous note")
+        equal(MouseNavigationButton.direction(forButtonNumber: 4), .left, "Forward goes to the next note")
+        equal(MouseNavigationButton.direction(forButtonNumber: 0), nil, "the primary button is text selection's")
+        equal(MouseNavigationButton.direction(forButtonNumber: 1), nil, "the secondary button is the context menu's")
+        equal(MouseNavigationButton.direction(forButtonNumber: 2), nil, "the middle button is not navigation")
+        equal(MouseNavigationButton.direction(forButtonNumber: 5), nil, "nor is any button past Forward")
+    }
+
+    suite("Back/Forward over the editor take the swipe path, and leave the text alone") {
+        let scrollView = SwipeScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        let textView = ChecklistTextView(frame: scrollView.bounds)
+        scrollView.documentView = textView
+        textView.string = "first line\nsecond line"
+        textView.setSelectedRange(NSRange(location: 2, length: 5))
+
+        let parent = OtherMouseRecorder(frame: scrollView.frame)
+        parent.addSubview(scrollView)
+
+        var swipes: [SwipeDirection] = []
+        scrollView.onSwipe = { swipes.append($0) }
+
+        func press(_ button: Int64) {
+            if let event = otherMouseDown(button: button) { textView.otherMouseDown(with: event) }
+        }
+
+        press(3)
+        press(4)
+        equal(swipes, [.right, .left], "Back then Forward, delivered over the text, reach the same closure a swipe does")
+        equal(textView.selectedRange(), NSRange(location: 2, length: 5), "the selection is untouched")
+        equal(parent.buttons, [], "and neither press leaked further up")
+
+        press(2)
+        equal(swipes.count, 2, "a middle click switches nothing")
+        equal(parent.buttons, [2], "and carries on up the responder chain as before")
+    }
+
     // MARK: - Image resize
 
     suite("image resize drags wide but never narrow past the floor") {
@@ -111,5 +309,25 @@ extension SwipeAccumulator.Outcome {
     var isFire: Bool {
         if case .fire = self { return true }
         return false
+    }
+}
+
+/// A real `.otherMouseDown` event for one button. `NSEvent.mouseEvent` has no
+/// button-number parameter, so it goes through Core Graphics, the same way
+/// the window server builds a real one.
+func otherMouseDown(button: Int64) -> NSEvent? {
+    guard let mouseButton = CGMouseButton(rawValue: UInt32(button)),
+          let cg = CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: mouseButton)
+    else { return nil }
+    cg.setIntegerValueField(.mouseEventButtonNumber, value: button)
+    return NSEvent(cgEvent: cg)
+}
+
+/// Stands where the rest of the responder chain would be, and records what
+/// reaches it.
+final class OtherMouseRecorder: NSView {
+    private(set) var buttons: [Int] = []
+    override func otherMouseDown(with event: NSEvent) {
+        buttons.append(event.buttonNumber)
     }
 }

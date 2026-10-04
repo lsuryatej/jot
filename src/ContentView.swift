@@ -201,9 +201,7 @@ struct ContentView: View {
 
     private var headerView: some View {
         HStack(spacing: 10) {
-            Text("Note \(notesManager.currentIndex + 1) of \(notesManager.notes.count)")
-                .font(.caption)
-                .foregroundStyle(Color(nsColor: ink.secondary))
+            noteNavigator
 
             Button("Checklist") {
                 // Posted directly to the text view rather than routed through
@@ -239,6 +237,93 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Color(nsColor: settings.effectiveChromeColor).opacity(0.8))
+    }
+
+    // MARK: - Note navigation (issue #12, design review H1)
+
+    /// "‹ N of M ⌄ ›": the mouse's way between notes, which until now needed
+    /// a swipe or a shortcut. The chevrons step by one exactly as a swipe
+    /// does, and the label opens a pull-down of every note.
+    ///
+    /// "Note" is dropped from the visible label, not from what VoiceOver
+    /// reads. With it, the chevrons and the indicator, the header asked for
+    /// 406pt in a 400pt panel: Highlight hyphenated onto a second line, and
+    /// pinning it to one line instead made the panel refuse to be narrower.
+    ///
+    /// One rule at the ends, shared with swipes, Cmd-Option-arrows, the side
+    /// buttons and View › Next Note: Back stops at the first note; Next past
+    /// the last note starts a new one, and is disabled only when that last
+    /// note is still blank. See `NotesManager.canGoToNextNote`.
+    ///
+    /// Drawn in the header's own caption type and secondary ink, as the plain
+    /// text it replaces was. Nothing here is an AppKit control, so the paper's
+    /// ink and appearance apply as they did, and the width is reserved for the
+    /// widest "Note N" at this count so the buttons beside it stay put as you
+    /// move between notes.
+    private var noteNavigator: some View {
+        HStack(spacing: 0) {
+            Button { navigate(.right) } label: {
+                navigationChevron("chevron.left")
+            }
+            .disabled(!notesManager.canGoToPreviousNote)
+            .help("Previous Note (⌥⌘←)")
+            .accessibilityLabel("Previous Note")
+
+            noteMenu
+
+            Button { navigate(.left) } label: {
+                navigationChevron("chevron.right")
+            }
+            .disabled(!notesManager.canGoToNextNote)
+            .help("Next Note (⌥⌘→)")
+            .accessibilityLabel("Next Note")
+        }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(Color(nsColor: ink.secondary))
+    }
+
+    /// 14 by 18pt: a target worth aiming a pointer at, still inside the
+    /// height the font stepper already gives the header, and narrow enough
+    /// that the header's other buttons keep their room.
+    private func navigationChevron(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.caption.weight(.semibold))
+            .frame(width: 14, height: 18)
+            .contentShape(Rectangle())
+    }
+
+    private var noteMenu: some View {
+        let position = notesManager.currentIndex + 1
+        let count = notesManager.notes.count
+        return Menu {
+            ForEach(Array(notesManager.notes.enumerated()), id: \.element.id) { index, note in
+                Toggle(note.menuTitle, isOn: Binding(
+                    get: { index == notesManager.currentIndex },
+                    set: { chosen in if chosen { notesManager.goToNote(id: note.id) } }
+                ))
+            }
+        } label: {
+            HStack(spacing: 2) {
+                ZStack(alignment: .leading) {
+                    // The widest this label gets at this count, never shown.
+                    Text("\(String(repeating: "8", count: String(count).count)) of \(count)")
+                        .hidden()
+                    Text("\(position) of \(count)")
+                }
+                .monospacedDigit()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+            }
+            .frame(height: 18)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Go to another note")
+        .accessibilityLabel("Note \(position) of \(count)")
+        .accessibilityHint("Choose a note to switch to")
     }
 
     /// Font and size for the open note specifically — the header is already

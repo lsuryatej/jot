@@ -654,6 +654,77 @@ func runAllTests() {
         equal(m.notes.count, 3, "and does not purge blanks, since it did not navigate")
     }
 
+    // MARK: - One rule for the ends (issue #12, design review H1)
+
+    // Swipes, Cmd-Option-arrows, mouse side buttons and the header chevrons
+    // all go forward past the last note by starting a new one, and the menu
+    // item used to be greyed there anyway. These two answers are what every
+    // control now enables itself from.
+    suite("Back is available everywhere but the first note") {
+        let m = makeManager(seed: ["A", "B", "C"])
+        m.currentIndex = 0
+        check(!m.canGoToPreviousNote, "the first note has nothing before it")
+        m.currentIndex = 1
+        check(m.canGoToPreviousNote, "the middle does")
+        m.currentIndex = 2
+        check(m.canGoToPreviousNote, "the last does")
+    }
+
+    suite("Forward past the last note starts a new one, unless the last is blank") {
+        let m = makeManager(seed: ["A", "B"])
+        m.currentIndex = 0
+        check(m.canGoToNextNote, "the middle of the list goes forward")
+        m.currentIndex = 1
+        check(m.canGoToNextNote, "the last note with words in it goes forward, into a new note")
+        m.nextNote()
+        equal(m.notes.count, 3, "which is what nextNote does there")
+        check(!m.canGoToNextNote, "a blank last note is the end: nextNote would do nothing")
+        m.nextNote()
+        equal(m.notes.count, 3, "and indeed does nothing")
+        m.currentText = "now it has words"
+        check(m.canGoToNextNote, "typing into it makes forward available again")
+    }
+
+    suite("goToNote jumps straight to a note picked by identity") {
+        let m = makeManager(seed: ["A", "B", "C", "D"])
+        m.currentIndex = 0
+        let target = m.notes[2].id
+        m.goToNote(id: target)
+        equal(m.currentIndex, 2, "lands on the note asked for")
+        m.goToNote(id: UUID())
+        equal(m.currentIndex, 2, "an id that is not there changes nothing")
+        m.goToNote(id: target)
+        equal(m.currentIndex, 2, "choosing the current note is a no-op")
+    }
+
+    suite("goToNote tidies blank notes the way stepping does, but never the target") {
+        let m = makeManager(seed: ["A", "", "C", ""])
+        m.currentIndex = 0
+        let blankTarget = m.notes[3].id
+        let c = m.notes[2].id
+        m.goToNote(id: blankTarget)
+        equal(m.notes.map(\.text), ["A", "C", ""], "the stray blank goes, the chosen blank stays")
+        equal(m.notes[m.currentIndex].id, blankTarget, "and is current")
+
+        m.goToNote(id: c)
+        equal(m.notes.map(\.text), ["A", "C", ""], "a blank you are leaving is kept, as previousNote keeps it")
+        equal(m.notes[m.currentIndex].id, c, "on the note asked for")
+    }
+
+    suite("menu titles are the first line, cut short") {
+        equal(Note(text: "Groceries\nmilk").menuTitle, "Groceries", "first line only")
+        equal(Note(text: "\n\n  Plans  \nmore").menuTitle, "Plans", "the first line with words, trimmed")
+        equal(Note(text: "# Heading\nbody").menuTitle, "Heading", "a heading's marker is not part of the title")
+        equal(Note(text: "").menuTitle, "Untitled note", "blank")
+        let long = String(repeating: "word ", count: 30)
+        let title = Note(text: long).menuTitle
+        check(title.count <= Note.menuTitleLength, "never longer than \(Note.menuTitleLength) characters")
+        check(title.hasSuffix("…"), "and ends in an ellipsis when cut")
+        check(!title.dropLast().hasSuffix(" "), "without a dangling space before it")
+        equal(Note(text: String(repeating: "x", count: Note.menuTitleLength)).menuTitle.count, Note.menuTitleLength,
+              "exactly the limit is left alone")
+    }
+
     // MARK: - Text statistics
 
     suite("word, character, and line counts") {
