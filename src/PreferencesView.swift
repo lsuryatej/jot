@@ -235,6 +235,9 @@ struct SettingsPaneView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(width: 220)
+
+                Toggle("Highlight current line", isOn: $settings.highlightsCurrentLine)
+                    .help("A faint band behind the line the caret is on, wrapped parts included")
             }
 
             Section("Chrome") {

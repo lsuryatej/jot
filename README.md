@@ -269,8 +269,9 @@ order you leave it in is the saved order.
 with **Cmd+G** / **Shift+Cmd+G** for next and previous and **Cmd+E** to use
 the selection.
 
-**Search every note.** **Shift+Cmd+F** searches all your notes at once and
-jumps straight to the matching line. Esc closes it.
+**Search every note.** **Shift+Cmd+F** searches all your notes at once, with
+the match in bold. Up and Down move through the results, Return jumps to the
+selected line, and Esc closes it.
 
 **Share.** The share button in the header sends the note's text to any macOS
 share target: Mail, Messages, AirDrop, Notes, and so on.
@@ -323,6 +324,11 @@ held to readable contrast on every paper.
 **Guides.** Optional writing guides under the text, dot grid or square
 grid, drawn to follow your font and line spacing.
 
+**Highlight current line.** Off by default. Turn it on in Settings →
+Appearance and a faint band sits behind the line the caret is on, every
+wrapped part of it, so the caret is easy to find in a long paragraph. It
+hides while you have a selection.
+
 **Header and footer.** The header shows "Note N of M", the Checklist and
 Highlight buttons, this note's font and size, and Share. The footer shows the
 counts. Hide either in Settings, or both at once with **Cmd+/**, down to
@@ -346,14 +352,18 @@ becomes a theme for the whole app, live as you type:
 theme
 paper: #223038
 ink: #e8e4d8
+accent: #7cc4ff
 size: 14
 guides: dots
 ```
 
 One `key: value` pair per line: `paper` (a hex; the chrome, cards and ink
 derive from it), `tint` (a named wash for the translucent papers instead),
-`ink`, `font`, `size`, `spacing` (line height), `tracking` (letter spacing),
-and `guides` (`dots`, `grid`, or `none`). Anything unrecognised is ignored
+`ink`, `accent` (a hex for math results, checked items and links, in place of
+your system accent), `font`, `size`, `spacing` (line height), `tracking`
+(letter spacing), and `guides` (`dots`, `grid`, or `none`). An accent too
+faint to read on the paper is darkened (or lightened, on a dark paper) until
+it reaches 4.5:1, 7:1 under Increase Contrast, keeping its hue. Anything unrecognised is ignored
 rather than rejected, so prose can sit among the settings as commentary. The
 theme exists only while its note does: edit it like any other text, delete
 it and the app falls back to your Settings. When several notes are themes,

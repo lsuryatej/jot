@@ -53,6 +53,9 @@ runMainMenuTests()
 runDeleteNoteUndoTests()
 runTextSizeTests()
 runContextMenuTests()
+runGlobalSearchKeyboardTests()
+runThemeAccentTests()
+runCurrentLineHighlightTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
