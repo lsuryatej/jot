@@ -3,8 +3,8 @@ import SwiftUI
 
 extension Notification.Name {
     /// Reposted from NSWorkspace whenever the system's display accessibility
-    /// options change, so anything with motion already on screen (confetti,
-    /// a half-finished slide) can stand down the moment Reduce Motion turns
+    /// options change, so anything with motion already on screen (a
+    /// half-finished slide) can stand down the moment Reduce Motion turns
     /// on, not just the next time it starts.
     static let jotReduceMotionDidChange = Notification.Name("JotReduceMotionDidChange")
 }

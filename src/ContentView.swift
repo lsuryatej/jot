@@ -388,8 +388,7 @@ struct ContentView: View {
             // a burst of confetti over everything else on screen.
             CelebrationWindowController.fire(
                 style: settings.celebrationStyle,
-                sound: settings.timerSound,
-                title: Celebration.badgeTitle(endingPhase: notesManager.activePomodoroPhase)
+                sound: settings.timerSound
             )
             notesManager.timerDidFire()
             return

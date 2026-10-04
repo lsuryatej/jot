@@ -101,6 +101,80 @@ func runEdgeRevealTests() {
               "reversing a fade from a quarter takes a quarter of the time")
     }
 
+    suite("edge reveal: coming in is the hide played backwards") {
+        let visible = CGRect(x: 0, y: 25, width: 1440, height: 850)
+        for edge in [ScreenEdge.right, .left] {
+            let f = EdgeRevealGeometry.frames(visible: visible, width: 320, edge: edge)
+            for style in [MotionPolicy.EdgeReveal.slide, .fade] {
+                let label = "\(edge) \(style)"
+                let concealEnd = EdgeRevealGeometry.concealTarget(style: style, frames: f)
+                let revealStart = EdgeRevealGeometry.revealStart(
+                    style: style, interrupting: false,
+                    currentFrame: CGRect(x: 40, y: 60, width: 400, height: 420), currentAlpha: 1, frames: f
+                )
+                equal(revealStart.frame, concealEnd.frame, "\(label): a fresh reveal starts where a hide ends")
+                equal(revealStart.alpha, concealEnd.alpha, "\(label): at the alpha a hide ends on")
+                let revealEnd = EdgeRevealGeometry.revealTarget(frames: f)
+                equal(revealEnd.frame, f.docked, "\(label): and lands docked")
+                equal(revealEnd.alpha, 1, "\(label): fully opaque")
+            }
+            let slideStart = EdgeRevealGeometry.revealStart(
+                style: .slide, interrupting: false, currentFrame: f.docked, currentAlpha: 0.3, frames: f)
+            equal(slideStart.alpha, 1, "\(edge): a slide never fades as well, whatever alpha was left")
+            let fadeStart = EdgeRevealGeometry.concealTarget(style: .fade, frames: f)
+            equal(fadeStart.frame, f.docked, "\(edge): the Reduce Motion fade never travels")
+        }
+    }
+
+    suite("edge reveal: a reversed hide carries on from where it is") {
+        let f = EdgeRevealGeometry.frames(visible: CGRect(x: 0, y: 0, width: 1000, height: 800), width: 200, edge: .right)
+        let midway = f.docked.offsetBy(dx: 90, dy: 0)
+        let slide = EdgeRevealGeometry.revealStart(
+            style: .slide, interrupting: true, currentFrame: midway, currentAlpha: 1, frames: f)
+        equal(slide.frame, midway, "a slide reversed mid-hide does not jump back off screen")
+        let fade = EdgeRevealGeometry.revealStart(
+            style: .fade, interrupting: true, currentFrame: f.docked, currentAlpha: 0.4, frames: f)
+        equal(fade.alpha, 0.4, "a fade reversed mid-hide keeps its alpha")
+        equal(fade.frame, f.docked, "and stays docked")
+    }
+
+    suite("edge reveal: the easing in is the easing out, mirrored in time") {
+        let hide = EdgeRevealGeometry.timing(.conceal)
+        let show = EdgeRevealGeometry.timing(.reveal)
+        // Reversing a cubic Bezier in time swaps its control points and
+        // reflects each through (0.5, 0.5).
+        equal(show.c1, CGPoint(x: 1 - hide.c2.x, y: 1 - hide.c2.y), "first control point mirrors the hide's second")
+        equal(show.c2, CGPoint(x: 1 - hide.c1.x, y: 1 - hide.c1.y), "second control point mirrors the hide's first")
+        equal(hide.c1, CGPoint(x: 0.42, y: 0), "the hide keeps the ease-in the maintainer likes")
+        equal(hide.c2, CGPoint(x: 1, y: 1), "unchanged")
+
+        // Sample both curves: the reveal at time t sits exactly where the
+        // hide sits at 1 - t, measured from the other end.
+        for t in stride(from: 0.0, through: 1.0, by: 0.125) {
+            let r = EdgeRevealGeometry.progress(.reveal, at: t)
+            let c = EdgeRevealGeometry.progress(.conceal, at: 1 - t)
+            check(abs(r - (1 - c)) < 0.001, "at t=\(t) the reveal mirrors the hide (\(r) vs \(1 - c))")
+        }
+        check(abs(EdgeRevealGeometry.progress(.reveal, at: 0)) < 0.001 && abs(EdgeRevealGeometry.progress(.reveal, at: 1) - 1) < 0.001,
+              "the reveal starts at the edge and lands docked, no overshoot")
+    }
+
+    suite("edge reveal: nothing but our slide animates the sidebar") {
+        for mode in DisplayMode.allCases {
+            if mode.isEdgeDocked {
+                equal(mode.windowAnimationBehavior, .none,
+                      "\(mode.rawValue): AppKit's own order-front animation is off, so it can't pop over the slide")
+            } else {
+                equal(mode.windowAnimationBehavior, .default,
+                      "\(mode.rawValue): windowed modes keep the system's window animation")
+            }
+        }
+        equal(EdgeRevealGeometry.keyTiming(activating: true), .beforeFirstFrame,
+              "a deliberate reveal takes the keyboard while still off screen, not on landing")
+        equal(EdgeRevealGeometry.keyTiming(activating: false), .never,
+              "a hover reveal never takes the keyboard")
+    }
+
     suite("edge reveal: the docked sidebar can't be dragged off its edge") {
         for mode in DisplayMode.allCases {
             equal(mode.allowsWindowDrag, !mode.isEdgeDocked,

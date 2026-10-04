@@ -510,43 +510,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// screen and starting over.
     private func revealFromEdge(activating: Bool) {
         guard let frames = edgeFrames() else { return }
-        let interrupting = panel.isVisible
+        // Only a hide still under way is reversed from where it is; anything
+        // else (first reveal, after a mode switch) starts from the edge.
+        let interrupting = panel.isVisible && edgeReveal.phase == .concealing
         let token = edgeReveal.beginReveal()
 
         // Under Reduce Motion the sidebar never travels: it is placed docked
         // and only its alpha animates, 0 to 1, over the same duration.
         let style = MotionPolicy.edgeReveal(reduceMotion: ReduceMotion.isEnabled)
+        let start = EdgeRevealGeometry.revealStart(
+            style: style, interrupting: interrupting,
+            currentFrame: panel.frame, currentAlpha: panel.alphaValue, frames: frames
+        )
+        let target = EdgeRevealGeometry.revealTarget(frames: frames)
+        panel.alphaValue = start.alpha
+        panel.setFrame(start.frame, display: false)
+
+        if !interrupting {
+            // Lay the content out and draw it at its final size while the
+            // panel is still off screen (or transparent). Ordered front with
+            // a stale backing store, the first frames showed SwiftUI settling
+            // into a new size mid-slide.
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.display()
+        }
+
+        switch EdgeRevealGeometry.keyTiming(activating: activating) {
+        case .beforeFirstFrame:
+            // Keyed now, off screen, so the caret and key-state redraw are
+            // done before the slide is visible instead of on landing.
+            focusPanel()
+        case .never:
+            panel.orderFrontRegardless()
+        }
+
         let duration: TimeInterval
         switch style {
         case .slide:
-            if !interrupting { panel.setFrame(frames.hidden, display: false) }
-            panel.alphaValue = 1
             duration = EdgeRevealGeometry.slideDuration(
-                fromX: panel.frame.minX, toX: frames.docked.minX, frames: frames
+                fromX: start.frame.minX, toX: target.frame.minX, frames: frames
             )
         case .fade:
-            if !interrupting { panel.alphaValue = 0 }
-            panel.setFrame(frames.docked, display: false)
-            duration = EdgeRevealGeometry.fadeDuration(fromAlpha: panel.alphaValue, toAlpha: 1)
+            duration = EdgeRevealGeometry.fadeDuration(fromAlpha: start.alpha, toAlpha: target.alpha)
         }
-        panel.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.timingFunction = EdgeRevealGeometry.timingFunction(.reveal)
             switch style {
-            case .slide: panel.animator().setFrame(frames.docked, display: true)
-            case .fade:  panel.animator().alphaValue = 1
+            case .slide: panel.animator().setFrame(target.frame, display: true)
+            case .fade:  panel.animator().alphaValue = target.alpha
             }
         } completionHandler: { [weak self] in
             // NSAnimationContext's completion handler always fires on the
             // main thread, but its type is not statically @MainActor.
             MainActor.assumeIsolated {
                 guard let self else { return }
-                // A hide (or a newer reveal) took over mid-slide: focusing
-                // now would key a panel that is on its way off screen.
+                // A hide (or a newer reveal) took over mid-slide: nothing to
+                // land, and nothing to focus on a panel leaving the screen.
                 guard self.edgeReveal.finish(token) else { return }
-                if activating { self.focusPanel() }
+                // Keyed before the slide began; only if something took the
+                // keyboard away during it does landing hand it back.
+                if activating, !self.panel.isKeyWindow { self.focusPanel() }
                 self.startEdgeAutoHide()
             }
         }
@@ -554,8 +579,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// The reveal played backwards: the same straight path back past the
     /// edge (or, under Reduce Motion, the same fade to transparent) over the
-    /// same duration, eased in where the reveal eased out. A reveal arriving
-    /// before it lands reverses it; see `revealFromEdge`.
+    /// same duration, on the reveal's curve reversed in time. A reveal
+    /// arriving before it lands reverses it; see `revealFromEdge`.
     private func concealToEdge() {
         // Already sliding away: let that slide finish rather than cutting it.
         guard edgeReveal.phase != .concealing else { return }
@@ -565,22 +590,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         let style = MotionPolicy.edgeReveal(reduceMotion: ReduceMotion.isEnabled)
+        let target = EdgeRevealGeometry.concealTarget(style: style, frames: frames)
         let duration: TimeInterval
         switch style {
         case .slide:
             duration = EdgeRevealGeometry.slideDuration(
-                fromX: panel.frame.minX, toX: frames.hidden.minX, frames: frames
+                fromX: panel.frame.minX, toX: target.frame.minX, frames: frames
             )
         case .fade:
-            duration = EdgeRevealGeometry.fadeDuration(fromAlpha: panel.alphaValue, toAlpha: 0)
+            duration = EdgeRevealGeometry.fadeDuration(fromAlpha: panel.alphaValue, toAlpha: target.alpha)
         }
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            context.timingFunction = EdgeRevealGeometry.timingFunction(.conceal)
             switch style {
-            case .slide: panel.animator().setFrame(frames.hidden, display: true)
-            case .fade:  panel.animator().alphaValue = 0
+            case .slide: panel.animator().setFrame(target.frame, display: true)
+            case .fade:  panel.animator().alphaValue = target.alpha
             }
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
@@ -905,8 +931,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if identifier.hasPrefix(reminderIdentifierPrefix) {
                 CelebrationWindowController.fire(
                     style: self.settings.celebrationStyle,
-                    sound: self.settings.timerSound,
-                    title: Celebration.reminderBadgeTitle
+                    sound: self.settings.timerSound
                 )
             }
         }
@@ -938,6 +963,7 @@ final class FloatingPanel: NSPanel {
     /// Window level, Spaces behaviour, and focus-stealing all differ per mode.
     func apply(mode: DisplayMode) {
         hidesOnDeactivate = mode.hidesOnDeactivate
+        animationBehavior = mode.windowAnimationBehavior
 
         // A panel docked flush against the screen edge has nothing to close,
         // minimise, or zoom, and the traffic lights read as a stray window.

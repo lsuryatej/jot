@@ -87,6 +87,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/SelectionResidueTests.swift \
     tests/HeadingBoldTests.swift \
     tests/AppearanceContrastTests.swift \
+    tests/AccentInkTests.swift \
     tests/MotionTests.swift \
     tests/EdgeRevealTests.swift \
     tests/VoiceOverTests.swift \
