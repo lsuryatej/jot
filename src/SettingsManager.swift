@@ -85,6 +85,12 @@ struct InkTheme: Equatable {
     /// Dot and square guides, drawn at low opacity by the editor.
     let guide: NSColor
 
+    /// The same ink with `accent` as both the accent and the link colour: a
+    /// theme note's `accent:` is the one colour for everything it marks.
+    func withAccent(_ accent: NSColor) -> InkTheme {
+        InkTheme(text: text, secondary: secondary, accent: accent, link: accent, guide: guide)
+    }
+
     /// The system palette, for the translucent appearances where macOS's own
     /// light/dark resolution is exactly right.
     static let system = InkTheme(
@@ -369,17 +375,44 @@ enum AccentInk {
     /// The accent made readable on a fixed set of opaque surfaces: a theme
     /// note's own paper, chrome and cards. One shared colour per surface set,
     /// so a theme re-derived on every keystroke keeps an equal `InkTheme`.
-    static func on(_ surfaces: [NSColor]) -> NSColor {
-        let key = "custom:" + surfaces.map { surface in
-            let c = surface.usingColorSpace(.sRGB) ?? surface
-            return String(format: "%.4f,%.4f,%.4f", c.redComponent, c.greenComponent, c.blueComponent)
-        }.joined(separator: ";")
+    ///
+    /// `accent` is a theme note's own `accent:`; nil means the user's system
+    /// accent. Either way only its lightness moves.
+    static func on(_ surfaces: [NSColor], accent custom: NSColor? = nil) -> NSColor {
+        let key = "custom:" + (custom.map(componentKey) ?? "system") + "@"
+            + surfaces.map(componentKey).joined(separator: ";")
+        return sharedColor(key) {
+            dynamic(key: key) { systemAccent, _, highContrast in
+                adjusted(custom ?? systemAccent, on: surfaces, minimum: highContrast ? 7 : 4.5)
+            }
+        }
+    }
+
+    /// A theme note's own accent on one of the picked papers (a theme that
+    /// sets `accent:` but no `paper:`). Measured against the same surfaces the
+    /// system accent is on that paper, so on the translucent papers it still
+    /// follows the system mode live.
+    static func custom(_ accent: NSColor, for paper: Appearance) -> NSColor {
+        let key = "theme:\(paper.rawValue):" + componentKey(accent)
+        return sharedColor(key) {
+            dynamic(key: key) { _, dark, highContrast in
+                ink(for: paper, accent: accent, dark: dark, highContrast: highContrast)
+            }
+        }
+    }
+
+    private static func componentKey(_ color: NSColor) -> String {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        return String(format: "%.4f,%.4f,%.4f", c.redComponent, c.greenComponent, c.blueComponent)
+    }
+
+    /// One instance per key, so equal inputs give an identical colour and
+    /// `InkTheme` equality holds across re-derivations.
+    private static func sharedColor(_ key: String, _ make: () -> NSColor) -> NSColor {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let hit = shared[key] { return hit }
-        let color = dynamic(key: key) { accent, _, highContrast in
-            adjusted(accent, on: surfaces, minimum: highContrast ? 7 : 4.5)
-        }
+        let color = make()
         shared[key] = color
         return color
     }
@@ -1009,7 +1042,28 @@ final class SettingsManager: ObservableObject {
         appearance.materialRawValue
     }
 
+    /// The ink on screen: the picked paper's, or a theme note's, with the
+    /// theme's `accent:` (when it has one) as the accent ink and link colour.
+    ///
+    /// The theme's accent goes through the same `AccentInk` clamp as the
+    /// system accent, on the surfaces the theme actually paints: it keeps its
+    /// hue and moves only its lightness until it clears 4.5:1 on the paper,
+    /// chrome and cards (7:1 under Increase Contrast). A theme without
+    /// `accent:` keeps the accent it had before.
     var effectiveInk: InkTheme {
+        let base = baseInk
+        guard let override = themeOverride, let accent = override.accentHex else { return base }
+        if let paper = override.paperHex {
+            return base.withAccent(AccentInk.on([paper, effectiveChromeColor, effectiveCardColor], accent: accent))
+        }
+        // No theme paper: the picked one is under the text, and for the
+        // translucent papers the window's mode (the system's, or the one an
+        // explicit ink forces) decides which surfaces it is measured on.
+        return base.withAccent(AccentInk.custom(accent, for: appearance))
+    }
+
+    /// `effectiveInk` before a theme's own accent is applied.
+    private var baseInk: InkTheme {
         guard let override = themeOverride else { return appearance.ink }
         if let paper = override.paperHex {
             return override.inkHex.map {

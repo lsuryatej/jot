@@ -344,14 +344,18 @@ becomes a theme for the whole app, live as you type:
 theme
 paper: #223038
 ink: #e8e4d8
+accent: #7cc4ff
 size: 14
 guides: dots
 ```
 
 One `key: value` pair per line: `paper` (a hex; the chrome, cards and ink
 derive from it), `tint` (a named wash for the translucent papers instead),
-`ink`, `font`, `size`, `spacing` (line height), `tracking` (letter spacing),
-and `guides` (`dots`, `grid`, or `none`). Anything unrecognised is ignored
+`ink`, `accent` (a hex for math results, checked items and links, in place of
+your system accent), `font`, `size`, `spacing` (line height), `tracking`
+(letter spacing), and `guides` (`dots`, `grid`, or `none`). An accent too
+faint to read on the paper is darkened (or lightened, on a dark paper) until
+it reaches 4.5:1, 7:1 under Increase Contrast, keeping its hue. Anything unrecognised is ignored
 rather than rejected, so prose can sit among the settings as commentary. The
 theme exists only while its note does: edit it like any other text, delete
 it and the app falls back to your Settings. When several notes are themes,
