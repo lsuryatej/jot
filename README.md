@@ -266,8 +266,9 @@ order you leave it in is the saved order.
 with **Cmd+G** / **Shift+Cmd+G** for next and previous and **Cmd+E** to use
 the selection.
 
-**Search every note.** **Shift+Cmd+F** searches all your notes at once and
-jumps straight to the matching line. Esc closes it.
+**Search every note.** **Shift+Cmd+F** searches all your notes at once, with
+the match in bold. Up and Down move through the results, Return jumps to the
+selected line, and Esc closes it.
 
 **Share.** The share button in the header sends the note's text to any macOS
 share target: Mail, Messages, AirDrop, Notes, and so on.

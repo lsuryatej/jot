@@ -34,6 +34,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/Highlight.swift \
     src/Emphasis.swift \
     src/GlobalSearch.swift \
+    src/GlobalSearchView.swift \
     src/LinkShrink.swift \
     src/Attachments.swift \
     src/AppleNotesSync.swift \
@@ -91,6 +92,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/MotionTests.swift \
     tests/EdgeRevealTests.swift \
     tests/VoiceOverTests.swift \
+    tests/GlobalSearchKeyboardTests.swift \
     tests/main.swift \
     -o "$OUT"
 
