@@ -191,7 +191,7 @@ enum ThemeNote {
         return InkTheme(
             text: text,
             secondary: secondary,
-            accent: .controlAccentColor,
+            accent: AccentInk.on(surfaces),
             link: link,
             guide: hueMate(of: paper, brightness: lightPaper ? 0.38 : 0.72)
         )
