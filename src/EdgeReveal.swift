@@ -193,6 +193,106 @@ enum EdgeRevealGeometry {
     }
 }
 
+/// Drives the edge sidebar's slide (or fade) one display frame at a time.
+///
+/// `NSAnimationContext` + `animator().setFrame` started in the same run-loop
+/// turn as `orderFront` for a window that had just been off screen: AppKit
+/// skipped the opening frames and the sidebar appeared most of the way in,
+/// a pop, while the hide (started on a window already on screen) played in
+/// full. Here both directions run the same per-frame code, and the first
+/// display-link tick only records the start time, so frame one is drawn at
+/// the starting pose after the window is really on screen.
+@MainActor
+final class EdgeSlideAnimator: NSObject {
+    private var link: CADisplayLink?
+    private var startTime: CFTimeInterval?
+    private weak var window: NSWindow?
+    private var from = EdgeRevealGeometry.Pose(frame: .zero, alpha: 1)
+    private var to = EdgeRevealGeometry.Pose(frame: .zero, alpha: 1)
+    private var duration: TimeInterval = 0
+    private var direction: EdgeRevealGeometry.Direction = .reveal
+    private var completion: (() -> Void)?
+
+    var isRunning: Bool { link != nil }
+
+    /// Moves `window` from `from` to `to`. Starting another run, or calling
+    /// `cancel()`, drops the pending completion: whatever took over owns the
+    /// window now.
+    func run(
+        _ window: NSWindow,
+        from: EdgeRevealGeometry.Pose, to: EdgeRevealGeometry.Pose,
+        duration: TimeInterval, direction: EdgeRevealGeometry.Direction,
+        completion: @escaping () -> Void
+    ) {
+        cancel()
+        self.window = window
+        self.from = from
+        self.to = to
+        self.duration = duration
+        self.direction = direction
+        self.completion = completion
+        apply(from)
+
+        guard duration > 0, let screen = window.screen ?? NSScreen.main else {
+            apply(to)
+            finish()
+            return
+        }
+        let link = screen.displayLink(target: self, selector: #selector(step(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    func cancel() {
+        link?.invalidate()
+        link = nil
+        startTime = nil
+        completion = nil
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        guard let startTime else {
+            // First tick: the window has now been composited at `from`.
+            // Time starts here, not when `run` was called.
+            self.startTime = link.timestamp
+            return
+        }
+        let t = min(1, (link.targetTimestamp - startTime) / duration)
+        let p = CGFloat(EdgeRevealGeometry.progress(direction, at: t))
+        apply(EdgeRevealGeometry.Pose(
+            frame: CGRect(
+                x: from.frame.minX + (to.frame.minX - from.frame.minX) * p,
+                y: from.frame.minY + (to.frame.minY - from.frame.minY) * p,
+                width: from.frame.width + (to.frame.width - from.frame.width) * p,
+                height: from.frame.height + (to.frame.height - from.frame.height) * p
+            ),
+            alpha: from.alpha + (to.alpha - from.alpha) * p
+        ))
+        if t >= 1 { finish() }
+    }
+
+    private func apply(_ pose: EdgeRevealGeometry.Pose) {
+        guard let window else { return }
+        // Same size: move only, so the SwiftUI content never re-lays out
+        // mid-slide.
+        if window.frame.size == pose.frame.size {
+            window.setFrameOrigin(pose.frame.origin)
+        } else {
+            window.setFrame(pose.frame, display: true)
+        }
+        window.alphaValue = pose.alpha
+    }
+
+    private func finish() {
+        let done = completion
+        link?.invalidate()
+        link = nil
+        startTime = nil
+        completion = nil
+        done?()
+    }
+}
+
 extension DisplayMode {
     /// Whether the user may drag the window around. A sidebar docked to a
     /// screen edge is a surface, not a window: dragging it off its edge left

@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Which edge slide is in charge; stale completions check it and stand
     /// down. See `EdgeRevealState`.
     private var edgeReveal = EdgeRevealState()
+    private let edgeAnimator = EdgeSlideAnimator()
     /// Guards against re-applying a mode that is already in effect. The
     /// @Published sink fires once on subscribe, which would otherwise tear the
     /// interface down and rebuild it immediately after launch.
@@ -554,26 +555,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             duration = EdgeRevealGeometry.fadeDuration(fromAlpha: start.alpha, toAlpha: target.alpha)
         }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = EdgeRevealGeometry.timingFunction(.reveal)
-            switch style {
-            case .slide: panel.animator().setFrame(target.frame, display: true)
-            case .fade:  panel.animator().alphaValue = target.alpha
-            }
-        } completionHandler: { [weak self] in
-            // NSAnimationContext's completion handler always fires on the
-            // main thread, but its type is not statically @MainActor.
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                // A hide (or a newer reveal) took over mid-slide: nothing to
-                // land, and nothing to focus on a panel leaving the screen.
-                guard self.edgeReveal.finish(token) else { return }
-                // Keyed before the slide began; only if something took the
-                // keyboard away during it does landing hand it back.
-                if activating, !self.panel.isKeyWindow { self.focusPanel() }
-                self.startEdgeAutoHide()
-            }
+        edgeAnimator.run(
+            panel, from: start, to: target, duration: duration, direction: .reveal
+        ) { [weak self] in
+            guard let self else { return }
+            // A hide (or a newer reveal) took over mid-slide: nothing to
+            // land, and nothing to focus on a panel leaving the screen.
+            guard self.edgeReveal.finish(token) else { return }
+            // Keyed before the slide began; only if something took the
+            // keyboard away during it does landing hand it back.
+            if activating, !self.panel.isKeyWindow { self.focusPanel() }
+            self.startEdgeAutoHide()
         }
     }
 
@@ -601,21 +593,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             duration = EdgeRevealGeometry.fadeDuration(fromAlpha: panel.alphaValue, toAlpha: target.alpha)
         }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = EdgeRevealGeometry.timingFunction(.conceal)
-            switch style {
-            case .slide: panel.animator().setFrame(target.frame, display: true)
-            case .fade:  panel.animator().alphaValue = target.alpha
-            }
-        } completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                // A show arrived mid-slide and reversed it: leave it out.
-                guard self.edgeReveal.finish(token) else { return }
-                self.panel.orderOut(nil)
-                self.panel.alphaValue = 1
-            }
+        let from = EdgeRevealGeometry.Pose(frame: panel.frame, alpha: panel.alphaValue)
+        edgeAnimator.run(
+            panel, from: from, to: target, duration: duration, direction: .conceal
+        ) { [weak self] in
+            guard let self else { return }
+            // A show arrived mid-slide and reversed it: leave it out.
+            guard self.edgeReveal.finish(token) else { return }
+            self.panel.orderOut(nil)
+            self.panel.alphaValue = 1
         }
     }
 
@@ -718,6 +704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func hideImmediately() {
+        edgeAnimator.cancel()
         edgeReveal.reset()
         panel?.orderOut(nil)
         panel?.alphaValue = 1
