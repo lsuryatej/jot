@@ -1397,6 +1397,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         drawGuide(in: dirtyRect)
         super.draw(dirtyRect)
         drawMathResults(in: dirtyRect)
+        let selected = selectedRanges.map(\.rangeValue)
         for placed in placedImages() where placed.rect.intersects(dirtyRect) {
             placed.image.draw(
                 in: placed.rect,
@@ -1406,6 +1407,92 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 respectFlipped: true,
                 hints: [.interpolation: NSImageInterpolation.high.rawValue]
             )
+            if Self.isImage(placed, coveredBy: selected) {
+                imageSelectionTint.setFill()
+                placed.rect.fill(using: .sourceOver)
+            }
+        }
+    }
+
+    // MARK: - Selected images
+
+    /// A selected image is tinted over its picture, the way an attachment is
+    /// in any Mac text view, never shown as a text selection band: the band
+    /// belongs to text, and under an image it only ever framed the line's
+    /// empty foot (and, before the glyphs were hidden, the path itself).
+    private var imageSelectionTint: NSColor {
+        let focused = window?.isKeyWindow == true && window?.firstResponder === self
+        return (focused ? NSColor.selectedContentBackgroundColor : NSColor.unemphasizedSelectedContentBackgroundColor)
+            .withAlphaComponent(0.4)
+    }
+
+    private static func isImage(_ placed: PlacedImage, coveredBy ranges: [NSRange]) -> Bool {
+        ranges.contains { NSIntersectionRange($0, placed.markdownRange) == placed.markdownRange }
+    }
+
+    /// Where a tint is drawn for the current selection: every image it
+    /// covers whole.
+    func selectedImageRects() -> [NSRect] {
+        let selected = selectedRanges.map(\.rangeValue)
+        guard selected.contains(where: { $0.length > 0 }) else { return [] }
+        return placedImages().filter { Self.isImage($0, coveredBy: selected) }.map(\.rect)
+    }
+
+    /// Whether the selection is images and nothing else (spaces between
+    /// them aside), so no text band should be painted at all.
+    private func selectionIsOnlyImages() -> Bool {
+        guard let textStorage else { return false }
+        let ns = textStorage.string as NSString
+        let selected = selectedRanges.map(\.rangeValue).filter { $0.length > 0 }
+        guard !selected.isEmpty else { return false }
+        for range in selected where NSMaxRange(range) <= ns.length {
+            var index = range.location
+            var sawImage = false
+            while index < NSMaxRange(range) {
+                if let atom = imageAtom(at: index) {
+                    sawImage = true
+                    index = NSMaxRange(atom.range)
+                    continue
+                }
+                let character = ns.character(at: index)
+                guard character == 0x20 || character == 0x09 else { return false }
+                index += 1
+            }
+            if !sawImage { return false }
+        }
+        return true
+    }
+
+    private var tintedImageRects: [NSRect] = []
+    /// The band colour set aside while an image-only selection hides it.
+    private var hiddenSelectionBackground: NSColor?
+
+    /// Repaints the tints that came or went with a selection change and
+    /// switches the band off for an image-only selection. Layout cannot be
+    /// asked for mid-edit, so a change arriving inside one is handled once
+    /// the edit closes.
+    private func refreshImageSelection() {
+        guard textStorage?.editedMask.isEmpty ?? true else {
+            DispatchQueue.main.async { [weak self] in self?.refreshImageSelection() }
+            return
+        }
+        let now = selectedImageRects()
+        for rect in tintedImageRects + now {
+            setNeedsDisplay(rect.insetBy(dx: -1, dy: -1))
+        }
+        tintedImageRects = now
+
+        var attributes = selectedTextAttributes
+        if selectionIsOnlyImages() {
+            if hiddenSelectionBackground == nil {
+                hiddenSelectionBackground = attributes[.backgroundColor] as? NSColor ?? .selectedTextBackgroundColor
+                attributes[.backgroundColor] = NSColor.clear
+                selectedTextAttributes = attributes
+            }
+        } else if let restored = hiddenSelectionBackground {
+            hiddenSelectionBackground = nil
+            attributes[.backgroundColor] = restored
+            selectedTextAttributes = attributes
         }
     }
 
@@ -1881,6 +1968,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return snapped == proposed ? value : NSValue(range: snapped)
         }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if !imageAtoms.isEmpty || !tintedImageRects.isEmpty || hiddenSelectionBackground != nil {
+            refreshImageSelection()
+        }
         guard revealsLinkAtSelection else { return }
         if !linkMatches.contains(where: { selectionTouches($0.range) }) {
             revealsLinkAtSelection = false

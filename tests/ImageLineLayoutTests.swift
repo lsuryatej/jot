@@ -571,3 +571,58 @@ func runImageGlyphClickTests() {
         }
     }
 }
+
+// Maintainer screenshot: with the whole reference selected, the hidden
+// `![320](Attachments/A81E…` showed at the foot of the image line in the
+// selection colour. The glyphs are never drawn now (see the glyph-width
+// tests); what is left is how a selected image looks. Like an attachment in
+// any Mac text view: a tint over the picture, not a text selection band.
+func runImageSelectionTests() {
+    func fixture() -> (view: ChecklistTextView, markdown: NSRange, text: String)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let text = "before line\n\(markdown)\nafter line"
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: markdown)
+        guard range.location != NSNotFound else { return nil }
+        return (view, range, text)
+    }
+    func bandColor(_ view: ChecklistTextView) -> NSColor? {
+        view.selectedTextAttributes[.backgroundColor] as? NSColor
+    }
+
+    suite("image selection: a selected image is tinted over its picture, with no text band") {
+        guard let (view, markdown, _) = fixture(), let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return
+        }
+        view.setSelectedRange(markdown)
+        equal(view.selectedImageRects(), [placed.rect], "the tint covers exactly the picture")
+        check(bandColor(view).map { $0.alphaComponent == 0 } ?? true,
+              "the selection band is not painted for a selection that is only the image")
+    }
+
+    suite("image selection: a selection of text keeps its band, and no image is tinted") {
+        guard let (view, _, _) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: 0, length: 6))
+        check(view.selectedImageRects().isEmpty, "nothing tinted")
+        check((bandColor(view)?.alphaComponent ?? 0) > 0, "the band is back for text")
+    }
+
+    suite("image selection: text and an image selected together: band for the text, tint for the image") {
+        guard let (view, markdown, text) = fixture(), let placed = view.placedImages().first else { return }
+        let after = (text as NSString).range(of: "after line")
+        view.setSelectedRange(NSRange(location: 3, length: NSMaxRange(after) - 3))
+        equal(view.selectedImageRects(), [placed.rect], "the image inside the selection is tinted")
+        check((bandColor(view)?.alphaComponent ?? 0) > 0, "and the text keeps its band")
+        _ = markdown
+    }
+
+    suite("image selection: deselecting the image clears its tint") {
+        guard let (view, markdown, _) = fixture() else { return }
+        view.setSelectedRange(markdown)
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        check(view.selectedImageRects().isEmpty, "no tint left behind")
+        check((bandColor(view)?.alphaComponent ?? 0) > 0, "and the band colour is restored for the next selection")
+    }
+}
