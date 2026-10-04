@@ -17,6 +17,8 @@ struct EdgeStackView: View {
     /// to an index at the moment they fire, because live reordering shifts
     /// every index after the first swap.
     @State private var draggingNoteID: UUID?
+    /// Holds the visible cards still while one above them changes height.
+    @State private var scrollAnchor = EdgeScrollAnchor()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -24,7 +26,16 @@ struct EdgeStackView: View {
             header
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 10) {
+                    // Eager, not lazy. A lazy stack only learns a card's
+                    // height when the card scrolls into view, so every card
+                    // met for the first time on the way back up resized under
+                    // the pointer and shoved the stack (design review H6).
+                    // Built up front, every card is measured before the panel
+                    // slides in and nothing is left to resize mid-scroll. A
+                    // note stack is tens of cards, not thousands, and each one
+                    // only re-renders when its own note changes (see
+                    // `NoteCard`), so holding them all costs little.
+                    VStack(spacing: 10) {
                         // Keyed by note identity, not position: a card's
                         // measured height and hover state belong to its note,
                         // so they must travel with it through a reorder
@@ -42,12 +53,14 @@ struct EdgeStackView: View {
                                     // fixed 12pt body no matter the size setting.
                                     size: min(12, settings.effectiveFontSize)
                                 ),
-                                draggingNoteID: $draggingNoteID
+                                draggingNoteID: $draggingNoteID,
+                                scrollAnchor: scrollAnchor
                             )
                         }
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
+                    .background(EdgeScrollAnchorProbe(anchor: scrollAnchor))
                 }
                 .onChange(of: scrollToIndex) { _, target in
                     guard let target, notesManager.notes.indices.contains(target) else { return }
@@ -97,16 +110,46 @@ struct NoteCard: View {
     let noteID: UUID
     let baseFont: NSFont
     @Binding var draggingNoteID: UUID?
+    let scrollAnchor: EdgeScrollAnchor
 
     /// The height the note's content actually needs — kept current
     /// regardless of whether a fixed height is in effect, so a fresh drag
     /// has a real starting point and double-clicking the handle has a real
     /// value to reset to.
-    @State private var contentHeight: CGFloat = 40
+    @State private var contentHeight: CGFloat
     @State private var isHovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The height a resize drag started from. Nil outside an active drag.
     @State private var dragStartHeight: CGFloat?
+
+    init(
+        notesManager: NotesManager,
+        settings: SettingsManager,
+        index: Int,
+        noteID: UUID,
+        baseFont: NSFont,
+        draggingNoteID: Binding<UUID?>,
+        scrollAnchor: EdgeScrollAnchor
+    ) {
+        self.notesManager = notesManager
+        self.settings = settings
+        self.index = index
+        self.noteID = noteID
+        self.baseFont = baseFont
+        self._draggingNoteID = draggingNoteID
+        self.scrollAnchor = scrollAnchor
+        // The first frame is drawn at whatever this says, before the editor
+        // has measured anything. This session's earlier measurement when
+        // there is one, otherwise a line-count estimate: either is far
+        // closer than a fixed placeholder, which every card then grew out
+        // of in view.
+        self._contentHeight = State(initialValue: EdgeCardHeights.shared.height(for: noteID)
+            ?? EdgeCardHeights.estimate(
+                text: notesManager.text(at: index),
+                font: baseFont,
+                lineHeightMultiple: settings.effectiveLineSpacing
+            ))
+    }
 
     /// Whether this card is the one a drag is carrying right now.
     private var isCarried: Bool { draggingNoteID == noteID }
@@ -131,7 +174,13 @@ struct NoteCard: View {
                 listKeyword: settings.effectiveListKeyword,
                 codeKeyword: settings.effectiveCodeKeyword,
                 ink: settings.effectiveInk,
-                onHeightChange: { contentHeight = $0 }
+                onHeightChange: { height, editor in
+                    let before = displayedHeight
+                    let after = fixedHeight.map { CGFloat($0) } ?? height
+                    contentHeight = height
+                    EdgeCardHeights.shared.record(height, for: noteID)
+                    scrollAnchor.cardWillResize(editor, by: after - before)
+                }
             )
             .frame(height: displayedHeight)
             .padding(12)
@@ -277,6 +326,41 @@ struct NoteCard: View {
     }
 }
 
+/// Every card's last measured content height, by note, for the session.
+///
+/// A card is a fresh view whenever the stack is rebuilt (a mode switch, a
+/// theme change, the window coming back), and a fresh view knows nothing
+/// until its editor has laid out. Starting it at the height it last measured
+/// means it is drawn at its real size from the first frame instead of
+/// growing into it. Kept by note identity, so it follows a note through a
+/// reorder; never persisted, since it depends on the panel's width and font.
+@MainActor
+final class EdgeCardHeights {
+    static let shared = EdgeCardHeights()
+
+    private var heights: [UUID: CGFloat] = [:]
+
+    func height(for noteID: UUID) -> CGFloat? { heights[noteID] }
+
+    func record(_ height: CGFloat, for noteID: UUID) { heights[noteID] = height }
+
+    func removeAll() { heights.removeAll() }
+
+    /// A note never measured this session: one line of `font` per line of
+    /// text, the first a point larger for the title. Wrapping and images
+    /// make the real height larger, never smaller, so this errs short.
+    static func estimate(text: String, font: NSFont, lineHeightMultiple: Double) -> CGFloat {
+        let layout = NSLayoutManager()
+        let multiple = CGFloat(max(lineHeightMultiple, 1))
+        let body = layout.defaultLineHeight(for: font) * multiple
+        let title = layout.defaultLineHeight(
+            for: NSFontManager.shared.convert(font, toSize: font.pointSize + 1)
+        ) * multiple
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
+        return max(18, (title + body * CGFloat(max(lines - 1, 0))).rounded(.up))
+    }
+}
+
 /// Live-reorders while a carried card passes over this one: the stack parts
 /// around the drag as it goes, and dropping commits whatever position the
 /// user already sees.
@@ -323,6 +407,111 @@ private struct NoteCardDropDelegate: DropDelegate {
     // harmless — onDrag overwrites it before any delegate can read it again.
 }
 
+/// Keeps what the user is looking at still when a card above the viewport
+/// changes height.
+///
+/// A scroll view holds its offset, not its content: a card out of sight above
+/// growing by 40pt pushed every visible card down 40pt. A card entirely above
+/// the viewport reports its change of height here just before SwiftUI gets
+/// it, and the moment SwiftUI lays the new height out (the stack's own frame
+/// changing, seen by `EdgeScrollAnchorProbe`) the stack scrolls by the same
+/// amount. Both land in the same layout pass, so no frame is ever drawn with
+/// the content displaced.
+///
+/// Only height changes are compensated. A reorder moves cards on purpose,
+/// and a card that is even partly in view grows where the user can see it.
+@MainActor
+final class EdgeScrollAnchor {
+    weak var scrollView: NSScrollView?
+    /// Height gained above the viewport and not yet scrolled away.
+    private(set) var pending: CGFloat = 0
+
+    /// Called just before a card's new height reaches SwiftUI.
+    func cardWillResize(_ card: NSView, by delta: CGFloat) {
+        guard abs(delta) > 0.5, let scrollView,
+              let frame = frame(of: card, in: scrollView),
+              frame.maxY <= visibleTop(of: scrollView) + 0.5
+        else { return }
+        let wasIdle = pending == 0
+        pending += delta
+        guard wasIdle else { return }
+        // Should the stack's frame not change (a card above grew exactly as
+        // much as one below shrank), the probe never fires. Settle on the
+        // next turn instead, laying out first so the new heights are in
+        // place: a stale amount would later undo a scroll the user made.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.pending != 0, let scrollView = self.scrollView else { return }
+            var root: NSView = scrollView
+            while let parent = root.superview { root = parent }
+            root.layoutSubtreeIfNeeded()
+            self.restore()
+        }
+    }
+
+    /// Scrolls the pending amount away, so the visible cards are back where
+    /// they were.
+    func restore() {
+        guard pending != 0, let scrollView else { return }
+        let delta = pending
+        pending = 0
+        let clip = scrollView.contentView
+        var origin = clip.bounds.origin
+        origin.y += clip.isFlipped ? delta : -delta
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// `view`'s frame in the clip view's document coordinates, flipped so
+    /// y grows downwards whichever way the clip view is oriented.
+    private func frame(of view: NSView, in scrollView: NSScrollView) -> CGRect? {
+        guard view.isDescendant(of: scrollView) else { return nil }
+        let clip = scrollView.contentView
+        let rect = view.convert(view.bounds, to: clip)
+        guard !clip.isFlipped else { return rect }
+        return CGRect(x: rect.minX, y: -rect.maxY, width: rect.width, height: rect.height)
+    }
+
+    private func visibleTop(of scrollView: NSScrollView) -> CGFloat {
+        let clip = scrollView.contentView
+        return clip.isFlipped ? clip.bounds.minY : -clip.bounds.maxY
+    }
+}
+
+/// Sits behind the stack's content to find the scroll view around it, and to
+/// hear, in the middle of SwiftUI's layout pass, that the content's height
+/// has just changed.
+struct EdgeScrollAnchorProbe: NSViewRepresentable {
+    let anchor: EdgeScrollAnchor
+
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.anchor = anchor
+        return view
+    }
+
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.anchor = anchor
+    }
+
+    final class ProbeView: NSView {
+        weak var anchor: EdgeScrollAnchor?
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            anchor?.scrollView = enclosingScrollView
+        }
+
+        override func setFrameSize(_ newSize: NSSize) {
+            let changed = abs(newSize.height - frame.height) > 0.01
+            super.setFrameSize(newSize)
+            if anchor?.scrollView == nil { anchor?.scrollView = enclosingScrollView }
+            if changed { anchor?.restore() }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
 /// A checklist-capable editor that reports the height it needs, so a card can
 /// size itself to its note by default — and, wrapped in a real `NSScrollView`,
 /// can just as well be given a fixed height shorter than that and scroll its
@@ -337,7 +526,10 @@ struct NoteCardEditor: NSViewRepresentable {
     var listKeyword: String
     var codeKeyword: String
     var ink: InkTheme
-    var onHeightChange: (CGFloat) -> Void
+    /// The height the note needs, and the view reporting it: the card's
+    /// place on screen decides whether its change of height may move the
+    /// cards the user is looking at.
+    var onHeightChange: (CGFloat, NSView) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -388,7 +580,7 @@ struct NoteCardEditor: NSViewRepresentable {
         // Repaints text and caret itself, superseding the labelColor above.
         textView.ink = ink
         textView.lineHeightMultiple = lineHeightMultiple
-        textView.onHeightChange = onHeightChange
+        textView.onHeightChange = context.coordinator.reportHeight(in: scrollView)
         textView.textStorage?.delegate = textView
         textView.enableImageDrops()
         textView.string = text
@@ -404,7 +596,6 @@ struct NoteCardEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ChecklistTextView else { return }
-        textView.onHeightChange = onHeightChange
 
         textView.listKeyword = listKeyword
         textView.codeKeyword = codeKeyword
@@ -439,6 +630,16 @@ struct NoteCardEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: NoteCardEditor
         init(_ parent: NoteCardEditor) { self.parent = parent }
+
+        /// Routed through the coordinator so the text view's callback always
+        /// reaches the current `parent`, without being reassigned on every
+        /// update.
+        func reportHeight(in scrollView: NSScrollView) -> (CGFloat) -> Void {
+            { [weak self, weak scrollView] height in
+                guard let self, let scrollView else { return }
+                self.parent.onHeightChange(height, scrollView)
+            }
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? ChecklistTextView else { return }
