@@ -272,12 +272,13 @@ func runListMoveTests() {
         equal(view.selectedRange(), caret(6), "caret followed the item")
     }
 
-    suite("Ctrl-Cmd-Up outside a list still moves the note") {
+    suite("Ctrl-Cmd-Up outside a list is not claimed, and never moves the note") {
+        // Moving the note is Option-Cmd-Up/Down; Ctrl-Cmd belongs to list items.
         let view = makeTextView("prose\n- a")
         view.setSelectedRange(caret(1))
         var handled = false
         let movedNote = posts(.jotRequestMoveNoteUp) { handled = chord(view, kVK_UpArrow) }
-        check(handled && movedNote, "falls through to Move Note")
+        check(!handled && !movedNote, "passes through untouched")
         equal(view.string, "prose\n- a", "text untouched")
     }
 
@@ -307,7 +308,7 @@ func runListMoveTests() {
         view.setSelectedRange(caret(11))
         var handled = false
         let movedNote = posts(.jotRequestMoveNoteUp) { handled = chord(view, kVK_UpArrow) }
-        check(handled && movedNote, "code is not a list, the note moves")
+        check(!handled && !movedNote, "code is not a list: nothing moves")
         equal(view.string, "code\n- a\n- b", "untouched")
     }
 

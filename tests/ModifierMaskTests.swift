@@ -97,9 +97,9 @@ func runModifierMaskTests() {
         }
         check(previousCaps.handled && previousCaps.fired, "Cmd-Option-Left with Caps Lock on")
         let up = firesNotification(.jotRequestMoveNoteUp) {
-            shortcut(view, "", NSEvent.ModifierFlags([.command, .control]).union(arrowExtras), keyCode: UInt16(kVK_UpArrow))
+            shortcut(view, "", NSEvent.ModifierFlags([.command, .option, .capsLock]).union(arrowExtras), keyCode: UInt16(kVK_UpArrow))
         }
-        check(up.handled && up.fired, "Ctrl-Cmd-Up outside a list still moves the note")
+        check(up.handled && up.fired, "Option-Cmd-Up moves the note, Caps Lock on")
     }
 
     suite("a bare arrow with numericPad/function is still not a shortcut") {
