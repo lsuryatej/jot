@@ -21,7 +21,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem?
     private var settingsWindowController: SettingsWindowController?
-    private var edgeTrigger: EdgeTriggerWindow?
+    /// One strip per open stretch of the chosen edge, across every display.
+    /// See `EdgeTriggerGeometry.strips`.
+    private var edgeTriggers: [EdgeTriggerWindow] = []
+    /// The display the edge sidebar was last revealed on, by its stable
+    /// number: `NSScreen` objects are replaced when the configuration
+    /// changes, the number is not.
+    private var edgeDisplayID: CGDirectDisplayID?
+    /// The screens changed while the sidebar was sliding in; it lands
+    /// against the old geometry and is re-docked on arrival.
+    private var edgeNeedsRedock = false
     private var edgeAutoHideTimer: Timer?
     /// Which edge slide is in charge; stale completions check it and stand
     /// down. See `EdgeRevealState`.
@@ -206,6 +215,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] _ in
                 guard let self, self.settings.displayMode.isEdgeDocked else { return }
                 self.installEdgeTrigger()
+            }
+            .store(in: &cancellables)
+
+        // Displays added or removed, a resolution change, the Dock or menu
+        // bar moving or resizing: every one moves the edges the strips and
+        // the docked sidebar are measured from.
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.settings.displayMode.isEdgeDocked else { return }
+                self.installEdgeTrigger()
+                self.redockAfterScreenChange()
             }
             .store(in: &cancellables)
 
@@ -525,8 +546,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if mode.isEdgeDocked {
             installEdgeTrigger()
         } else {
-            edgeTrigger?.orderOut(nil)
-            edgeTrigger = nil
+            edgeTriggers.forEach { $0.orderOut(nil) }
+            edgeTriggers = []
             restoreWindowedFrame()
         }
 
@@ -625,9 +646,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     // MARK: - Screen edge
 
+    /// Puts a strip on every open stretch of the chosen edge, reusing the
+    /// windows already there. Called again whenever the edge or the screens
+    /// change.
     private func installEdgeTrigger() {
-        if edgeTrigger == nil {
-            edgeTrigger = EdgeTriggerWindow { [weak self] activating in
+        let edge = settings.screenEdge
+        var strips = EdgeTriggerGeometry.strips(
+            screens: NSScreen.screens.map { (frame: $0.frame, visible: $0.visibleFrame) },
+            edge: edge
+        )
+        if strips.isEmpty, let screen = NSScreen.main {
+            // Cannot happen with real displays (one of them is outermost),
+            // but never leave the sidebar with no way in.
+            strips = EdgeTriggerGeometry.strips(
+                screens: [(frame: screen.frame, visible: screen.visibleFrame)], edge: edge
+            )
+        }
+        while edgeTriggers.count < strips.count {
+            edgeTriggers.append(EdgeTriggerWindow { [weak self] activating in
                 guard let self else { return }
                 if self.isEdgeRevealedOrArriving {
                     // Already out: a click on the bar should still hand it focus.
@@ -635,13 +671,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     return
                 }
                 self.revealFromEdge(activating: activating)
-            }
+            })
         }
-        edgeTrigger?.position(on: settings.screenEdge, screen: NSScreen.main)
-        // orderFrontRegardless: the strip has to appear without activating the
-        // app, or pushing the cursor at the edge would steal focus from
-        // whatever the user is actually working in.
-        edgeTrigger?.orderFrontRegardless()
+        while edgeTriggers.count > strips.count {
+            edgeTriggers.removeLast().orderOut(nil)
+        }
+        for (window, strip) in zip(edgeTriggers, strips) {
+            window.position(at: strip, edge: edge)
+            // orderFrontRegardless: the strip has to appear without activating
+            // the app, or pushing the cursor at the edge would steal focus
+            // from whatever the user is actually working in.
+            window.orderFrontRegardless()
+        }
+    }
+
+    /// The display under the pointer: where the user is, for a reveal from
+    /// the strip, the hot key or the menu bar alike.
+    private func screenUnderPointer() -> NSScreen? {
+        let screens = NSScreen.screens
+        let index = EdgeTriggerGeometry.screenIndex(
+            containing: NSEvent.mouseLocation, frames: screens.map(\.frame)
+        )
+        return index.map { screens[$0] } ?? NSScreen.main
+    }
+
+    /// The display the sidebar was revealed on, if it is still connected.
+    private var edgeScreen: NSScreen? {
+        guard let edgeDisplayID else { return nil }
+        return NSScreen.screens.first { $0.displayID == edgeDisplayID }
+    }
+
+    /// After the screens change, a sidebar that is out moves to the new
+    /// docked frame on its display (or, if that display is gone, the one
+    /// under the pointer) at once. One mid-slide is re-docked when it lands;
+    /// one sliding away is gone, and the next reveal measures afresh.
+    private func redockAfterScreenChange() {
+        guard panel.isVisible else { return }
+        switch edgeReveal.phase {
+        case .shown:
+            redock()
+        case .revealing:
+            edgeNeedsRedock = true
+        case .hidden, .concealing:
+            break
+        }
+    }
+
+    private func redock() {
+        edgeNeedsRedock = false
+        let screen = edgeScreen ?? screenUnderPointer()
+        edgeDisplayID = screen?.displayID
+        guard let frames = edgeFrames(on: screen), panel.frame != frames.docked else { return }
+        panel.setFrame(frames.docked, display: true)
     }
 
     /// Docks the note full-height against the chosen edge and slides it in.
@@ -655,10 +736,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// the time the remaining distance needs, rather than jumping back off
     /// screen and starting over.
     private func revealFromEdge(activating: Bool) {
-        guard let frames = edgeFrames() else { return }
         // Only a hide still under way is reversed from where it is; anything
         // else (first reveal, after a mode switch) starts from the edge.
         let interrupting = panel.isVisible && edgeReveal.phase == .concealing
+        // A fresh reveal comes out on the display the user is on; reversing
+        // a hide stays on the display that hide is leaving.
+        let screen = interrupting ? (edgeScreen ?? screenUnderPointer()) : screenUnderPointer()
+        guard let frames = edgeFrames(on: screen) else { return }
+        edgeDisplayID = screen?.displayID
+        edgeNeedsRedock = false
         let token = edgeReveal.beginReveal()
 
         // Under Reduce Motion the sidebar never travels: it is placed docked
@@ -710,6 +796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Keyed before the slide began; only if something took the
             // keyboard away during it does landing hand it back.
             if activating, !self.panel.isKeyWindow { self.focusPanel() }
+            if self.edgeNeedsRedock { self.redock() }
             self.startEdgeAutoHide()
         }
     }
@@ -721,7 +808,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func concealToEdge() {
         // Already sliding away: let that slide finish rather than cutting it.
         guard edgeReveal.phase != .concealing else { return }
-        guard let frames = edgeFrames(), let token = edgeReveal.beginConceal() else {
+        guard let frames = edgeFrames(on: edgeScreen ?? panel.screen ?? NSScreen.main),
+              let token = edgeReveal.beginConceal() else {
             hideImmediately()
             return
         }
@@ -750,9 +838,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
 
-    /// The docked and just-off-screen frames for the current edge and width.
-    private func edgeFrames() -> (docked: CGRect, hidden: CGRect)? {
-        guard let visible = NSScreen.main?.visibleFrame else { return nil }
+    /// The docked and just-off-screen frames on `screen` for the current
+    /// edge and width.
+    private func edgeFrames(on screen: NSScreen?) -> (docked: CGRect, hidden: CGRect)? {
+        guard let visible = (screen ?? NSScreen.main)?.visibleFrame else { return nil }
         return EdgeRevealGeometry.frames(
             visible: visible, width: CGFloat(settings.edgeWidth), edge: settings.screenEdge
         )
@@ -1247,4 +1336,12 @@ final class FloatingPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+private extension NSScreen {
+    /// The display's stable number, which survives configuration changes
+    /// that replace the `NSScreen` object itself.
+    var displayID: CGDirectDisplayID? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
 }

@@ -62,6 +62,8 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/EdgeReveal.swift \
     src/PlainTextEditor.swift \
     src/EditorAccessibility.swift \
+    src/EdgeStackView.swift \
+    src/EdgeTrigger.swift \
     src/PreferencesView.swift \
     src/SettingsWindow.swift \
     src/MainMenu.swift \
@@ -108,6 +110,8 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/GlobalSearchKeyboardTests.swift \
     tests/ThemeAccentTests.swift \
     tests/CurrentLineHighlightTests.swift \
+    tests/EdgeStackTests.swift \
+    tests/EdgeTriggerTests.swift \
     tests/main.swift \
     -o "$OUT"
 

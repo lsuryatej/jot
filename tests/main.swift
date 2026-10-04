@@ -56,6 +56,8 @@ runContextMenuTests()
 runGlobalSearchKeyboardTests()
 runThemeAccentTests()
 runCurrentLineHighlightTests()
+runEdgeStackTests()
+runEdgeTriggerTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

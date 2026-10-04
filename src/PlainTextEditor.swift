@@ -534,8 +534,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
     }
 
+    /// A point larger than the body and a real bold of the note's own font,
+    /// resolved the way headings resolve theirs (`NoteFont.bold(of:)`), so an
+    /// SF Pro or New York note gets an SF Pro or New York title rather than
+    /// a monospaced one. A family with no heavier cut (Monaco) keeps its
+    /// regular face here, a point larger.
     private var titleFont: NSFont {
-        .monospacedSystemFont(ofSize: baseFont.pointSize + 1, weight: .semibold)
+        let sized = NSFontManager.shared.convert(baseFont, toSize: baseFont.pointSize + 1)
+        return NoteFont.bold(of: sized).font
     }
 
     /// Reports the height the content needs, for cards that size to their note.
