@@ -6,15 +6,15 @@ A plain-text scratchpad for macOS. No Electron, no dependencies, no telemetry.
 ![swift](https://img.shields.io/badge/Swift-AppKit%20%2B%20SwiftUI-orange?logo=swift&logoColor=white)
 ![dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
 ![license](https://img.shields.io/github/license/lsuryatej/jot)
-![binary size](https://img.shields.io/badge/binary-~950KB-blue)
+![download size](https://img.shields.io/badge/download-~1MB-blue)
 
 Option+A summons a note from anywhere. It floats, docks to the menu bar, sits
 in a screen-edge sidebar, or lives in the Dock. Plain text, with checklists,
 lists, headings, themes, inline math, unit and currency conversion, timers,
 reminders, images, and OCR, built on nothing but Swift, AppKit, and SwiftUI.
 No Xcode project, no package manager, no runtime dependency. The whole app is
-one `swiftc` invocation compiling straight to a ~950KB binary with zero
-non-system libraries linked in.
+one `swiftc` invocation compiling straight to a single binary (about a 1 MB
+download) with zero non-system libraries linked in.
 
 https://github.com/user-attachments/assets/ee0bb026-4726-4322-8937-3f7a50abe910
 
@@ -520,7 +520,7 @@ File-by-file layout, what's tested where, and build-output details live in
 Most "quick note" apps on macOS are either a $5-59 indie tool (Antinote,
 Numi, Soulver) or a full Electron shell burning 150MB+ before you've typed a
 word. Jot does the scratchpad basics, math that works, images you can drop
-in, quick recall, in a binary smaller than most icon files.
+in, quick recall, in a download of about 1 MB.
 
 ### How it compares
 
@@ -531,7 +531,7 @@ what you get for free with Jot versus what they charge for.
 | | **Jot** | [Antinote](https://antinote.io/) | [Numi](https://numi.app/) | [Soulver 4](https://soulver.app/) |
 |---|---|---|---|---|
 | Price | Free, open source | $5 one-time | Free, $23.59 to unlock notes + sync | $59 one-time (+$26/yr optional) |
-| Binary size | ~950 KB, zero dependencies | Lightweight, closed | Lightweight, closed | Lightweight, closed |
+| Size | ~1 MB download, zero dependencies | Lightweight, closed | Lightweight, closed | Lightweight, closed |
 | Inline math with variables | Yes | Yes | Yes | Yes |
 | Unit conversion | Yes, offline | Yes | Yes | Yes |
 | Currency conversion | Yes, opt-in live rates | Yes | Yes, paid tier | Yes, live by default |
@@ -544,7 +544,7 @@ what you get for free with Jot versus what they charge for.
 | Sync across devices | No | iCloud (2.0+), iOS app in progress | iCloud, paid tier | iCloud, iOS/iPad apps |
 | Scripting / themes | Themes (notes); no scripting | Yes, JS extensions + themes | No | CLI, URL schemes, Automator |
 | Apple Notes sync | Yes, opt-in, one-way | No | No | No |
-| Network requests | Zero by default, two opt-in toggles | iCloud only, if enabled | iCloud only, if paid | Live data on by default |
+| Network requests | One daily update check (can be turned off); live rates opt-in | iCloud only, if enabled | iCloud only, if paid | Live data on by default |
 | Source | Open, MIT | Closed | Core open, paid features closed | Closed |
 
 Jot doesn't beat any of these on every axis. Against Antinote specifically:
@@ -552,8 +552,8 @@ no sync across devices, no scripting, no AutoPaste. Antinote is also a
 mature, several-year-old product; Jot is new. What Jot gives you instead is
 free and open source, inline images, five display modes instead of
 menu-bar-only, search across every note, link shrink, and an explicit
-zero-telemetry stance with both network-facing features off or opt-in rather
-than bundled into iCloud.
+zero-telemetry stance: one anonymous update check a day that you can turn
+off, live rates opt-in, nothing bundled into iCloud.
 
 ### Not done yet
 
