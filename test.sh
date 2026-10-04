@@ -60,6 +60,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/PlainTextEditor.swift \
     src/EditorAccessibility.swift \
     src/EdgeStackView.swift \
+    src/EdgeTrigger.swift \
     src/PreferencesView.swift \
     src/MainMenu.swift \
     tests/NotesManagerTests.swift \
@@ -93,6 +94,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/EdgeRevealTests.swift \
     tests/VoiceOverTests.swift \
     tests/EdgeStackTests.swift \
+    tests/EdgeTriggerTests.swift \
     tests/main.swift \
     -o "$OUT"
 
