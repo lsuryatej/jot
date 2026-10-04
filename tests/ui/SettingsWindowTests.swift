@@ -1,12 +1,16 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import SwiftUI
 
-// Real Settings window, real clicks, real SwiftUI. These are the three bug
-// classes that shipped and that the pure-logic suite structurally cannot see:
-// a sidebar whose rows do not register clicks, a sidebar that stops being
-// reachable once a particular pane is showing, and a window that changes size
-// when the pane changes.
+// Real Settings window, real toolbar, real SwiftUI. The bug classes the
+// pure-logic suite structurally cannot see: a pane switch that does not land,
+// a pane you cannot leave, a window title that does not follow the pane, a
+// pane that is not restored, and a window whose height clips a pane or
+// leaves it floating in empty space.
+//
+// The window is the app's own `SettingsWindowController`, not a stand-in, so
+// these exercise the same toolbar, sizing, and key handling a person gets.
 
 // MARK: - Fixtures
 
@@ -24,67 +28,94 @@ func makeSettingsFixtures() -> (settings: SettingsManager, notes: NotesManager, 
     return (settings, notes, directory)
 }
 
-// MARK: - Geometry
-
-/// Mirrors `AppDelegate.showPreferences()` in src/Jot.swift, including the
-/// requested content size and the minimum, so the test exercises the real
-/// NSHostingController path rather than a convenient stand-in.
-enum SettingsWindowGeometry {
-    static let requestedContentSize = NSSize(width: 680, height: 480)
-    static let minimumSize = NSSize(width: 560, height: 380)
-
-    /// The floor `PreferencesView` itself declares, in src/PreferencesView.swift.
-    /// NSHostingController sizes the window from the SwiftUI content's ideal
-    /// size, and this floor is what that ideal resolves to — which is why the
-    /// window does not come up at `requestedContentSize`.
-    static let declaredContentFloor = NSSize(width: 620, height: 420)
-
-    /// Sidebar geometry, from `PreferencesView.sidebar`: `.frame(width: 172)`,
-    /// `.padding(.vertical, 10)` / `.padding(.horizontal, 8)`, rows spaced 2pt
-    /// apart, each row 6pt of vertical padding around a single line of text.
-    static let sidebarWidth: CGFloat = 172
-    static let sidebarTopInset: CGFloat = 8
-    static let rowPitch: CGFloat = 32
-
-    /// Row order, matching `SettingsCategory.allCases`. That enum is private to
-    /// PreferencesView, so the titles are restated here purely as labels.
-    static let categoryTitles = ["General", "Appearance", "Typography", "Notes & Timers", "Shortcuts", "Privacy & Sync"]
-
-    /// Distance from the top of the content view to the centre of row `index`.
-    /// Measured centres are 24, 56, 88, 120, 152, 184.
-    static func rowCentreFromTop(_ index: Int) -> CGFloat {
-        sidebarTopInset + rowPitch / 2 + CGFloat(index) * rowPitch
-    }
-
-    static var clickX: CGFloat { sidebarWidth / 2 }
+/// A fresh defaults suite for the remembered pane, separate from the one
+/// `SettingsManager` uses, so the pane a test leaves behind never leaks into
+/// the next.
+func makePaneDefaults() -> UserDefaults {
+    UserDefaults(suiteName: "uitest-pane-\(UUID().uuidString)")!
 }
 
 /// Builds the Settings window exactly as the app does, brings it up, and waits
-/// until it is key.
+/// until it is key and its size has settled.
 @MainActor
-func openSettingsWindow(settings: SettingsManager, notes: NotesManager) -> NSWindow {
-    let window = NSWindow(
-        contentRect: NSRect(origin: .zero, size: SettingsWindowGeometry.requestedContentSize),
-        styleMask: [.titled, .closable, .resizable],
-        backing: .buffered,
-        defer: false
+func openSettingsWindow(
+    settings: SettingsManager,
+    notes: NotesManager,
+    defaults: UserDefaults = makePaneDefaults(),
+    pane: SettingsCategory? = nil
+) -> SettingsWindowController {
+    let controller = SettingsWindowController(
+        settings: settings, notesManager: notes, defaults: defaults, initialPane: pane
     )
-    window.title = "Jot Settings"
-    window.minSize = SettingsWindowGeometry.minimumSize
-    window.contentViewController = NSHostingController(rootView: PreferencesView(settings: settings, notesManager: notes))
-    window.isReleasedWhenClosed = false
-    window.center()
-    bringUpAndWaitUntilKey(window)
-    return window
+    if let window = controller.window {
+        bringUpAndWaitUntilKey(window)
+    }
+    return controller
 }
 
-/// Clicks sidebar row `index`, converting the measured top-down centre into
-/// window coordinates (bottom-left origin).
+// MARK: - Driving the toolbar
+
+/// Selects `category` the way a click on its toolbar button does: the item's
+/// own action, sent to its own target, through `NSApp.sendAction`.
 @MainActor
-func clickSidebarRow(_ index: Int, in window: NSWindow) {
-    guard let content = window.contentView else { return }
-    let y = content.bounds.height - SettingsWindowGeometry.rowCentreFromTop(index)
-    click(window, at: NSPoint(x: SettingsWindowGeometry.clickX, y: y))
+func clickToolbarItem(_ category: SettingsCategory, in window: NSWindow) {
+    reassertKey(window)
+    guard let item = window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == category.rawValue }),
+          let action = item.action
+    else {
+        check(false, "toolbar has a button for \(category.title)")
+        return
+    }
+    NSApp.sendAction(action, to: item.target, from: item)
+    // Longer than the resize animation, then until the frame stops moving.
+    pump(SettingsWindowLayout.resizeDuration + 0.1)
+    waitForStableFrame(window)
+}
+
+@MainActor
+private func sendSettingsKey(_ window: NSWindow, characters: String, keyCode: UInt16,
+                             modifiers: NSEvent.ModifierFlags = []) {
+    reassertKey(window)
+    guard let event = NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: modifiers,
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: characters,
+        charactersIgnoringModifiers: characters,
+        isARepeat: false,
+        keyCode: keyCode
+    ) else { return }
+    NSApp.sendEvent(event)
+    pump(0.2)
+}
+
+// MARK: - Measuring a pane
+
+/// The scroll view a grouped `Form` lays its rows out in. Its document height
+/// is the pane's real content height, measured independently of the ideal
+/// size the window was sized from.
+@MainActor
+private func formScrollView(in view: NSView) -> NSScrollView? {
+    if let scroll = view as? NSScrollView { return scroll }
+    for subview in view.subviews {
+        if let found = formScrollView(in: subview) { return found }
+    }
+    return nil
+}
+
+/// Content height and the pane's laid-out content height, for the size checks.
+@MainActor
+private func paneGeometry(_ controller: SettingsWindowController)
+    -> (content: NSSize, document: NSSize, visible: NSSize)? {
+    guard let window = controller.window,
+          let paneView = controller.tabs.selectedPane?.view,
+          let scroll = formScrollView(in: paneView),
+          let document = scroll.documentView
+    else { return nil }
+    return (window.contentLayoutRect.size, document.frame.size, scroll.contentView.bounds.size)
 }
 
 // MARK: - Tests
@@ -94,122 +125,192 @@ func runSettingsWindowTests() {
         let fixtures = makeSettingsFixtures()
         defer { try? FileManager.default.removeItem(at: fixtures.directory) }
 
-        let window = openSettingsWindow(settings: fixtures.settings, notes: fixtures.notes)
-        defer { window.close() }
-        guard let content = window.contentView else {
+        let controller = openSettingsWindow(settings: fixtures.settings, notes: fixtures.notes)
+        guard let window = controller.window, let content = window.contentView else {
             check(false, "settings window has a content view")
             return
         }
+        defer { window.close() }
 
         check(window.isKeyWindow, "settings window becomes key in a swiftc-built binary")
 
-        // MARK: A — every sidebar row registers its click
+        // MARK: Standard settings-window chrome
+
+        suite("it is a standard settings window") {
+            check(window.toolbar != nil, "panes are a toolbar")
+            equal(window.toolbar?.allowsUserCustomization, false, "the toolbar cannot be customised")
+            equal(window.toolbar?.items.map(\.label), SettingsCategory.allCases.map(\.title),
+                  "one toolbar button per pane, in order")
+            check(!window.styleMask.contains(.resizable), "the window cannot be resized by hand")
+            equal(window.standardWindowButton(.miniaturizeButton)?.isEnabled, false, "minimize is dimmed")
+            equal(window.standardWindowButton(.zoomButton)?.isEnabled, false, "zoom is dimmed")
+            equal(controller.selectedCategory, .general, "a first ever open lands on General")
+            equal(window.title, "General", "the title names the visible pane, not the app")
+        }
+
+        // MARK: A — every toolbar button switches the pane
 
         var hashes: [String] = []
-        suite("sidebar rows register clicks") {
-            for (index, title) in SettingsWindowGeometry.categoryTitles.enumerated() {
-                clickSidebarRow(index, in: window)
+        suite("toolbar buttons switch panes") {
+            for category in SettingsCategory.allCases {
+                clickToolbarItem(category, in: window)
+                equal(controller.selectedCategory, category, "\(category.title) is selected")
+                equal(window.toolbar?.selectedItemIdentifier?.rawValue, category.rawValue,
+                      "the \(category.title) button shows as the active one")
+                equal(window.title, category.title, "the window title reads \(category.title)")
                 let hash = renderHash(content)
-                hashes.append(hash)
-                if hashes.dropLast().contains(hash) {
-                    let path = saveRender(content, named: "pane-\(index)-\(title.replacingOccurrences(of: " ", with: "-"))")
+                if hashes.contains(hash) {
+                    let path = saveRender(content, named: "pane-\(category.rawValue)")
                     print("         rendering unchanged; artifact: \(path ?? "unavailable")")
                 }
+                hashes.append(hash)
             }
-            equal(Set(hashes).count, SettingsWindowGeometry.categoryTitles.count,
-                  "all six panes render differently — a row whose click never lands leaves the rendering identical")
+            equal(Set(hashes).count, SettingsCategory.allCases.count,
+                  "all six panes render differently — a switch that never lands leaves the rendering identical")
         }
 
-        suite("returning to a visited row reproduces its rendering") {
-            // Deliberately walks backwards, so each hop is a click from some
-            // other pane back to one already seen.
-            for index in stride(from: SettingsWindowGeometry.categoryTitles.count - 1, through: 0, by: -1) {
-                clickSidebarRow(index, in: window)
-                let title = SettingsWindowGeometry.categoryTitles[index]
+        suite("returning to a visited pane reproduces its rendering") {
+            // Walks backwards, so each hop is from some other pane back to
+            // one already seen.
+            for (index, category) in SettingsCategory.allCases.enumerated().reversed() {
+                clickToolbarItem(category, in: window)
                 let actual = renderHash(content)
                 if actual != hashes[index] {
-                    let path = saveRender(content, named: "revisit-\(index)-\(title.replacingOccurrences(of: " ", with: "-"))")
+                    let path = saveRender(content, named: "revisit-\(category.rawValue)")
                     print("         artifact: \(path ?? "unavailable")")
                 }
-                equal(actual, hashes[index], "clicking back to \(title) reproduces its earlier rendering")
+                equal(actual, hashes[index], "switching back to \(category.title) reproduces its earlier rendering")
             }
         }
 
-        // MARK: B — the sidebar survives every pane
+        // MARK: B — every pane can be left
 
-        suite("sidebar survives every pane") {
-            // A fresh window per category, so a pane that traps the window is
-            // attributed to itself rather than to whichever pane happens to run
-            // after it in the loop.
-            for (index, title) in SettingsWindowGeometry.categoryTitles.enumerated() {
+        suite("every pane can be left") {
+            // A fresh window per pane, so a pane that traps the window is
+            // attributed to itself rather than to whichever ran before it.
+            for category in SettingsCategory.allCases {
                 let paneFixtures = makeSettingsFixtures()
                 defer { try? FileManager.default.removeItem(at: paneFixtures.directory) }
-                let paneWindow = openSettingsWindow(settings: paneFixtures.settings, notes: paneFixtures.notes)
-                defer { paneWindow.close() }
-                guard let paneContent = paneWindow.contentView else {
-                    check(false, "settings window has a content view on the \(title) pass")
+                let paneController = openSettingsWindow(
+                    settings: paneFixtures.settings, notes: paneFixtures.notes, pane: category
+                )
+                guard let paneWindow = paneController.window, let paneContent = paneWindow.contentView else {
+                    check(false, "settings window has a content view on the \(category.title) pass")
                     continue
                 }
-                let generalHash = renderHash(paneContent)
+                defer { paneWindow.close() }
 
-                clickSidebarRow(index, in: paneWindow)
+                equal(paneController.selectedCategory, category, "opened straight onto \(category.title)")
+                check(paneWindow.toolbar?.isVisible == true, "the toolbar is still showing on \(category.title)")
 
-                // Scanline below the last row, where only the two backgrounds
-                // and the divider between them are on screen.
-                let probeY = SettingsWindowGeometry.rowCentreFromTop(SettingsWindowGeometry.categoryTitles.count) + 40
-                if let width = measuredSidebarWidth(paneContent, yFromTop: probeY) {
-                    let intact = abs(width - SettingsWindowGeometry.sidebarWidth) <= 2
-                    if !intact {
-                        let path = saveRender(paneContent, named: "sidebar-width-\(index)")
-                        print("         measured sidebar width \(width)pt on the \(title) pane; artifact: \(path ?? "unavailable")")
-                    }
-                    check(intact, "sidebar is still \(Int(SettingsWindowGeometry.sidebarWidth))pt wide on the \(title) pane")
-                } else {
-                    check(false, "sidebar edge is measurable on the \(title) pane")
-                }
-
-                // The real user-facing consequence: can you get out of here.
-                clickSidebarRow(0, in: paneWindow)
-                let escaped = renderHash(paneContent) == generalHash
+                let target: SettingsCategory = category == .general ? .privacy : .general
+                clickToolbarItem(target, in: paneWindow)
+                let escaped = paneController.selectedCategory == target && paneWindow.title == target.title
                 if !escaped {
-                    let path = saveRender(paneContent, named: "stuck-on-\(index)")
-                    print("         could not return to General; artifact: \(path ?? "unavailable")")
+                    let path = saveRender(paneContent, named: "stuck-on-\(category.rawValue)")
+                    print("         could not leave \(category.title); artifact: \(path ?? "unavailable")")
                 }
-                check(escaped, "General is reachable again after visiting \(title)")
+                check(escaped, "\(target.title) is reachable from \(category.title)")
             }
         }
 
-        // MARK: C — the window never resizes on a pane switch
+        // MARK: C — the window fits each pane
 
-        suite("window geometry is stable across pane switches") {
-            // Fresh window, so this measures a window that has not already been
-            // pushed around by the suites above.
+        suite("the window fits each pane, with no clipping and no slack") {
             let geometryFixtures = makeSettingsFixtures()
             defer { try? FileManager.default.removeItem(at: geometryFixtures.directory) }
-            let window = openSettingsWindow(settings: geometryFixtures.settings, notes: geometryFixtures.notes)
-            defer { window.close() }
-            guard let content = window.contentView else {
-                check(false, "settings window has a content view")
+            let sized = openSettingsWindow(settings: geometryFixtures.settings, notes: geometryFixtures.notes)
+            guard let sizedWindow = sized.window else {
+                check(false, "settings window exists")
                 return
             }
+            defer { sizedWindow.close() }
 
-            // Documents the ACTUAL size the window comes up at, which is not
-            // the 680x480 content rect it is created with. NSHostingController
-            // sizes the window from the SwiftUI content's ideal size, and
-            // PreferencesView carries `.frame(minWidth: 620, minHeight: 420)`,
-            // so the window resolves to that floor instead. Arguably intended,
-            // unlike the sidebar failures above — captured here so a change
-            // either way is visible rather than silent.
-            let expectedFrame = window.frameRect(forContentRect: NSRect(origin: .zero, size: SettingsWindowGeometry.declaredContentFloor)).size
-            equal(content.bounds.size, SettingsWindowGeometry.declaredContentFloor,
-                  "content comes up at PreferencesView's declared floor, not the 680x480 contentRect it was created with")
-            equal(window.frame.size, expectedFrame, "window frame matches that floor plus the titlebar")
+            let top = sizedWindow.frame.maxY
+            let left = sizedWindow.frame.minX
+            for category in SettingsCategory.allCases {
+                clickToolbarItem(category, in: sizedWindow)
+                guard let geometry = paneGeometry(sized) else {
+                    check(false, "\(category.title)'s form is measurable")
+                    continue
+                }
+                let expectedHeight = SettingsWindowLayout.contentHeight(
+                    forIdealHeight: geometry.document.height,
+                    screenLimit: sizedWindow.screen.map {
+                        $0.visibleFrame.height - (sizedWindow.frame.height - sizedWindow.contentLayoutRect.height)
+                            - 2 * SettingsWindowLayout.screenMargin
+                    }
+                )
+                equal(geometry.content.width, SettingsWindowLayout.paneWidth, "\(category.title): the width never changes")
+                equal(geometry.document.width, SettingsWindowLayout.paneWidth,
+                      "\(category.title): the form lays out at the window's width, with nothing overflowing it")
+                // A point of tolerance: the ideal height is fractional for a
+                // pane with wrapped text, and the window rounds it up.
+                check(abs(geometry.content.height - expectedHeight) <= 1,
+                      "\(category.title): content is \(geometry.content.height)pt for a \(geometry.document.height)pt form")
+                if geometry.document.height <= SettingsWindowLayout.maxPaneHeight {
+                    check(geometry.visible.height + 1 >= geometry.document.height,
+                          "\(category.title): the whole form is visible without scrolling")
+                } else {
+                    check(geometry.visible.height < geometry.document.height,
+                          "\(category.title): taller than the cap, so it scrolls inside the window")
+                }
+                equal(sizedWindow.frame.maxY, top, "\(category.title): the top edge stays put")
+                equal(sizedWindow.frame.minX, left, "\(category.title): the left edge stays put")
+            }
 
-            let baseline = window.frame
-            for (index, title) in SettingsWindowGeometry.categoryTitles.enumerated() {
-                clickSidebarRow(index, in: window)
-                equal(window.frame, baseline, "window frame is unchanged after switching to \(title)")
-                _ = index
+            // A change inside a pane resizes too: an edge mode adds the Edge
+            // and Width rows to General.
+            clickToolbarItem(.general, in: sizedWindow)
+            let before = sizedWindow.contentLayoutRect.height
+            geometryFixtures.settings.displayMode = DisplayMode.allCases.first { $0.isEdgeDocked } ?? .floating
+            pump(SettingsWindowLayout.resizeDuration + 0.2)
+            waitForStableFrame(sizedWindow)
+            if let geometry = paneGeometry(sized) {
+                check(geometry.content.height > before, "General grows when an edge mode adds rows")
+                check(abs(geometry.content.height - geometry.document.height.rounded(.up)) <= 1,
+                      "and fits them exactly (\(geometry.content.height) for \(geometry.document.height))")
+            } else {
+                check(false, "General's form is measurable after the mode change")
+            }
+        }
+
+        // MARK: D — the last pane is restored
+
+        suite("the most recently viewed pane is restored") {
+            let restoreFixtures = makeSettingsFixtures()
+            defer { try? FileManager.default.removeItem(at: restoreFixtures.directory) }
+            let defaults = makePaneDefaults()
+
+            let first = openSettingsWindow(settings: restoreFixtures.settings, notes: restoreFixtures.notes, defaults: defaults)
+            if let firstWindow = first.window {
+                clickToolbarItem(.typography, in: firstWindow)
+                firstWindow.close()
+            }
+
+            let second = openSettingsWindow(settings: restoreFixtures.settings, notes: restoreFixtures.notes, defaults: defaults)
+            defer { second.window?.close() }
+            equal(second.selectedCategory, .typography, "a new window opens on Typography, where the last one was left")
+            equal(second.window?.title, "Typography", "and is titled for it")
+            equal(second.window?.toolbar?.selectedItemIdentifier?.rawValue, SettingsCategory.typography.rawValue,
+                  "with its toolbar button active")
+        }
+
+        // MARK: E — keyboard
+
+        suite("⌘W and Escape close the window") {
+            for (name, characters, keyCode, modifiers) in [
+                ("⌘W", "w", UInt16(kVK_ANSI_W), NSEvent.ModifierFlags.command),
+                ("Escape", "\u{1b}", UInt16(kVK_Escape), NSEvent.ModifierFlags())
+            ] {
+                let keyFixtures = makeSettingsFixtures()
+                defer { try? FileManager.default.removeItem(at: keyFixtures.directory) }
+                let keyed = openSettingsWindow(settings: keyFixtures.settings, notes: keyFixtures.notes)
+                guard let keyedWindow = keyed.window else { continue }
+                check(keyedWindow.isVisible, "the window is up before \(name)")
+                sendSettingsKey(keyedWindow, characters: characters, keyCode: keyCode, modifiers: modifiers)
+                check(!keyedWindow.isVisible, "\(name) closes it")
+                keyedWindow.close()
             }
         }
     }

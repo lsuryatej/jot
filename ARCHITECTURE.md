@@ -12,7 +12,8 @@ finding where a given piece of behaviour lives.
 | `src/Jot.swift` | App delegate, display modes, panel, status item |
 | `src/MainMenu.swift` | Menu bar, including the Find items that drive Cmd+F |
 | `src/SettingsManager.swift` | Preferences, display-mode and privacy-toggle definitions |
-| `src/PreferencesView.swift` | Settings window and the shortcut recorder |
+| `src/PreferencesView.swift` | Settings pane contents and the shortcut recorder |
+| `src/SettingsWindow.swift` | Settings window: toolbar panes, per-pane title and height, remembered pane |
 | `src/HotKeyController.swift` | Global shortcut registration |
 | `src/KeyCombo.swift` | Shortcut model and its display form |
 | `src/MathExpression.swift` | The math parser and evaluator |
