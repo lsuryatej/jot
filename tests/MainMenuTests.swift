@@ -135,6 +135,15 @@ func runMainMenuTests() {
         }
     }
 
+    suite("Move Note Up/Down are Option-Cmd-Up/Down") {
+        let file = submenu("File", of: makeTestMainMenu())
+        for (title, key) in [("Move Note Up", NSUpArrowFunctionKey), ("Move Note Down", NSDownArrowFunctionKey)] {
+            let item = menuItem(title, in: file)
+            equal(item?.keyEquivalent, String(UnicodeScalar(key)!), "\(title) shows its arrow")
+            equal(item?.keyEquivalentModifierMask, [.command, .option], "\(title) uses Option-Cmd, like Next/Previous Note")
+        }
+    }
+
     suite("no two items in the menu bar share a key equivalent") {
         var seen: [String: String] = [:]
         var clashes: [String] = []

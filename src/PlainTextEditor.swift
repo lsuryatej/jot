@@ -748,11 +748,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             extractTextFromClipboardImage(nil)
             return true
         }
-        // Ctrl-Cmd-Up/Down walk the current note through the list. Like Cmd+N
-        // and Cmd+Shift+F below, this posts rather than acts: the text view
+        // Option-Cmd-Up/Down walk the current note through the list, the
+        // same chord family as Option-Cmd-Left/Right below (Ctrl-Cmd-Up/Down
+        // is left to list items, as in Apple Notes). Like Cmd+N and
+        // Cmd+Shift+F below, this posts rather than acts: the text view
         // exists in every display mode, and AppDelegate owns the one
         // NotesManager along with the knowledge of whether the panel shows.
-        if flags == [.command, .control] {
+        if flags == [.command, .option] {
             if event.keyCode == UInt16(kVK_UpArrow) {
                 NotificationCenter.default.post(name: .jotRequestMoveNoteUp, object: nil)
                 return true
@@ -763,10 +765,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             }
         }
         // Cmd-Option-Left/Right switch which note is showing, the keyboard
-        // equivalent of a two-finger swipe. Option rather than Control, so it
-        // doesn't collide with the reordering shortcut above, and it matches
-        // Safari/Chrome's own Cmd-Option-Left/Right tab-switching muscle
-        // memory. Same posting pattern as the move above.
+        // equivalent of a two-finger swipe. It matches Safari/Chrome's own
+        // Cmd-Option-Left/Right tab-switching muscle memory. Same posting
+        // pattern as the move above.
         if flags == [.command, .option] {
             if event.keyCode == UInt16(kVK_RightArrow) {
                 NotificationCenter.default.post(name: .jotRequestNextNote, object: nil)

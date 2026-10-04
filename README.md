@@ -257,7 +257,7 @@ a two-finger swipe; moving past the last note starts a new one. With the
 header hidden, a brief badge names the note you landed on. Blank notes are
 tidied away as you move between notes.
 
-**Reorder.** **Ctrl+Cmd+↑** and **Ctrl+Cmd+↓** walk the open note up or down
+**Reorder.** **Cmd+Option+↑** and **Cmd+Option+↓** walk the open note up or down
 the list one slot at a time. In the Screen Edge sidebar, hover a card and
 drag it by the grip in its corner; the stack parts around the drag and the
 order you leave it in is the saved order.
@@ -371,7 +371,7 @@ Settings → Shortcuts lists these too.
 | **Option+A** (configurable) | Show or hide Jot from anywhere on macOS |
 | **Cmd+N** | New note |
 | **Cmd+Option+→** / **Cmd+Option+←** | Next / previous note |
-| **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** | Move the current note up / down the list |
+| **Cmd+Option+↑** / **Cmd+Option+↓** | Move the current note up / down the list |
 | **Cmd+W** | Close the frontmost window: hides the note, or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Tab** / **Shift+Tab** | Nest / un-nest a checklist item |

@@ -199,7 +199,8 @@ enum MainMenu {
             ("Move Note Down", moveNoteDownAction, NSDownArrowFunctionKey),
         ] {
             let move = NSMenuItem(title: title, action: action, keyEquivalent: String(UnicodeScalar(key)!))
-            move.keyEquivalentModifierMask = [.command, .control]
+            // Option-Cmd, the same family as Next/Previous Note above.
+            move.keyEquivalentModifierMask = [.command, .option]
             move.target = target
             menu.addItem(move)
         }
