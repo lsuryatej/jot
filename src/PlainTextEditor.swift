@@ -1262,25 +1262,38 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
         var caret = rect
         caret.size.height = textHeight
+        // The foot of the box: where the glyphs of an empty line sit, since a
+        // line-height multiple adds its extra room above them. Covers an
+        // empty note and the empty last line, which have no glyph to ask.
+        caret.origin.y = rect.maxY - textHeight
 
-        guard let layoutManager,
-              let textStorage,
-              textStorage.length > 0
-        else {
-            // Empty note: nothing has been laid out, so sit on the bottom of
-            // the box, which is where the first glyph will land.
-            caret.origin.y = rect.maxY - textHeight
-            return caret
+        // The line is the one `rect` is on, never the one the selection is
+        // on. AppKit erases a caret by redrawing the rect it passed here, and
+        // by then the selection has usually moved: a caret placed from the
+        // selection was drawn on another line and never erased, leaving a
+        // stale copy behind (beside an image, whose tall line made the gap
+        // obvious). The empty line under an image fell into the same hole,
+        // since the selection there clamped to the image line's newline.
+        if let layoutManager, let textContainer, let textStorage, textStorage.length > 0 {
+            let point = NSPoint(x: rect.midX - textContainerInset.width, y: rect.midY - textContainerInset.height)
+            let extra = layoutManager.extraLineFragmentRect
+            let onExtraLine = !extra.isEmpty && point.y >= extra.minY && point.y <= extra.maxY
+            if !onExtraLine {
+                let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+                if glyph < layoutManager.numberOfGlyphs {
+                    let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                    if point.y >= fragment.minY - 0.5, point.y <= fragment.maxY + 0.5 {
+                        let baseline = fragment.minY
+                            + layoutManager.location(forGlyphAt: glyph).y
+                            + textContainerInset.height
+                        caret.origin.y = baseline - ascender
+                    }
+                }
+            }
         }
 
-        let characterIndex = min(max(0, selectedRange().location), textStorage.length - 1)
-        let glyphIndex = layoutManager.glyphIndexForCharacter(at: characterIndex)
-        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
-        let baseline = fragment.minY
-            + layoutManager.location(forGlyphAt: glyphIndex).y
-            + textContainerInset.height
-
-        caret.origin.y = baseline - ascender
+        // Inside the box whatever happens, so erasing the box erases it.
+        caret.origin.y = min(max(caret.origin.y, rect.minY), rect.maxY - textHeight)
         return caret
     }
 

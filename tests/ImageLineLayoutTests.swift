@@ -372,3 +372,98 @@ func runImageAtomicReferenceTests() {
         equal(caret(view), range.location + 1, "Right moves one character")
     }
 }
+
+// Maintainer hand-test: "caret sometimes appears near image rather than near
+// typing position." `drawInsertionPoint` moved the caret onto a baseline it
+// looked up from `selectedRange()`, not from the rect AppKit asked it to draw.
+// Two ways that went wrong, both near an image:
+//
+// - On the empty line under an image (where a paste leaves the caret) the
+//   lookup clamped to the last character, the image line's newline, so the
+//   caret was drawn up at the foot of the image.
+// - AppKit erases a caret by redrawing the rect it passed in. A caret drawn
+//   somewhere else, from a selection that had already moved on, was never
+//   erased: a stale copy stayed behind beside the image.
+//
+// The caret is now derived from the rect it is given, and stays inside it.
+
+/// AppKit's insertion rect for a caret at `index`, in view coordinates.
+private func appKitCaretRect(at index: Int, in view: ChecklistTextView) -> NSRect? {
+    guard let lm = view.layoutManager, let tc = view.textContainer else { return nil }
+    lm.ensureLayout(for: tc)
+    let caret = NSRange(location: index, length: 0)
+    var count = 0
+    guard let rects = lm.rectArray(
+        forCharacterRange: caret, withinSelectedCharacterRange: caret, in: tc, rectCount: &count
+    ), count > 0 else { return nil }
+    return rects[0].offsetBy(dx: view.textContainerInset.width, dy: view.textContainerInset.height)
+}
+
+func runImageCaretTests() {
+    func fixture(_ text: (String) -> String) -> (view: ChecklistTextView, text: String, markdown: NSRange)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let text = text(markdown)
+        let view = makeTextView("")
+        view.lineHeightMultiple = 1.5
+        view.textContainerInset = NSSize(width: 20, height: 12)
+        view.string = text
+        view.applyChecklistStyling()
+        let range = (text as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            check(false, "sanity: the reference is in the note")
+            return nil
+        }
+        return (view, text, range)
+    }
+
+    suite("image caret: on the empty line under a pasted image the caret draws on that line") {
+        guard let (view, text, markdown) = fixture({ "before line\n\($0)\n" }) else { return }
+        let end = (text as NSString).length
+        view.setSelectedRange(NSRange(location: end, length: 0))
+        guard let box = appKitCaretRect(at: end, in: view), let placed = view.placedImages().first else {
+            check(false, "the caret and the image are laid out")
+            return
+        }
+        let drawn = view.caretRect(from: box)
+        check(drawn.minY >= placed.rect.maxY,
+              "the caret is below the image (\(drawn.minY) vs image bottom \(placed.rect.maxY)), not at its foot")
+        check(drawn.minY >= box.minY - 0.5 && drawn.maxY <= box.maxY + 0.5,
+              "and inside the rect AppKit asked for (\(drawn) in \(box))")
+        _ = markdown
+    }
+
+    suite("image caret: every caret is drawn inside the rect AppKit passed, whatever the selection is now") {
+        guard let (view, text, markdown) = fixture({ "above\n\($0)\nbelow\n" }) else { return }
+        let length = (text as NSString).length
+        let edges = [0, 3, markdown.location, NSMaxRange(markdown), NSMaxRange(markdown) + 1, length - 2, length]
+        var escaped: [String] = []
+        for drawnAt in edges {
+            guard let box = appKitCaretRect(at: drawnAt, in: view) else { continue }
+            // The selection has already moved somewhere else, the way it has
+            // by the time AppKit erases the old caret.
+            for selectedAt in edges where selectedAt != drawnAt {
+                view.setSelectedRange(NSRange(location: selectedAt, length: 0))
+                let drawn = view.caretRect(from: box)
+                if drawn.minY < box.minY - 0.5 || drawn.maxY > box.maxY + 0.5 {
+                    escaped.append("caret for \(drawnAt) with selection at \(selectedAt): \(drawn) outside \(box)")
+                }
+            }
+        }
+        check(escaped.isEmpty, "no caret is drawn where erasing its rect would miss it: \(escaped.prefix(3))")
+    }
+
+    suite("image caret: on a text line beside an image line the caret sits on that text's baseline") {
+        guard let (view, text, _) = fixture({ "above\n\($0)\nbelow" }) else { return }
+        let below = (text as NSString).range(of: "below")
+        guard let box = appKitCaretRect(at: below.location + 2, in: view),
+              let lm = view.layoutManager else { return }
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        let drawn = view.caretRect(from: box)
+        let glyph = lm.glyphIndexForCharacter(at: below.location + 2)
+        let baseline = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+            + lm.location(forGlyphAt: glyph).y + view.textContainerInset.height
+        check(abs(drawn.minY - (baseline - ceil(view.baseFont.ascender))) < 0.5,
+              "the caret's top is one ascender above the line's baseline (\(drawn.minY) vs \(baseline))")
+    }
+}
