@@ -681,3 +681,180 @@ func runImageResizeHandleTests() {
               "an enormous rightward drag stops at the room")
     }
 }
+
+// Maintainer: "image lines shouldn't be skipped in list mode, they should
+// behave like the image is part of an option in the list." An item whose
+// body is an image renders its marker, then the picture on the same line, as
+// one item. Atomic caret rules apply to the reference, never the marker.
+func runImageListItemTests() {
+    func fixture(_ build: (String) -> String) -> (view: ChecklistTextView, text: String, markdown: NSRange, path: String)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 160)
+        let text = build(markdown)
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            check(false, "sanity: the reference is in the note")
+            return nil
+        }
+        return (view, text, range, path)
+    }
+
+    /// Where body text starts on an item line with `prefix`, measured on a
+    /// text item of the same shape.
+    func bodyX(prefix: String) -> CGFloat {
+        let view = makeTextView("\(prefix)word")
+        guard let lm = view.layoutManager, let tc = view.textContainer else { return -1 }
+        lm.ensureLayout(for: tc)
+        let glyph = lm.glyphIndexForCharacter(at: (prefix as NSString).length)
+        return lm.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: tc).minX
+            + view.textContainerInset.width
+    }
+
+    for prefix in ["- [ ] ", "- [x] ", "- ", "1. "] {
+        suite("image list item: `\(prefix)` then an image renders as one item line") {
+            guard let (view, _, markdown, _) = fixture({ "before\n\(prefix)\($0)\nafter" }),
+                  let placed = view.placedImages().first else {
+                check(false, "the image is laid out")
+                return
+            }
+            check(abs(placed.rect.minX - bodyX(prefix: prefix)) < 1,
+                  "the picture starts where the item's text would (\(placed.rect.minX) vs \(bodyX(prefix: prefix)))")
+            let line = (view.string as NSString).lineRange(for: markdown)
+            let fragments = lineFragments(for: line, in: view)
+            equal(fragments.count, 1, "marker and picture share one line, no wrapped-markdown gap")
+            if let first = fragments.first {
+                check(abs(first.height - (placed.rect.height + 6)) < 1,
+                      "the line fits the picture (\(first.height) vs \(placed.rect.height + 6))")
+            }
+            check(abs(placed.rect.height - 80) < 0.5, "the picture keeps its own size")
+        }
+    }
+
+    suite("image list item: clicking the checkbox toggles the item and keeps the image") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [ ] \($0)" }),
+              let lm = view.layoutManager, let tc = view.textContainer else { return }
+        let markerStart = markdown.location - 6
+        lm.ensureLayout(for: tc)
+        var box = lm.boundingRect(forGlyphRange: lm.glyphRange(forCharacterRange: NSRange(location: markerStart + 1, length: 1),
+                                                               actualCharacterRange: nil), in: tc)
+        box.origin.x += view.textContainerInset.width
+        box.origin.y += view.textContainerInset.height
+        check(view.handleSpecialClick(at: NSPoint(x: box.midX, y: box.midY)), "the click on the box is claimed")
+        check(view.string.contains("- [x] ![160]"), "the item is checked")
+        equal(view.placedImages().count, 1, "and the image is still drawn")
+        check(view.placedImages().first?.isDimmed == true, "dimmed, the way a checked item's text is")
+    }
+
+    suite("image list item: a checked item strikes through nothing under the picture") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [x] \($0)" }), let storage = view.textStorage else { return }
+        var struck = false
+        storage.enumerateAttribute(.strikethroughStyle, in: markdown) { value, _, _ in
+            if let value = value as? Int, value != 0 { struck = true }
+        }
+        check(!struck, "no strikethrough line is drawn across the image")
+    }
+
+    suite("image list item: Left and Right step over the reference, never into the marker or the path") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [ ] \($0)\nafter" }) else { return }
+        let s = markdown.location
+        let e = NSMaxRange(markdown)
+        view.setSelectedRange(NSRange(location: e, length: 0))
+        view.moveLeft(nil)
+        equal(view.selectedRange().location, s, "Left from after the image lands just after the marker")
+        view.moveLeft(nil)
+        equal(view.selectedRange().location, s - 1, "and the next Left moves into the marker as text")
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        view.moveRight(nil)
+        equal(view.selectedRange().location, e, "Right from before the image jumps over it")
+    }
+
+    suite("image list item: Backspace after the image removes the reference and keeps the marker") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [ ] \($0)\nafter" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "before\n- [ ] \nafter", "only the image goes")
+    }
+
+    suite("image list item: Return after the image starts a new item below") {
+        guard let (view, text, markdown, _) = fixture({ "list\n- [ ] \($0)" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        view.insertNewline(nil)
+        equal(view.string, text + "\n- [ ] ", "a fresh empty item")
+        equal(view.selectedRange().location, (view.string as NSString).length, "with the caret in it")
+    }
+
+    suite("image list item: typing after the image goes into a new item below, before it into one above") {
+        guard let (view, text, markdown, _) = fixture({ "list\n- [ ] \($0)\nafter" }) else { return }
+        let md = (text as NSString).substring(with: markdown)
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "list\n- [ ] \(md)\n- [ ] x\nafter", "typed text starts its own item")
+        equal(view.selectedRange().location, ("list\n- [ ] \(md)\n- [ ] x" as NSString).length, "caret after it")
+
+        view.setSelectedRange(NSRange(location: markdown.location, length: 0))
+        view.insertText("y", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "list\n- [ ] y\n- [ ] \(md)\n- [ ] x\nafter", "typed before the image: an item above")
+        equal(view.selectedRange().location, ("list\n- [ ] y" as NSString).length, "caret after the typed text")
+    }
+
+    suite("image list item: converting a note to list mode wraps image lines as items that render") {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 160)
+        let converted = Checklist.convertedToList("list\nmilk\n\(markdown)", keyword: "list")
+        equal(converted, "list\n- [ ] milk\n- [ ] \(markdown)", "the image line becomes an item")
+        let view = makeTextView(converted)
+        let range = (converted as NSString).range(of: markdown)
+        equal(lineFragments(for: (converted as NSString).lineRange(for: range), in: view).count, 1,
+              "and renders on one line")
+        equal(view.placedImages().count, 1, "with its picture")
+    }
+
+    suite("image list item: an image pasted on an empty item fills that item") {
+        guard let (view, _, _, _) = fixture({ "list\n- [ ] milk\n- [ ] \n\($0)" }) else { return }
+        let ns = view.string as NSString
+        let empty = ns.range(of: "- [ ] \n").location + 6
+        let image = writeLayoutScratchNSImage()
+        view.insertImage(image, at: empty)
+        let line = ns.lineRange(for: NSRange(location: empty, length: 0))
+        let newLine = (view.string as NSString).substring(with: (view.string as NSString).lineRange(for: NSRange(location: line.location, length: 0)))
+        check(newLine.hasPrefix("- [ ] ![") && newLine.hasSuffix(".png)\n"), "the item now holds the image (\(newLine))")
+        check(view.string.hasPrefix("list\n- [ ] milk\n- [ ] !["), "nothing else moved")
+    }
+
+    for (prefix, next) in [("- [ ] ", "- [ ] "), ("- [x] ", "- [ ] "), ("- ", "- "), ("3. ", "4. ")] {
+        suite("image list item: an image pasted on `\(prefix)milk` becomes the next item, `\(next)`") {
+            let view = makeTextView("before\n\(prefix)milk\nafter")
+            let image = writeLayoutScratchNSImage()
+            view.insertImage(image, at: ("before\n\(prefix)mi" as NSString).length)
+            let lines = view.string.components(separatedBy: "\n")
+            equal(lines.count, 4, "one line added (\(lines))")
+            if lines.count == 4 {
+                equal(lines[1], "\(prefix)milk", "the item is untouched")
+                check(lines[2].hasPrefix("\(next)![") && lines[2].hasSuffix(".png)"), "the image is the next item (\(lines[2]))")
+                equal(lines[3], "after", "the rest stays")
+            }
+            let caret = view.selectedRange().location
+            equal(caret, ("before\n\(prefix)milk\n\(lines.count == 4 ? lines[2] : "")" as NSString).length,
+                  "the caret is after the image, ready for Return")
+        }
+    }
+
+    suite("image list item: in list mode an image pasted on a plain line lands as an item") {
+        let view = makeTextView("list\n")
+        view.insertImage(writeLayoutScratchNSImage(), at: 5)
+        check(view.string.hasPrefix("list\n- [ ] !["), "wrapped as an item (\(view.string))")
+    }
+}
+
+/// An in-memory image, for `insertImage`, which saves it beside the notes
+/// file `writeLayoutScratchImage` points at.
+private func writeLayoutScratchNSImage() -> NSImage {
+    _ = writeLayoutScratchImage()
+    let image = NSImage(size: NSSize(width: 120, height: 60))
+    image.lockFocus()
+    NSColor.systemPink.setFill()
+    NSRect(x: 0, y: 0, width: 120, height: 60).fill()
+    image.unlockFocus()
+    return image
+}
