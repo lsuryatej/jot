@@ -44,9 +44,6 @@ extension Notification.Name {
     /// Posted when the text view's "rates off" / "no rates" hint is clicked;
     /// observed by AppDelegate, the one place that owns the settings window.
     static let jotRequestPrivacySettings = Notification.Name("JotRequestPrivacySettings")
-    /// Posted by AppDelegate at a settings window that is already open, to
-    /// move it to a given pane. A fresh window picks its pane at init instead.
-    static let jotShowSettingsPane = Notification.Name("JotShowSettingsPane")
     /// Posted by `SystemReminderScheduler` when it discovers notifications
     /// are denied for this app — a `remind` directive was typed, but nothing
     /// will ever actually fire until that's changed in System Settings.
@@ -55,10 +52,10 @@ extension Notification.Name {
     static let jotReminderNotAuthorized = Notification.Name("JotReminderNotAuthorized")
 }
 
-/// A settings pane. Replaces the old single long scroll — five sections
-/// scanned top to bottom in one column got unwieldy once per-note typography,
-/// Pomodoro, and the rest piled on. Grouped the way a person looks for a
-/// setting, not the order features shipped in.
+/// A settings pane, one toolbar tab each. Replaces the old single long scroll:
+/// five sections scanned top to bottom in one column got unwieldy once
+/// per-note typography, Pomodoro, and the rest piled on. Grouped the way a
+/// person looks for a setting, not the order features shipped in.
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
     case appearance
@@ -92,19 +89,17 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     }
 }
 
-struct PreferencesView: View {
+/// One settings pane. The window around it (toolbar, title, sizing, the
+/// remembered pane) is `SettingsWindowController` in SettingsWindow.swift,
+/// which hosts one of these per toolbar tab in its own `NSHostingController`.
+///
+/// Each pane is a grouped `Form`, which scrolls by itself. The window is
+/// sized to the Form's ideal height, so in practice only a pane taller than
+/// the window's height cap (Shortcuts) ever scrolls.
+struct SettingsPaneView: View {
+    let category: SettingsCategory
     @ObservedObject var settings: SettingsManager
     @ObservedObject var notesManager: NotesManager
-    @State private var category: SettingsCategory?
-
-    /// `category` starts wherever the caller opened the window to, so a fresh
-    /// window opened from the currency hint lands on Privacy & Sync without a
-    /// visible jump from General.
-    init(settings: SettingsManager, notesManager: NotesManager, category: SettingsCategory = .general) {
-        self.settings = settings
-        self.notesManager = notesManager
-        _category = State(initialValue: category)
-    }
 
     /// The font picker edits whichever note is currently open, not the app-wide
     /// default — so changing it on one note no longer changes every other one.
@@ -125,85 +120,7 @@ struct PreferencesView: View {
         )
     }
 
-    /// A plain `HStack` of buttons rather than `List(selection:)` inside a
-    /// `NavigationSplitView` — the first version of this shipped with every
-    /// sidebar row unclickable. Both are documented to work in a normal
-    /// SwiftUI `Scene`, but this window isn't one: it's a bare `NSWindow`
-    /// with an `NSHostingController` rootView, built imperatively in
-    /// `AppDelegate.showPreferences()`, and `List`'s selection plumbing
-    /// leans on AppKit responder/first-responder wiring that a `Scene` sets
-    /// up for free and this hosting path apparently doesn't. A `Button`
-    /// closure has no such dependency — it either fires or it doesn't, so
-    /// there's nothing left to debug blind if it ever regresses again.
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Divider()
-            ScrollView {
-                pane(for: category ?? .general)
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-        }
-        // `maxWidth`/`maxHeight: .infinity` alongside the floor, not just a
-        // floor alone: `NSHostingController` sizes the window to this view's
-        // *ideal* size, and a `minWidth`-only frame still reports a smaller
-        // ideal width for whichever pane's content happens to need less
-        // horizontal room — General's five-item radio-group picker list is
-        // wider than Typography's controls, so switching from one to the
-        // other could visibly shrink the window (dragging the fixed-width
-        // sidebar's own space down with it) instead of the window staying
-        // exactly as wide as the user left it. `maxWidth: .infinity` makes
-        // this view's ideal size "however big the window already is" rather
-        // than something content can shrink out from under.
-        .frame(minWidth: 620, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
-        .onReceive(NotificationCenter.default.publisher(for: .jotShowSettingsPane)) { note in
-            guard let pane = note.object as? SettingsCategory else { return }
-            category = pane
-        }
-    }
-
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(SettingsCategory.allCases) { item in
-                sidebarRow(item)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 8)
-        .frame(width: 172)
-        .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    private func sidebarRow(_ item: SettingsCategory) -> some View {
-        let isSelected = (category ?? .general) == item
-        return Button {
-            category = item
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: item.icon)
-                    .frame(width: 16)
-                    .accessibilityHidden(true)
-                Text(item.title)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-            )
-            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        // The selected pane is shown only by colour.
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    @ViewBuilder
-    private func pane(for category: SettingsCategory) -> some View {
         switch category {
         case .general: generalPane
         case .appearance: appearancePane
@@ -393,13 +310,14 @@ struct PreferencesView: View {
                     // the `.fixedSize()` this used to carry then pinned that
                     // spread-out width as non-negotiable: this one row
                     // reported a 742pt minimum, so the whole pane demanded
-                    // 915pt inside a 620pt window and the fixed-width
-                    // sidebar was compressed to a 25pt sliver with no row
-                    // left under the cursor. That made Settings a dead end
-                    // on this pane, escapable only by resizing the window.
-                    // Measured: with this section alone the pane needs
-                    // 915pt; with either other section alone, 620pt.
-                    // Covered by `tests/ui/SettingsWindowTests.swift`.
+                    // 915pt, wider than the window. (In the old sidebar
+                    // layout that squeezed the sidebar to a 25pt sliver and
+                    // made Settings a dead end on this pane.) Measured: with
+                    // this section alone the pane needs 915pt; with either
+                    // other section alone, 620pt. The window is now a fixed
+                    // width, so an overflow here would clip the pane instead;
+                    // `tests/ui/SettingsWindowTests.swift` checks every pane
+                    // fits that width.
                     Text("\(Int(settings.noteFontSize))pt")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)

@@ -62,6 +62,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/PlainTextEditor.swift \
     src/EditorAccessibility.swift \
     src/PreferencesView.swift \
+    src/SettingsWindow.swift \
     src/MainMenu.swift \
     tests/NotesManagerTests.swift \
     tests/ReminderDirectiveTests.swift \
@@ -96,6 +97,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/ModifierMaskTests.swift \
     tests/ListMoveTests.swift \
     tests/NoteViewStateTests.swift \
+    tests/SettingsWindowLogicTests.swift \
     tests/main.swift \
     -o "$OUT"
 

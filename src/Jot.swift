@@ -20,8 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem?
-    private var preferencesWindow: NSWindow?
-    private var settingsCloseMonitor: Any?
+    private var settingsWindowController: SettingsWindowController?
     private var edgeTrigger: EdgeTriggerWindow?
     private var edgeAutoHideTimer: Timer?
     /// Which edge slide is in charge; stale completions check it and stand
@@ -848,55 +847,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NotificationCenter.default.post(name: .jotRequestGlobalSearch, object: nil)
     }
 
+    /// ⌘, and the status menu's Settings item. Opens on the pane last
+    /// viewed (HIG: restore the most recently viewed pane), or just brings
+    /// the window forward if it is already open.
     @objc func showPreferences() {
-        openPreferences(pane: .general)
+        openPreferences(pane: nil)
     }
 
-    func openPreferences(pane: SettingsCategory) {
-        if let window = preferencesWindow {
-            // The view is already alive, so the pane it should show is sent to
-            // it rather than passed at init the way a fresh window gets it.
-            NotificationCenter.default.post(name: .jotShowSettingsPane, object: pane)
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
+    /// `pane` switches to that pane first; nil keeps whichever pane the
+    /// window last showed. The window is built once and kept, so its panes
+    /// keep their state between opens.
+    func openPreferences(pane: SettingsCategory?) {
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController(
+                settings: settings, notesManager: notesManager, initialPane: pane
+            )
         }
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 480),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Jot Settings"
-        // Wide enough for the sidebar plus a comfortable content column; each
-        // pane scrolls internally rather than the window needing to grow to
-        // fit the tallest one.
-        window.minSize = NSSize(width: 560, height: 380)
-        window.contentViewController = NSHostingController(
-            rootView: PreferencesView(settings: settings, notesManager: notesManager, category: pane)
-        )
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        // Belt and suspenders: the app menu's Close item (Cmd+W) should reach
-        // this window through the normal responder chain since opening
-        // Settings genuinely activates the app, unlike the main panel's
-        // .nonactivatingPanel. A local monitor guarantees it regardless —
-        // cheap, and matches the direct-handling pattern Cmd+L and
-        // Shift-Cmd-V needed for the same class of menu-routing doubt.
-        settingsCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
-            guard window?.isKeyWindow == true,
-                  event.modifierFlags.shortcutModifiers == .command,
-                  event.charactersIgnoringModifiers?.lowercased() == "w"
-            else { return event }
-            window?.performClose(nil)
-            return nil
-        }
-
-        preferencesWindow = window
+        settingsWindowController?.show(pane: pane)
     }
 
     // MARK: - Reminder notifications
