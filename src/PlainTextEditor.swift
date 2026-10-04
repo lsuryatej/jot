@@ -396,9 +396,32 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// The width an in-progress image resize should preview, given where the
     /// drag started and where it is now. One-sided on purpose — images may
     /// grow without limit but never shrink past the minimum.
-    static func resizedWidth(from startX: CGFloat, to x: CGFloat, starting startWidth: CGFloat) -> CGFloat {
-        max(minimumImageWidth, startWidth + (x - startX))
+    /// `maximum` is the room left on the image's line: a picture is never
+    /// drawn wider than its column, so a width past it would only be
+    /// written to the file and never seen.
+    static func resizedWidth(
+        from startX: CGFloat,
+        to x: CGFloat,
+        starting startWidth: CGFloat,
+        maximum: CGFloat = .greatestFiniteMagnitude
+    ) -> CGFloat {
+        max(minimumImageWidth, min(maximum, startWidth + (x - startX)))
     }
+
+    /// How far the pointer has to travel sideways before a press on an
+    /// image is a resize rather than a click. A hand never releases exactly
+    /// where it pressed, and a click must place the caret, not nudge the
+    /// width by a point and rewrite the markdown.
+    static let resizeDragThreshold: CGFloat = 3
+
+    static func isResizeDrag(from start: NSPoint, to point: NSPoint) -> Bool {
+        abs(point.x - start.x) >= resizeDragThreshold
+    }
+
+    /// How far past a picture's right edge a press still grabs it to resize.
+    /// The edge is where a resize is reached for, and a press that lands a
+    /// point outside it used to start a text selection.
+    static let resizeHandleOverhang: CGFloat = 6
 
     /// Where an inline math result sits horizontally: just past the end of
     /// its line, but never further right than the container's edge. Bounded
@@ -1135,14 +1158,16 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
     /// Saves the image beside the notes and drops a markdown reference to it on
     /// its own line. The note stays plain text.
+    ///
+    /// On a list item the image becomes an item of the same list: an empty
+    /// item takes it as its content, any other item gets a new item below it
+    /// holding the image, with the caret after the image so Return carries
+    /// on the list. In a list note an image always lands as an item.
     func insertImage(_ image: NSImage, at index: Int) {
         do {
             let path = try Attachments.save(image)
             let markdown = Attachments.markdown(path: path, width: Attachments.defaultWidth(for: image))
-            let ns = string as NSString
-            let location = min(index, ns.length)
-            let needsLeadingBreak = location > 0 && ns.substring(with: NSRange(location: location - 1, length: 1)) != "\n"
-            let insertion = (needsLeadingBreak ? "\n" : "") + markdown + "\n"
+            let (location, insertion) = imageInsertion(of: markdown, at: index)
             replace(
                 range: NSRange(location: location, length: 0),
                 with: insertion,
@@ -1155,6 +1180,36 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             alert.informativeText = error.localizedDescription
             alert.runModal()
         }
+    }
+
+    /// Where an image's markdown goes for an insertion at `index`, and the
+    /// text inserted there. See `insertImage(_:at:)`.
+    func imageInsertion(of markdown: String, at index: Int) -> (location: Int, text: String) {
+        let ns = string as NSString
+        let location = min(max(0, index), ns.length)
+        let lineStart = ns.lineRange(for: NSRange(location: location, length: 0)).location
+        var lineEnd = location
+        while lineEnd < ns.length, ns.character(at: lineEnd) != 0x0A { lineEnd += 1 }
+        let line = ns.substring(with: NSRange(location: lineStart, length: lineEnd - lineStart))
+
+        if !isCodeMode, let body = Self.listItemBody(of: line) {
+            if body.trimmingCharacters(in: .whitespaces).isEmpty {
+                let separator = line.hasSuffix(" ") || line.hasSuffix("\t") ? "" : " "
+                return (lineEnd, separator + markdown)
+            }
+            if let next = Self.nextItemInsertion(after: line) {
+                return (lineEnd, next + markdown)
+            }
+        }
+        if isListMode, lineStart > 0, line.trimmingCharacters(in: .whitespaces).isEmpty {
+            return (lineStart, Checklist.emptyItem(indent: Checklist.leadingWhitespace(of: line)) + markdown)
+        }
+        if isListMode {
+            return (lineEnd, "\n" + Checklist.emptyItem(indent: lineStart > 0 ? Checklist.leadingWhitespace(of: line) : "") + markdown)
+        }
+
+        let needsLeadingBreak = location > 0 && ns.character(at: location - 1) != 0x0A
+        return (location, (needsLeadingBreak ? "\n" : "") + markdown + "\n")
     }
 
     private func recognize(_ image: NSImage, insertingAt index: Int) {
@@ -1209,7 +1264,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// `NSEvent.modifierFlags`, so a test can say whether Cmd was down.
     @discardableResult
     func handleSpecialClick(at point: NSPoint, modifiers: NSEvent.ModifierFlags = []) -> Bool {
-        if let placed = image(at: point) {
+        if let placed = imageForResize(at: point) {
             beginResize(placed, from: point)
             return true
         }
@@ -1286,25 +1341,38 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
 
         var caret = rect
         caret.size.height = textHeight
+        // The foot of the box: where the glyphs of an empty line sit, since a
+        // line-height multiple adds its extra room above them. Covers an
+        // empty note and the empty last line, which have no glyph to ask.
+        caret.origin.y = rect.maxY - textHeight
 
-        guard let layoutManager,
-              let textStorage,
-              textStorage.length > 0
-        else {
-            // Empty note: nothing has been laid out, so sit on the bottom of
-            // the box, which is where the first glyph will land.
-            caret.origin.y = rect.maxY - textHeight
-            return caret
+        // The line is the one `rect` is on, never the one the selection is
+        // on. AppKit erases a caret by redrawing the rect it passed here, and
+        // by then the selection has usually moved: a caret placed from the
+        // selection was drawn on another line and never erased, leaving a
+        // stale copy behind (beside an image, whose tall line made the gap
+        // obvious). The empty line under an image fell into the same hole,
+        // since the selection there clamped to the image line's newline.
+        if let layoutManager, let textContainer, let textStorage, textStorage.length > 0 {
+            let point = NSPoint(x: rect.midX - textContainerInset.width, y: rect.midY - textContainerInset.height)
+            let extra = layoutManager.extraLineFragmentRect
+            let onExtraLine = !extra.isEmpty && point.y >= extra.minY && point.y <= extra.maxY
+            if !onExtraLine {
+                let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+                if glyph < layoutManager.numberOfGlyphs {
+                    let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                    if point.y >= fragment.minY - 0.5, point.y <= fragment.maxY + 0.5 {
+                        let baseline = fragment.minY
+                            + layoutManager.location(forGlyphAt: glyph).y
+                            + textContainerInset.height
+                        caret.origin.y = baseline - ascender
+                    }
+                }
+            }
         }
 
-        let characterIndex = min(max(0, selectedRange().location), textStorage.length - 1)
-        let glyphIndex = layoutManager.glyphIndexForCharacter(at: characterIndex)
-        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
-        let baseline = fragment.minY
-            + layoutManager.location(forGlyphAt: glyphIndex).y
-            + textContainerInset.height
-
-        caret.origin.y = baseline - ascender
+        // Inside the box whatever happens, so erasing the box erases it.
+        caret.origin.y = min(max(caret.origin.y, rect.minY), rect.maxY - textHeight)
         return caret
     }
 
@@ -1373,6 +1441,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let image: NSImage
         let markdownRange: NSRange
         let rect: NSRect
+        /// On a checked checklist item: drawn faded, the way the item's
+        /// text is greyed and struck through.
+        var isDimmed = false
     }
 
     /// Where each image reference lands on screen, derived fresh from layout.
@@ -1391,34 +1462,188 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         rect.origin.x += textContainerInset.width
         rect.origin.y += textContainerInset.height
 
-        let width = displayWidth(for: loaded.reference, image: loaded.image, markdownRange: loaded.markdownRange)
-        let height = width * (loaded.image.size.height / max(1, loaded.image.size.width))
+        let aspect = loaded.image.size.height / max(1, loaded.image.size.width)
+        var width = loaded.reference.width ?? Attachments.defaultWidth(for: loaded.image)
+        if let atom = imageAtom(at: loaded.markdownRange.location), atom.range == loaded.markdownRange {
+            width = atom.size.width
+        }
+        if let previewWidth, resizingRange == loaded.markdownRange { width = previewWidth }
+        let line = (textStorage?.string as NSString?)?.substring(with: loaded.lineRange) ?? ""
         return PlacedImage(
             image: loaded.image,
             markdownRange: loaded.markdownRange,
-            rect: NSRect(x: rect.minX, y: rect.minY, width: width, height: height)
+            rect: NSRect(x: rect.minX, y: rect.minY, width: width, height: width * aspect),
+            isDimmed: Checklist.item(in: line)?.isChecked == true
         )
-    }
-
-    private func displayWidth(for reference: ImageReference, image: NSImage, markdownRange: NSRange) -> CGFloat {
-        if let previewWidth, resizingRange == markdownRange { return previewWidth }
-        return reference.width ?? Attachments.defaultWidth(for: image)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         drawGuide(in: dirtyRect)
         super.draw(dirtyRect)
         drawMathResults(in: dirtyRect)
+        let selected = selectedRanges.map(\.rangeValue)
         for placed in placedImages() where placed.rect.intersects(dirtyRect) {
             placed.image.draw(
                 in: placed.rect,
                 from: .zero,
                 operation: .sourceOver,
-                fraction: 1,
+                fraction: placed.isDimmed ? 0.45 : 1,
                 respectFlipped: true,
                 hints: [.interpolation: NSImageInterpolation.high.rawValue]
             )
+            if Self.isImage(placed, coveredBy: selected) {
+                imageSelectionTint.setFill()
+                placed.rect.fill(using: .sourceOver)
+            }
         }
+    }
+
+    // MARK: - Selected images
+
+    /// A selected image is tinted over its picture, the way an attachment is
+    /// in any Mac text view, never shown as a text selection band: the band
+    /// belongs to text, and under an image it only ever framed the line's
+    /// empty foot (and, before the glyphs were hidden, the path itself).
+    private var imageSelectionTint: NSColor {
+        let focused = window?.isKeyWindow == true && window?.firstResponder === self
+        return (focused ? NSColor.selectedContentBackgroundColor : NSColor.unemphasizedSelectedContentBackgroundColor)
+            .withAlphaComponent(0.4)
+    }
+
+    private static func isImage(_ placed: PlacedImage, coveredBy ranges: [NSRange]) -> Bool {
+        ranges.contains { NSIntersectionRange($0, placed.markdownRange) == placed.markdownRange }
+    }
+
+    /// Where a tint is drawn for the current selection: every image it
+    /// covers whole.
+    func selectedImageRects() -> [NSRect] {
+        let selected = selectedRanges.map(\.rangeValue)
+        guard selected.contains(where: { $0.length > 0 }) else { return [] }
+        return placedImages().filter { Self.isImage($0, coveredBy: selected) }.map(\.rect)
+    }
+
+    /// Whether the selection is images and nothing else (spaces between
+    /// them aside), so no text band should be painted at all.
+    private func selectionIsOnlyImages() -> Bool {
+        guard let textStorage else { return false }
+        let ns = textStorage.string as NSString
+        let selected = selectedRanges.map(\.rangeValue).filter { $0.length > 0 }
+        guard !selected.isEmpty else { return false }
+        for range in selected where NSMaxRange(range) <= ns.length {
+            var index = range.location
+            var sawImage = false
+            while index < NSMaxRange(range) {
+                if let atom = imageAtom(at: index) {
+                    sawImage = true
+                    index = NSMaxRange(atom.range)
+                    continue
+                }
+                let character = ns.character(at: index)
+                guard character == 0x20 || character == 0x09 else { return false }
+                index += 1
+            }
+            if !sawImage { return false }
+        }
+        return true
+    }
+
+    private var tintedImageRects: [NSRect] = []
+    /// The band colour set aside while an image-only selection hides it.
+    private var hiddenSelectionBackground: NSColor?
+
+    /// Repaints the tints that came or went with a selection change and
+    /// switches the band off for an image-only selection. Layout cannot be
+    /// asked for mid-edit, so a change arriving inside one is handled once
+    /// the edit closes.
+    private func refreshImageSelection() {
+        guard textStorage?.editedMask.isEmpty ?? true else {
+            DispatchQueue.main.async { [weak self] in self?.refreshImageSelection() }
+            return
+        }
+        let now = selectedImageRects()
+        for rect in tintedImageRects + now {
+            setNeedsDisplay(rect.insetBy(dx: -1, dy: -1))
+        }
+        tintedImageRects = now
+
+        var attributes = selectedTextAttributes
+        if selectionIsOnlyImages() {
+            if hiddenSelectionBackground == nil {
+                hiddenSelectionBackground = attributes[.backgroundColor] as? NSColor ?? .selectedTextBackgroundColor
+                attributes[.backgroundColor] = NSColor.clear
+                selectedTextAttributes = attributes
+            }
+        } else if let restored = hiddenSelectionBackground {
+            hiddenSelectionBackground = nil
+            attributes[.backgroundColor] = restored
+            selectedTextAttributes = attributes
+        }
+    }
+
+    /// An image line is given the height of its image, and the markdown
+    /// that produced it is painted out. The characters are still there on
+    /// disk, but the editor treats the whole reference as one character (see
+    /// "Images as single characters"), so a caret can never sit inside the
+    /// hidden path. A list item whose body is an image (`- [ ] ![](…)`,
+    /// `- `, `1. `) is styled the same way: its marker, then its picture.
+    private func styleImages(onLine line: String, lineRange: NSRange, in textStorage: NSTextStorage) {
+        let references = Attachments.references(in: line)
+        guard !references.isEmpty else { return }
+        var tallest: CGFloat = 0
+        for reference in references {
+            let range = NSRange(
+                location: lineRange.location + reference.range.location,
+                length: reference.range.length
+            )
+            guard let atom = imageAtom(at: range.location), atom.range == range else { continue }
+            tallest = max(tallest, atom.size.height)
+            textStorage.addAttribute(.foregroundColor, value: NSColor.clear, range: range)
+        }
+        guard tallest > 0 else { return }
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = tallest + 6
+        style.maximumLineHeight = tallest + 6
+        // The hidden markdown takes only the picture's width (see
+        // `shouldGenerateGlyphs`) and the picture is fitted to the column,
+        // so a reference no longer wraps. Before that, min/max line height,
+        // which applies to every fragment of a paragraph, gave each wrapped
+        // piece of invisible markdown its own image-tall line: a blank gap
+        // under the picture (issue #10). A line holding nothing but
+        // references, or a list item holding nothing but them, is still
+        // clipped to one line as a guarantee. A line mixing text and an image
+        // keeps wrapping so its visible text is never cut.
+        if Self.isImageOnlyLine(line, references: references) || Self.isImageOnlyItem(line) {
+            style.lineBreakMode = .byClipping
+        }
+        textStorage.addAttribute(.paragraphStyle, value: style, range: lineRange)
+    }
+
+    /// The body of a list item line (checkbox, numbered or `- ` bullet), or
+    /// nil for a line that is not one.
+    static func listItemBody(of line: String) -> String? {
+        if let item = Checklist.item(in: line) { return item.body }
+        if let item = OrderedList.item(in: line) { return item.body }
+        if let item = Bullet.item(in: line) { return item.body }
+        return nil
+    }
+
+    /// Whether `line` is a list item whose body is images and nothing else.
+    static func isImageOnlyItem(_ line: String) -> Bool {
+        guard let body = listItemBody(of: line) else { return false }
+        return isImageOnlyLine(body, references: Attachments.references(in: body))
+    }
+
+    /// What Return at the end of the item `line` inserts to start the next
+    /// item, from the same rules Return itself follows; nil when `line` is
+    /// not an item.
+    static func nextItemInsertion(after line: String) -> String? {
+        // Asked of a copy with a body, so an empty item continues rather
+        // than exiting the list.
+        let probe = line + "x"
+        if case .continueList(let insertion)? = OrderedList.newline(inLine: probe) { return insertion }
+        if case .continueList(let insertion)? = Checklist.newline(inLine: probe) { return insertion }
+        if case .continueList(let insertion)? = Bullet.newline(inLine: probe) { return insertion }
+        return nil
     }
 
     /// Whether `line` holds nothing but image references (and whitespace).
@@ -1443,7 +1668,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         for reference in Attachments.references(in: ns.substring(with: lineRange)) {
             let markdownRange = NSRange(location: lineRange.location + reference.range.location, length: reference.range.length)
             guard NSLocationInRange(proposedCharRange.location, markdownRange),
-                  Attachments.image(at: reference.path) != nil else { continue }
+                  cachedImage(at: reference.path) != nil else { continue }
             return NSUnionRange(markdownRange, proposedCharRange)
         }
         return proposed
@@ -1459,6 +1684,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let markdownRange: NSRange
         /// Whether its line holds nothing but image references.
         let isAloneOnLine: Bool
+        /// Whether its line is a list item whose body is nothing but image
+        /// references: the picture is that item's content.
+        var isAloneInItem = false
         /// Its line, without the trailing newline.
         let lineRange: NSRange
     }
@@ -1481,17 +1709,34 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let references = Attachments.references(in: line)
             let alone = Self.isImageOnlyLine(line, references: references)
             for reference in references {
-                guard let image = Attachments.image(at: reference.path) else { continue }
+                guard let image = self.cachedImage(at: reference.path) else { continue }
                 loaded.append(LoadedImageReference(
                     reference: reference,
                     image: image,
                     markdownRange: NSRange(location: lineRange.location + reference.range.location, length: reference.range.length),
                     isAloneOnLine: alone,
+                    isAloneInItem: !alone && Self.isImageOnlyItem(line),
                     lineRange: lineRange
                 ))
             }
         }
         return loaded
+    }
+
+    /// Pictures already read from disk, by absolute path. Attachments are
+    /// written once under a fresh UUID and never rewritten, so a hit never
+    /// goes stale; a miss (a broken path) is not cached, so a file that turns
+    /// up later is picked up. Every styling pass and every selection change
+    /// asks for the note's images, and reading them each time was a disk
+    /// read per image per keystroke.
+    private var imageCache: [String: NSImage] = [:]
+
+    private func cachedImage(at path: String) -> NSImage? {
+        let key = Attachments.directoryURL().deletingLastPathComponent().appendingPathComponent(path).path
+        if let hit = imageCache[key] { return hit }
+        guard let image = Attachments.image(at: path) else { return nil }
+        imageCache[key] = image
+        return image
     }
 
     /// Set while `mouseDown` is tracking a click, so a caret landing inside a
@@ -1600,6 +1845,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         guard selection.length == 0 else { return false }
         let ns = string as NSString
         let location = selection.location
+        for atom in loadedImageReferences(touching: selection) where atom.isAloneInItem {
+            if insertInImageItem(text, atom: atom, at: location) { return true }
+        }
         for atom in loadedImageReferences(touching: selection) where atom.isAloneOnLine {
             let start = atom.markdownRange.location
             let end = NSMaxRange(atom.markdownRange)
@@ -1618,6 +1866,37 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                         selecting: NSRange(location: end + (insertion as NSString).length, length: 0))
                 return true
             }
+        }
+        return false
+    }
+
+    /// The list-item half of `insertAtImageEdge`: an item whose content is a
+    /// picture keeps it that way. Typing after the picture starts the next
+    /// item, the way Return there would; typing before it starts a new item
+    /// above, unchecked, with the same marker.
+    private func insertInImageItem(_ text: String, atom: LoadedImageReference, at location: Int) -> Bool {
+        let ns = string as NSString
+        let line = ns.substring(with: atom.lineRange)
+        let start = atom.markdownRange.location
+        let end = NSMaxRange(atom.markdownRange)
+        if location == end, !text.hasPrefix("\n"),
+           ns.substring(with: NSRange(location: end, length: NSMaxRange(atom.lineRange) - end))
+            .trimmingCharacters(in: .whitespaces).isEmpty,
+           let next = Self.nextItemInsertion(after: line) {
+            let insertion = next + text
+            replace(range: NSRange(location: location, length: 0), with: insertion,
+                    selecting: NSRange(location: end + (insertion as NSString).length, length: 0))
+            return true
+        }
+        if location == start, !text.hasSuffix("\n") {
+            var marker = ns.substring(with: NSRange(location: atom.lineRange.location, length: start - atom.lineRange.location))
+            if let item = Checklist.item(in: line) {
+                marker = Checklist.emptyItem(indent: item.indent)
+            }
+            let insertion = marker + text + "\n"
+            replace(range: NSRange(location: atom.lineRange.location, length: 0), with: insertion,
+                    selecting: NSRange(location: atom.lineRange.location + ((marker + text) as NSString).length, length: 0))
+            return true
         }
         return false
     }
@@ -1661,7 +1940,57 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         return super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
     }
 
-    override func deleteBackward(_ sender: Any?) { deletingWholeImages { super.deleteBackward(sender) } }
+    override func deleteBackward(_ sender: Any?) {
+        if deleteBackwardBelowImage() { return }
+        deletingWholeImages { super.deleteBackward(sender) }
+    }
+
+    /// The image the last Backspace selected from the line below it, while
+    /// it is still the selection. A second Backspace then deletes the
+    /// image's whole line.
+    private var imageSelectedByBackspace: NSRange?
+
+    /// Backspace at the start of the line under an image (one alone on its
+    /// line, or the content of a list item). Joining would put that line's
+    /// text at the foot of the image-tall line, so instead the first
+    /// Backspace selects the image, drawn tinted, and a second deletes the
+    /// image's line, moving the text up to where the image was; one undo
+    /// brings it back. An empty line under the image is not handled here:
+    /// the ordinary Backspace already deletes it and leaves the caret after
+    /// the image. False means "Backspace as usual".
+    private func deleteBackwardBelowImage() -> Bool {
+        let selection = selectedRange()
+        let ns = string as NSString
+
+        if let pending = imageSelectedByBackspace, selection == pending, NSMaxRange(pending) <= ns.length {
+            imageSelectedByBackspace = nil
+            let line = ns.lineRange(for: pending)
+            let endsInNewline = line.length > 0 && ns.character(at: NSMaxRange(line) - 1) == 0x0A
+            if endsInNewline {
+                replace(range: line, with: "", selecting: NSRange(location: line.location, length: 0))
+            } else {
+                let target = line.location > 0
+                    ? NSRange(location: line.location - 1, length: line.length + 1)
+                    : line
+                replace(range: target, with: "", selecting: NSRange(location: target.location, length: 0))
+            }
+            return true
+        }
+
+        guard selection.length == 0, selection.location > 0, selection.location < ns.length,
+              ns.character(at: selection.location - 1) == 0x0A,
+              ns.character(at: selection.location) != 0x0A else { return false }
+        let above = NSRange(location: selection.location - 1, length: 0)
+        guard let atom = loadedImageReferences(touching: above).first(where: { atom in
+            (atom.isAloneOnLine || atom.isAloneInItem)
+                && ns.substring(with: NSRange(location: NSMaxRange(atom.markdownRange),
+                                              length: selection.location - 1 - NSMaxRange(atom.markdownRange)))
+                    .trimmingCharacters(in: .whitespaces).isEmpty
+        }) else { return false }
+        setSelectedRange(atom.markdownRange)
+        imageSelectedByBackspace = atom.markdownRange
+        return true
+    }
     override func deleteForward(_ sender: Any?) { deletingWholeImages { super.deleteForward(sender) } }
     override func deleteWordBackward(_ sender: Any?) { deletingWholeImages { super.deleteWordBackward(sender) } }
     override func deleteWordForward(_ sender: Any?) { deletingWholeImages { super.deleteWordForward(sender) } }
@@ -1673,26 +2002,62 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         deletingWholeImages { super.deleteBackwardByDecomposingPreviousCharacter(sender) }
     }
 
-    /// Returns the image under `point`, if any.
-    private func image(at point: NSPoint) -> PlacedImage? {
-        placedImages().first { $0.rect.contains(point) }
-    }
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        for placed in placedImages() {
-            addCursorRect(placed.rect, cursor: .resizeLeftRight)
+    /// The image a press at `point` grabs: the picture itself, or the
+    /// strip just past its right edge.
+    func imageForResize(at point: NSPoint) -> PlacedImage? {
+        placedImages().first { placed in
+            var zone = placed.rect
+            zone.size.width += Self.resizeHandleOverhang
+            return zone.contains(point)
         }
     }
+
+    /// Whether the pointer at `point` should say "resize". Set from
+    /// `mouseMoved` and `cursorUpdate`, not cursor rects: NSTextView sets the
+    /// I-beam itself on every cursor update, which overrode the old cursor
+    /// rects, so the resize cursor never showed and nothing said an image
+    /// could be dragged at all.
+    func wantsResizeCursor(at point: NSPoint) -> Bool {
+        imageForResize(at: point) != nil
+    }
+
+    /// The widest `placed` can be dragged: the rest of its line's column.
+    func resizeRoom(for placed: PlacedImage) -> CGFloat {
+        let column = imageColumnWidth
+        guard column > 48, let textContainer else { return .greatestFiniteMagnitude }
+        let columnRight = textContainerInset.width + textContainer.lineFragmentPadding + column
+        return max(Self.minimumImageWidth, columnRight - placed.rect.minX - 1)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if wantsResizeCursor(at: convert(event.locationInWindow, from: nil)) {
+            NSCursor.resizeLeftRight.set()
+            showsResizeCursor = true
+            return
+        }
+        super.cursorUpdate(with: event)
+    }
+
+    private var showsResizeCursor = false
 
     /// Drag an image left or right to resize it. The width lives in the text,
     /// so the result is still something you could have typed by hand.
     private func beginResize(_ placed: PlacedImage, from startPoint: NSPoint) {
         let startWidth = placed.rect.width
+        let room = resizeRoom(for: placed)
         resizingRange = placed.markdownRange
         previewWidth = startWidth
+        var isDragging = false
 
-        window?.trackEvents(matching: [.leftMouseDragged, .leftMouseUp], timeout: .infinity, mode: .default) { event, stop in
+        // A left-mouse-down is matched too, though one cannot arrive while
+        // the button is held: if an up is ever lost, the next press ends this
+        // loop and is handed back to the window, instead of the loop quietly
+        // swallowing every drag that follows.
+        window?.trackEvents(
+            matching: [.leftMouseDragged, .leftMouseUp, .leftMouseDown],
+            timeout: .infinity,
+            mode: .default
+        ) { event, stop in
             guard let event else {
                 stop.pointee = true
                 return
@@ -1700,17 +2065,23 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let point = self.convert(event.locationInWindow, from: nil)
 
             if event.type == .leftMouseDragged {
-                self.previewWidth = Self.resizedWidth(from: startPoint.x, to: point.x, starting: startWidth)
+                isDragging = isDragging || Self.isResizeDrag(from: startPoint, to: point)
+                guard isDragging else { return }
+                self.previewWidth = Self.resizedWidth(from: startPoint.x, to: point.x, starting: startWidth, maximum: room)
                 self.needsDisplay = true
                 return
             }
 
             stop.pointee = true
+            if event.type == .leftMouseDown {
+                NSApp.postEvent(event, atStart: true)
+            }
             defer {
                 self.resizingRange = nil
                 self.previewWidth = nil
+                self.needsDisplay = true
             }
-            guard let finalWidth = self.previewWidth, abs(finalWidth - startWidth) > 1 else {
+            guard isDragging, let finalWidth = self.previewWidth, abs(finalWidth - startWidth) > 1 else {
                 // A click, not a drag: the image is one character, so the
                 // caret goes before or after it by which half was clicked.
                 self.window?.makeFirstResponder(self)
@@ -1867,6 +2238,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         affinity: NSSelectionAffinity,
         stillSelecting: Bool
     ) {
+        if let pending = imageSelectedByBackspace, ranges.first?.rangeValue != pending {
+            imageSelectedByBackspace = nil
+        }
         let before = expandedLinkRanges
         // Snapped before AppKit sees them, so a caret inside a hidden image
         // reference is never drawn, not even for one frame.
@@ -1877,6 +2251,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return snapped == proposed ? value : NSValue(range: snapped)
         }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if !imageAtoms.isEmpty || !tintedImageRects.isEmpty || hiddenSelectionBackground != nil {
+            refreshImageSelection()
+        }
         guard revealsLinkAtSelection else { return }
         if !linkMatches.contains(where: { selectionTouches($0.range) }) {
             revealsLinkAtSelection = false
@@ -2038,13 +2415,19 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // styling pass; the explicit guard says so at the point it matters,
         // since folding a character out of code would hide real content.
         guard !isCodeMode else { return 0 }
-        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty || !emphasisMarkers.isEmpty,
+        guard !linkMatches.isEmpty || !headingMarkers.isEmpty || !highlightMarkers.isEmpty || !emphasisMarkers.isEmpty
+                || !imageAtoms.isEmpty,
               let textStorage else { return 0 }
         let ns = textStorage.string as NSString
 
         var mutableProperties = Array(UnsafeBufferPointer(start: properties, count: glyphRange.length))
         var foldedOffsets: [Int] = []
-        for i in 0..<glyphRange.length where isCharacterFolded(characterIndexes[i], in: ns) {
+        // An image's hidden markdown is laid out the same way, with one
+        // difference made in `shouldUse` below: its first character keeps
+        // the picture's width, so the caret before and after it lands on
+        // the picture's edges.
+        for i in 0..<glyphRange.length
+        where isCharacterFolded(characterIndexes[i], in: ns) || imageAtom(at: characterIndexes[i]) != nil {
             // A control character, not `.null`: the typesetter skips null
             // glyphs outright, so a folded run at the start of a line was
             // never placed in that line at all. It got swept onto the end of
@@ -2091,7 +2474,26 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // one, but guard anyway since breaking a line is the one action
         // that must survive whatever the marker ranges say.
         if action.contains(.paragraphBreak) || action.contains(.lineBreak) { return action }
+        if let atom = imageAtom(at: charIndex) {
+            return charIndex == atom.range.location ? .whitespace : .zeroAdvancement
+        }
         return isCharacterFolded(charIndex, in: ns) ? .zeroAdvancement : action
+    }
+
+    /// The width of an image's one wide glyph: the picture's. Only image
+    /// references are given the whitespace action, so nothing else asks.
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        boundingBoxForControlGlyphAt glyphIndex: Int,
+        for textContainer: NSTextContainer,
+        proposedLineFragment proposedRect: NSRect,
+        glyphPosition: NSPoint,
+        characterIndex charIndex: Int
+    ) -> NSRect {
+        guard let atom = imageAtom(at: charIndex), charIndex == atom.range.location else {
+            return NSRect(origin: glyphPosition, size: .zero)
+        }
+        return NSRect(x: glyphPosition.x, y: 0, width: atom.size.width, height: 1)
     }
 
     /// The match under `point`, hit-testing only the part currently on
@@ -2185,9 +2587,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// stuck on whatever the pointer moves over next.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        if showsLinkCursor {
+        if showsLinkCursor || showsResizeCursor {
             NSCursor.arrow.set()
             showsLinkCursor = false
+            showsResizeCursor = false
         }
     }
 
@@ -2195,9 +2598,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         if wantsLinkCursor(at: point, modifiers: modifiers) {
             NSCursor.pointingHand.set()
             showsLinkCursor = true
-        } else if showsLinkCursor {
+            showsResizeCursor = false
+        } else if wantsResizeCursor(at: point) {
+            NSCursor.resizeLeftRight.set()
+            showsResizeCursor = true
+            showsLinkCursor = false
+        } else if showsLinkCursor || showsResizeCursor {
             NSCursor.iBeam.set()
             showsLinkCursor = false
+            showsResizeCursor = false
         }
     }
 
@@ -2284,6 +2693,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             highlightMarkers = []
             headingMarkers = []
             emphasisMarkers = []
+            imageAtoms = []
             return
         }
 
@@ -2314,6 +2724,10 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 }
             }
         }
+
+        // Over the whole note, like the heading markers below: glyph
+        // generation asks about any character, not only the edited ones.
+        imageAtoms = computeImageAtoms()
 
         ns.enumerateSubstrings(in: target, options: [.byLines]) { line, lineRange, _, _ in
             guard let line else { return }
@@ -2374,51 +2788,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                     attributes[.strokeWidth] = NoteFont.syntheticBoldStrokeWidth
                 }
                 textStorage.addAttributes(attributes, range: markerRange)
+                self.styleImages(onLine: line, lineRange: lineRange, in: textStorage)
                 self.holdLineHeight(of: ns.lineRange(for: lineRange), boldSpans: [markerRange], in: textStorage)
                 return
             }
 
-            // An image line is given the height of its image, and the markdown
-            // that produced it is painted out. The characters are still there
-            // on disk, but the editor treats the whole reference as one
-            // character (see "Images as single characters"), so a caret can
-            // never sit inside the hidden path.
-            let references = Attachments.references(in: line)
-            if !references.isEmpty {
-                var tallest: CGFloat = 0
-                for reference in references {
-                    guard let image = Attachments.image(at: reference.path) else { continue }
-                    let width = reference.width ?? Attachments.defaultWidth(for: image)
-                    tallest = max(tallest, width * (image.size.height / max(1, image.size.width)))
-
-                    textStorage.addAttribute(
-                        .foregroundColor,
-                        value: NSColor.clear,
-                        range: NSRange(
-                            location: lineRange.location + reference.range.location,
-                            length: reference.range.length
-                        )
-                    )
-                }
-                if tallest > 0 {
-                    let style = NSMutableParagraphStyle()
-                    style.minimumLineHeight = tallest + 6
-                    style.maximumLineHeight = tallest + 6
-                    // Min/max line height applies to every line fragment of
-                    // the paragraph, not just the first. A reference is ~60
-                    // characters, wider than a narrow note, so it used to
-                    // wrap, and each wrapped piece of invisible markdown got
-                    // its own image-tall line: a blank gap under the picture
-                    // that Down arrow and double-click landed in (issue #10).
-                    // A line holding nothing but references is laid out as a
-                    // single line instead. A line mixing text and an image
-                    // keeps wrapping so its visible text is never clipped.
-                    if Self.isImageOnlyLine(line, references: references) {
-                        style.lineBreakMode = .byClipping
-                    }
-                    textStorage.addAttribute(.paragraphStyle, value: style, range: lineRange)
-                }
-            }
+            self.styleImages(onLine: line, lineRange: lineRange, in: textStorage)
 
             guard let item = Checklist.item(in: line) else { return }
 
@@ -2437,14 +2812,31 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             let bodyLength = lineRange.location + lineRange.length - bodyStart
             guard bodyLength > 0 else { return }
 
-            textStorage.addAttributes(
-                [
-                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    .strikethroughColor: self.ink.secondary,
-                    .foregroundColor: self.ink.secondary,
-                ],
-                range: NSRange(location: bodyStart, length: bodyLength)
-            )
+            // Struck through around any picture in the body, never across
+            // it: the picture is dimmed instead (see `placedImage(for:)`),
+            // and its hidden markdown keeps the clear it was painted.
+            let body = NSRange(location: bodyStart, length: bodyLength)
+            var pieces = [body]
+            for atom in self.imageAtoms where NSIntersectionRange(atom.range, body).length > 0 {
+                pieces = pieces.flatMap { piece -> [NSRange] in
+                    let cut = NSIntersectionRange(piece, atom.range)
+                    guard cut.length > 0 else { return [piece] }
+                    return [
+                        NSRange(location: piece.location, length: cut.location - piece.location),
+                        NSRange(location: NSMaxRange(cut), length: NSMaxRange(piece) - NSMaxRange(cut)),
+                    ].filter { $0.length > 0 }
+                }
+            }
+            for piece in pieces {
+                textStorage.addAttributes(
+                    [
+                        .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                        .strikethroughColor: self.ink.secondary,
+                        .foregroundColor: self.ink.secondary,
+                    ],
+                    range: piece
+                )
+            }
         }
 
         // Highlights are found over the whole note, like headings just below,
@@ -2501,6 +2893,90 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// coordinates. Recomputed by every styling pass; read by glyph
     /// generation, same as `headingMarkers`.
     private(set) var emphasisMarkers: [NSRange] = []
+
+    /// One loaded image reference as layout sees it: the characters of its
+    /// markdown and the size its picture is drawn at. Recomputed by every
+    /// styling pass; read by glyph generation, which gives the reference's
+    /// first glyph the picture's width and every other glyph none, so the
+    /// hidden markdown takes exactly the room the picture does.
+    struct ImageAtom {
+        let range: NSRange
+        let image: NSImage
+        let size: NSSize
+    }
+
+    private(set) var imageAtoms: [ImageAtom] = []
+
+    /// The atom whose characters include `characterIndex`.
+    func imageAtom(at characterIndex: Int) -> ImageAtom? {
+        imageAtoms.first { NSLocationInRange(characterIndex, $0.range) }
+    }
+
+    /// The width of the text column, which no picture is drawn wider than.
+    var imageColumnWidth: CGFloat {
+        guard let textContainer else { return .greatestFiniteMagnitude }
+        return textContainer.size.width - 2 * textContainer.lineFragmentPadding
+    }
+
+    /// Every loaded reference in the note, sized: its own width, or its
+    /// image's natural one, fitted into what is left of the column after
+    /// whatever precedes it on its line (a list marker, say). A picture
+    /// wider than the column would push its line past the edge, and a list
+    /// item would wrap the picture away from its marker.
+    func computeImageAtoms() -> [ImageAtom] {
+        guard let textStorage else { return [] }
+        let ns = textStorage.string as NSString
+        var atoms: [ImageAtom] = []
+        var lineStart = -1
+        var used: CGFloat = 0
+        var measuredTo = 0
+        for loaded in loadedImageReferences(touching: NSRange(location: 0, length: ns.length)) {
+            if loaded.lineRange.location != lineStart {
+                lineStart = loaded.lineRange.location
+                used = 0
+                measuredTo = lineStart
+            }
+            let before = NSRange(location: measuredTo, length: loaded.markdownRange.location - measuredTo)
+            if before.length > 0 {
+                used += textStorage.attributedSubstring(from: before).size().width
+            }
+            let natural = loaded.reference.width ?? Attachments.defaultWidth(for: loaded.image)
+            // A point of slack so rounding can never wrap a picture that
+            // exactly fills the column onto a line of its own.
+            // A view not yet given its size (a fresh editor has a zero frame
+            // until the scroll view lays it out) fits nothing: its pictures
+            // keep their own width until `setFrameSize` refits them.
+            let column = imageColumnWidth
+            let room = column > 48 ? column - used - 1 : .greatestFiniteMagnitude
+            let width = max(min(natural, room), min(natural, 24))
+            let aspect = loaded.image.size.height / max(1, loaded.image.size.width)
+            atoms.append(ImageAtom(
+                range: loaded.markdownRange,
+                image: loaded.image,
+                size: NSSize(width: width, height: width * aspect)
+            ))
+            used += width
+            measuredTo = NSMaxRange(loaded.markdownRange)
+        }
+        return atoms
+    }
+
+    /// Images are re-fitted when the column changes width. Deferred: the
+    /// frame changes in the middle of layout, where the text storage must
+    /// not be edited, and only when a fitted size actually changes, so a
+    /// window resize does not restyle a note whose pictures already fit.
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = abs(newSize.width - frame.width) > 0.5
+        super.setFrameSize(newSize)
+        guard widthChanged, !imageAtoms.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isStyling else { return }
+            let refitted = self.computeImageAtoms()
+            let changed = refitted.count != self.imageAtoms.count
+                || zip(refitted, self.imageAtoms).contains { $0.range != $1.range || $0.size != $1.size }
+            if changed { self.applyChecklistStyling() }
+        }
+    }
 
     /// Restyles one emphasis span's content in place.
     ///

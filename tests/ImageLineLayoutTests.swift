@@ -203,14 +203,19 @@ func runImageAtomicReferenceTests() {
         equal(caret(view), s, "Option-Left from after the image lands before it")
     }
 
-    suite("image atomic: a caret placed inside the reference snaps to the nearer edge") {
+    // The reference is one image-wide glyph followed by zero-width ones, so
+    // every position inside it is drawn at the image's trailing edge, and
+    // snapping by where it is drawn sends it there. Clicks, which land by
+    // half, are covered further down.
+    suite("image atomic: a caret placed inside the reference snaps to the edge it is drawn at") {
         guard let (view, _, s, e) = fixture() else { return }
         view.setSelectedRange(NSRange(location: 0, length: 0))
         view.setSelectedRange(NSRange(location: s + 3, length: 0))
-        equal(caret(view), s, "a caret under the left of the image goes before it")
+        equal(caret(view), e, "a caret inside the reference goes after the image")
+        check(caret(view) != s + 3, "and never stays inside (s=\(s))")
         view.setSelectedRange(NSRange(location: 0, length: 0))
         view.setSelectedRange(NSRange(location: e - 3, length: 0))
-        equal(caret(view), e, "a caret past the image's middle goes after it")
+        equal(caret(view), e, "near the end too")
     }
 
     suite("image atomic: Down from the right half of the line above lands after the image, never inside") {
@@ -370,5 +375,572 @@ func runImageAtomicReferenceTests() {
         view.setSelectedRange(NSRange(location: range.location, length: 0))
         view.moveRight(nil)
         equal(caret(view), range.location + 1, "Right moves one character")
+    }
+}
+
+// Maintainer hand-test: "caret sometimes appears near image rather than near
+// typing position." `drawInsertionPoint` moved the caret onto a baseline it
+// looked up from `selectedRange()`, not from the rect AppKit asked it to draw.
+// Two ways that went wrong, both near an image:
+//
+// - On the empty line under an image (where a paste leaves the caret) the
+//   lookup clamped to the last character, the image line's newline, so the
+//   caret was drawn up at the foot of the image.
+// - AppKit erases a caret by redrawing the rect it passed in. A caret drawn
+//   somewhere else, from a selection that had already moved on, was never
+//   erased: a stale copy stayed behind beside the image.
+//
+// The caret is now derived from the rect it is given, and stays inside it.
+
+/// AppKit's insertion rect for a caret at `index`, in view coordinates.
+private func appKitCaretRect(at index: Int, in view: ChecklistTextView) -> NSRect? {
+    guard let lm = view.layoutManager, let tc = view.textContainer else { return nil }
+    lm.ensureLayout(for: tc)
+    let caret = NSRange(location: index, length: 0)
+    var count = 0
+    guard let rects = lm.rectArray(
+        forCharacterRange: caret, withinSelectedCharacterRange: caret, in: tc, rectCount: &count
+    ), count > 0 else { return nil }
+    return rects[0].offsetBy(dx: view.textContainerInset.width, dy: view.textContainerInset.height)
+}
+
+func runImageCaretTests() {
+    func fixture(_ text: (String) -> String) -> (view: ChecklistTextView, text: String, markdown: NSRange)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let text = text(markdown)
+        let view = makeTextView("")
+        view.lineHeightMultiple = 1.5
+        view.textContainerInset = NSSize(width: 20, height: 12)
+        view.string = text
+        view.applyChecklistStyling()
+        let range = (text as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            check(false, "sanity: the reference is in the note")
+            return nil
+        }
+        return (view, text, range)
+    }
+
+    suite("image caret: on the empty line under a pasted image the caret draws on that line") {
+        guard let (view, text, markdown) = fixture({ "before line\n\($0)\n" }) else { return }
+        let end = (text as NSString).length
+        view.setSelectedRange(NSRange(location: end, length: 0))
+        guard let box = appKitCaretRect(at: end, in: view), let placed = view.placedImages().first else {
+            check(false, "the caret and the image are laid out")
+            return
+        }
+        let drawn = view.caretRect(from: box)
+        check(drawn.minY >= placed.rect.maxY,
+              "the caret is below the image (\(drawn.minY) vs image bottom \(placed.rect.maxY)), not at its foot")
+        check(drawn.minY >= box.minY - 0.5 && drawn.maxY <= box.maxY + 0.5,
+              "and inside the rect AppKit asked for (\(drawn) in \(box))")
+        _ = markdown
+    }
+
+    suite("image caret: every caret is drawn inside the rect AppKit passed, whatever the selection is now") {
+        guard let (view, text, markdown) = fixture({ "above\n\($0)\nbelow\n" }) else { return }
+        let length = (text as NSString).length
+        let edges = [0, 3, markdown.location, NSMaxRange(markdown), NSMaxRange(markdown) + 1, length - 2, length]
+        var escaped: [String] = []
+        for drawnAt in edges {
+            guard let box = appKitCaretRect(at: drawnAt, in: view) else { continue }
+            // The selection has already moved somewhere else, the way it has
+            // by the time AppKit erases the old caret.
+            for selectedAt in edges where selectedAt != drawnAt {
+                view.setSelectedRange(NSRange(location: selectedAt, length: 0))
+                let drawn = view.caretRect(from: box)
+                if drawn.minY < box.minY - 0.5 || drawn.maxY > box.maxY + 0.5 {
+                    escaped.append("caret for \(drawnAt) with selection at \(selectedAt): \(drawn) outside \(box)")
+                }
+            }
+        }
+        check(escaped.isEmpty, "no caret is drawn where erasing its rect would miss it: \(escaped.prefix(3))")
+    }
+
+    suite("image caret: on a text line beside an image line the caret sits on that text's baseline") {
+        guard let (view, text, _) = fixture({ "above\n\($0)\nbelow" }) else { return }
+        let below = (text as NSString).range(of: "below")
+        guard let box = appKitCaretRect(at: below.location + 2, in: view),
+              let lm = view.layoutManager else { return }
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        let drawn = view.caretRect(from: box)
+        let glyph = lm.glyphIndexForCharacter(at: below.location + 2)
+        let baseline = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+            + lm.location(forGlyphAt: glyph).y + view.textContainerInset.height
+        check(abs(drawn.minY - (baseline - ceil(view.baseFont.ascender))) < 0.5,
+              "the caret's top is one ascender above the line's baseline (\(drawn.minY) vs \(baseline))")
+    }
+}
+
+// Maintainer-approved: "caret after an image sits beside the image." The
+// hidden markdown was clipped to one line, but its glyphs still spanned the
+// whole column, so the caret after an image drew at the right edge of the
+// note. The reference's glyphs now take exactly the image's drawn width: one
+// carries the width, the rest take none.
+func runImageGlyphWidthTests() {
+    func fixture(width: CGFloat = 240, text: (String) -> String = { "before line\n\($0)\nafter line" })
+        -> (view: ChecklistTextView, markdown: NSRange)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: width)
+        let full = text(markdown)
+        let view = makeTextView(full)
+        let range = (full as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            check(false, "sanity: the reference is in the note")
+            return nil
+        }
+        return (view, range)
+    }
+
+    suite("image glyphs: the hidden reference is exactly as wide as the image") {
+        guard let (view, markdown) = fixture(), let lm = view.layoutManager, let tc = view.textContainer,
+              let placed = view.placedImages().first else { return }
+        lm.ensureLayout(for: tc)
+        let glyphs = lm.glyphRange(forCharacterRange: markdown, actualCharacterRange: nil)
+        let rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+        check(abs(rect.width - placed.rect.width) < 0.5,
+              "the reference's glyphs span \(rect.width)pt, the image \(placed.rect.width)pt")
+        let used = lm.lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+        check(used.width < placed.rect.width + 20,
+              "the image line is no wider than the image (\(used.width)pt used)")
+    }
+
+    suite("image glyphs: the caret after an image sits at its trailing edge, the caret before at its leading edge") {
+        guard let (view, markdown) = fixture(), let placed = view.placedImages().first,
+              let after = appKitCaretRect(at: NSMaxRange(markdown), in: view),
+              let before = appKitCaretRect(at: markdown.location, in: view) else {
+            check(false, "the image and its carets are laid out")
+            return
+        }
+        check(abs(after.minX - placed.rect.maxX) < 1, "after: x \(after.minX) at the image's right edge \(placed.rect.maxX)")
+        check(abs(before.minX - placed.rect.minX) < 1, "before: x \(before.minX) at the image's left edge \(placed.rect.minX)")
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        let drawn = view.caretRect(from: after)
+        check(drawn.minY > placed.rect.midY,
+              "the caret is text-high at the foot of the image line, like an attachment (\(drawn) vs image \(placed.rect))")
+    }
+
+    suite("image glyphs: none of the hidden markdown is ever drawn") {
+        guard let (view, markdown) = fixture(), let lm = view.layoutManager, let tc = view.textContainer else { return }
+        lm.ensureLayout(for: tc)
+        let glyphs = lm.glyphRange(forCharacterRange: markdown, actualCharacterRange: nil)
+        let shown = (glyphs.location..<NSMaxRange(glyphs)).filter { !lm.notShownAttribute(forGlyphAt: $0) }
+        check(shown.isEmpty, "every glyph of the reference is not-shown, so no selection colour can reveal it (\(shown.count) shown)")
+    }
+
+    suite("image glyphs: an image wider than the column is drawn at the column's width, on one line") {
+        guard let (view, markdown) = fixture(width: 900), let tc = view.textContainer,
+              let placed = view.placedImages().first else { return }
+        let column = tc.size.width - 2 * tc.lineFragmentPadding
+        check(placed.rect.width <= column + 0.5, "the image fits the column (\(placed.rect.width) <= \(column))")
+        check(abs(placed.rect.height - placed.rect.width / 2) < 0.5, "and keeps its aspect ratio")
+        let fragments = lineFragments(for: markdown, in: view)
+        equal(fragments.count, 1, "on one line")
+        if let first = fragments.first {
+            check(abs(first.height - (placed.rect.height + 6)) < 1, "as tall as the fitted image (\(first.height))")
+        }
+    }
+
+    suite("image glyphs: text sharing a line with an image does not wrap the hidden markdown into gaps") {
+        guard let (view, markdown) = fixture(width: 120, text: { "before\nsee \($0) here\nafter" }) else { return }
+        let fragments = lineFragments(for: markdown, in: view)
+        equal(fragments.count, 1, "one line: the reference takes the image's width, not ~60 characters")
+    }
+}
+
+func runImageGlyphClickTests() {
+    suite("image glyphs: AppKit's own hit-testing puts a click on an image before or after it by half") {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let text = "before line\n\(markdown)\nafter line"
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: markdown)
+        guard let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return
+        }
+        for (x, expected, label) in [
+            (placed.rect.minX + 20, range.location, "left half: before"),
+            (placed.rect.maxX - 20, NSMaxRange(range), "right half: after"),
+        ] {
+            view.setSelectedRange(NSRange(location: 0, length: 0))
+            let index = view.characterIndexForInsertion(at: NSPoint(x: x, y: placed.rect.midY))
+            view.setSelectedRange(NSRange(location: index, length: 0))
+            equal(view.selectedRange().location, expected, "\(label) (hit index \(index))")
+        }
+    }
+}
+
+// Maintainer screenshot: with the whole reference selected, the hidden
+// `![320](Attachments/A81E…` showed at the foot of the image line in the
+// selection colour. The glyphs are never drawn now (see the glyph-width
+// tests); what is left is how a selected image looks. Like an attachment in
+// any Mac text view: a tint over the picture, not a text selection band.
+func runImageSelectionTests() {
+    func fixture() -> (view: ChecklistTextView, markdown: NSRange, text: String)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let text = "before line\n\(markdown)\nafter line"
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: markdown)
+        guard range.location != NSNotFound else { return nil }
+        return (view, range, text)
+    }
+    func bandColor(_ view: ChecklistTextView) -> NSColor? {
+        view.selectedTextAttributes[.backgroundColor] as? NSColor
+    }
+
+    suite("image selection: a selected image is tinted over its picture, with no text band") {
+        guard let (view, markdown, _) = fixture(), let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return
+        }
+        view.setSelectedRange(markdown)
+        equal(view.selectedImageRects(), [placed.rect], "the tint covers exactly the picture")
+        check(bandColor(view).map { $0.alphaComponent == 0 } ?? true,
+              "the selection band is not painted for a selection that is only the image")
+    }
+
+    suite("image selection: a selection of text keeps its band, and no image is tinted") {
+        guard let (view, _, _) = fixture() else { return }
+        view.setSelectedRange(NSRange(location: 0, length: 6))
+        check(view.selectedImageRects().isEmpty, "nothing tinted")
+        check((bandColor(view)?.alphaComponent ?? 0) > 0, "the band is back for text")
+    }
+
+    suite("image selection: text and an image selected together: band for the text, tint for the image") {
+        guard let (view, markdown, text) = fixture(), let placed = view.placedImages().first else { return }
+        let after = (text as NSString).range(of: "after line")
+        view.setSelectedRange(NSRange(location: 3, length: NSMaxRange(after) - 3))
+        equal(view.selectedImageRects(), [placed.rect], "the image inside the selection is tinted")
+        check((bandColor(view)?.alphaComponent ?? 0) > 0, "and the text keeps its band")
+        _ = markdown
+    }
+
+    suite("image selection: deselecting the image clears its tint") {
+        guard let (view, markdown, _) = fixture() else { return }
+        view.setSelectedRange(markdown)
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        check(view.selectedImageRects().isEmpty, "no tint left behind")
+        check((bandColor(view)?.alphaComponent ?? 0) > 0, "and the band colour is restored for the next selection")
+    }
+}
+
+// Maintainer hand-test: "not able to resize." Driving the real app with real
+// window-server drags resized fine from the middle of a picture, so the
+// tracking loop was never the problem; reaching it was. The resize cursor
+// never showed (NSTextView's own cursor update puts the I-beam back over any
+// cursor rect), so nothing said where to grab, and the natural grab point,
+// the picture's right edge, missed by a point: a real press at x=345.7 on a
+// picture ending at 345 started a text selection instead (probe log). In the
+// maintainer's 360pt window a 320pt picture also overran the 310pt column.
+func runImageResizeHandleTests() {
+    func fixture() -> (view: ChecklistTextView, placed: ChecklistTextView.PlacedImage)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 240)
+        let view = makeTextView("before line\n\(markdown)\nafter line")
+        guard let placed = view.placedImages().first else {
+            check(false, "the image is laid out")
+            return nil
+        }
+        return (view, placed)
+    }
+
+    suite("image resize: the grab zone reaches a few points past the picture's right edge") {
+        guard let (view, placed) = fixture() else { return }
+        check(view.imageForResize(at: NSPoint(x: placed.rect.midX, y: placed.rect.midY)) != nil, "on the picture")
+        check(view.imageForResize(at: NSPoint(x: placed.rect.maxX + 4, y: placed.rect.midY)) != nil,
+              "just past its right edge, where a resize is grabbed")
+        check(view.imageForResize(at: NSPoint(x: placed.rect.maxX + 20, y: placed.rect.midY)) == nil,
+              "but not the empty line beyond, which still places the caret")
+        check(view.imageForResize(at: NSPoint(x: placed.rect.midX, y: placed.rect.maxY + 30)) == nil,
+              "nor the line below")
+    }
+
+    suite("image resize: the pointer says resize over the picture and its edge, I-beam elsewhere") {
+        guard let (view, placed) = fixture() else { return }
+        check(view.wantsResizeCursor(at: NSPoint(x: placed.rect.midX, y: placed.rect.midY)), "over the picture")
+        check(view.wantsResizeCursor(at: NSPoint(x: placed.rect.maxX + 3, y: placed.rect.midY)), "over its edge")
+        check(!view.wantsResizeCursor(at: NSPoint(x: 10, y: 4)), "not over text")
+    }
+
+    suite("image resize: a press that moves less than the drag threshold is a click") {
+        check(!ChecklistTextView.isResizeDrag(from: NSPoint(x: 100, y: 50), to: NSPoint(x: 102, y: 51)),
+              "2pt of hand jitter is still a click, so the caret is placed and the width left alone")
+        check(ChecklistTextView.isResizeDrag(from: NSPoint(x: 100, y: 50), to: NSPoint(x: 104, y: 50)),
+              "a few points sideways is a drag")
+    }
+
+    suite("image resize: a drag never makes a picture wider than the room left on its line") {
+        guard let (view, placed) = fixture() else { return }
+        let room = view.resizeRoom(for: placed)
+        check(room > placed.rect.width && room <= view.imageColumnWidth,
+              "the room (\(room)) is more than the picture and no more than the column")
+        equal(ChecklistTextView.resizedWidth(from: 0, to: 5000, starting: placed.rect.width, maximum: room), room,
+              "an enormous rightward drag stops at the room")
+    }
+}
+
+// Maintainer: "image lines shouldn't be skipped in list mode, they should
+// behave like the image is part of an option in the list." An item whose
+// body is an image renders its marker, then the picture on the same line, as
+// one item. Atomic caret rules apply to the reference, never the marker.
+func runImageListItemTests() {
+    func fixture(_ build: (String) -> String) -> (view: ChecklistTextView, text: String, markdown: NSRange, path: String)? {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 160)
+        let text = build(markdown)
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: markdown)
+        guard range.location != NSNotFound else {
+            check(false, "sanity: the reference is in the note")
+            return nil
+        }
+        return (view, text, range, path)
+    }
+
+    /// Where body text starts on an item line with `prefix`, measured on a
+    /// text item of the same shape.
+    func bodyX(prefix: String) -> CGFloat {
+        let view = makeTextView("\(prefix)word")
+        guard let lm = view.layoutManager, let tc = view.textContainer else { return -1 }
+        lm.ensureLayout(for: tc)
+        let glyph = lm.glyphIndexForCharacter(at: (prefix as NSString).length)
+        return lm.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: tc).minX
+            + view.textContainerInset.width
+    }
+
+    for prefix in ["- [ ] ", "- [x] ", "- ", "1. "] {
+        suite("image list item: `\(prefix)` then an image renders as one item line") {
+            guard let (view, _, markdown, _) = fixture({ "before\n\(prefix)\($0)\nafter" }),
+                  let placed = view.placedImages().first else {
+                check(false, "the image is laid out")
+                return
+            }
+            check(abs(placed.rect.minX - bodyX(prefix: prefix)) < 1,
+                  "the picture starts where the item's text would (\(placed.rect.minX) vs \(bodyX(prefix: prefix)))")
+            let line = (view.string as NSString).lineRange(for: markdown)
+            let fragments = lineFragments(for: line, in: view)
+            equal(fragments.count, 1, "marker and picture share one line, no wrapped-markdown gap")
+            if let first = fragments.first {
+                check(abs(first.height - (placed.rect.height + 6)) < 1,
+                      "the line fits the picture (\(first.height) vs \(placed.rect.height + 6))")
+            }
+            check(abs(placed.rect.height - 80) < 0.5, "the picture keeps its own size")
+        }
+    }
+
+    suite("image list item: clicking the checkbox toggles the item and keeps the image") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [ ] \($0)" }),
+              let lm = view.layoutManager, let tc = view.textContainer else { return }
+        let markerStart = markdown.location - 6
+        lm.ensureLayout(for: tc)
+        var box = lm.boundingRect(forGlyphRange: lm.glyphRange(forCharacterRange: NSRange(location: markerStart + 1, length: 1),
+                                                               actualCharacterRange: nil), in: tc)
+        box.origin.x += view.textContainerInset.width
+        box.origin.y += view.textContainerInset.height
+        check(view.handleSpecialClick(at: NSPoint(x: box.midX, y: box.midY)), "the click on the box is claimed")
+        check(view.string.contains("- [x] ![160]"), "the item is checked")
+        equal(view.placedImages().count, 1, "and the image is still drawn")
+        check(view.placedImages().first?.isDimmed == true, "dimmed, the way a checked item's text is")
+    }
+
+    suite("image list item: a checked item strikes through nothing under the picture") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [x] \($0)" }), let storage = view.textStorage else { return }
+        var struck = false
+        storage.enumerateAttribute(.strikethroughStyle, in: markdown) { value, _, _ in
+            if let value = value as? Int, value != 0 { struck = true }
+        }
+        check(!struck, "no strikethrough line is drawn across the image")
+    }
+
+    suite("image list item: Left and Right step over the reference, never into the marker or the path") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [ ] \($0)\nafter" }) else { return }
+        let s = markdown.location
+        let e = NSMaxRange(markdown)
+        view.setSelectedRange(NSRange(location: e, length: 0))
+        view.moveLeft(nil)
+        equal(view.selectedRange().location, s, "Left from after the image lands just after the marker")
+        view.moveLeft(nil)
+        equal(view.selectedRange().location, s - 1, "and the next Left moves into the marker as text")
+        view.setSelectedRange(NSRange(location: s, length: 0))
+        view.moveRight(nil)
+        equal(view.selectedRange().location, e, "Right from before the image jumps over it")
+    }
+
+    suite("image list item: Backspace after the image removes the reference and keeps the marker") {
+        guard let (view, _, markdown, _) = fixture({ "before\n- [ ] \($0)\nafter" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "before\n- [ ] \nafter", "only the image goes")
+    }
+
+    suite("image list item: Return after the image starts a new item below") {
+        guard let (view, text, markdown, _) = fixture({ "list\n- [ ] \($0)" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        view.insertNewline(nil)
+        equal(view.string, text + "\n- [ ] ", "a fresh empty item")
+        equal(view.selectedRange().location, (view.string as NSString).length, "with the caret in it")
+    }
+
+    suite("image list item: typing after the image goes into a new item below, before it into one above") {
+        guard let (view, text, markdown, _) = fixture({ "list\n- [ ] \($0)\nafter" }) else { return }
+        let md = (text as NSString).substring(with: markdown)
+        view.setSelectedRange(NSRange(location: NSMaxRange(markdown), length: 0))
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "list\n- [ ] \(md)\n- [ ] x\nafter", "typed text starts its own item")
+        equal(view.selectedRange().location, ("list\n- [ ] \(md)\n- [ ] x" as NSString).length, "caret after it")
+
+        view.setSelectedRange(NSRange(location: markdown.location, length: 0))
+        view.insertText("y", replacementRange: NSRange(location: NSNotFound, length: 0))
+        equal(view.string, "list\n- [ ] y\n- [ ] \(md)\n- [ ] x\nafter", "typed before the image: an item above")
+        equal(view.selectedRange().location, ("list\n- [ ] y" as NSString).length, "caret after the typed text")
+    }
+
+    suite("image list item: converting a note to list mode wraps image lines as items that render") {
+        let path = writeLayoutScratchImage()
+        let markdown = Attachments.markdown(path: path, width: 160)
+        let converted = Checklist.convertedToList("list\nmilk\n\(markdown)", keyword: "list")
+        equal(converted, "list\n- [ ] milk\n- [ ] \(markdown)", "the image line becomes an item")
+        let view = makeTextView(converted)
+        let range = (converted as NSString).range(of: markdown)
+        equal(lineFragments(for: (converted as NSString).lineRange(for: range), in: view).count, 1,
+              "and renders on one line")
+        equal(view.placedImages().count, 1, "with its picture")
+    }
+
+    suite("image list item: an image pasted on an empty item fills that item") {
+        guard let (view, _, _, _) = fixture({ "list\n- [ ] milk\n- [ ] \n\($0)" }) else { return }
+        let ns = view.string as NSString
+        let empty = ns.range(of: "- [ ] \n").location + 6
+        let image = writeLayoutScratchNSImage()
+        view.insertImage(image, at: empty)
+        let line = ns.lineRange(for: NSRange(location: empty, length: 0))
+        let newLine = (view.string as NSString).substring(with: (view.string as NSString).lineRange(for: NSRange(location: line.location, length: 0)))
+        check(newLine.hasPrefix("- [ ] ![") && newLine.hasSuffix(".png)\n"), "the item now holds the image (\(newLine))")
+        check(view.string.hasPrefix("list\n- [ ] milk\n- [ ] !["), "nothing else moved")
+    }
+
+    for (prefix, next) in [("- [ ] ", "- [ ] "), ("- [x] ", "- [ ] "), ("- ", "- "), ("3. ", "4. ")] {
+        suite("image list item: an image pasted on `\(prefix)milk` becomes the next item, `\(next)`") {
+            let view = makeTextView("before\n\(prefix)milk\nafter")
+            let image = writeLayoutScratchNSImage()
+            view.insertImage(image, at: ("before\n\(prefix)mi" as NSString).length)
+            let lines = view.string.components(separatedBy: "\n")
+            equal(lines.count, 4, "one line added (\(lines))")
+            if lines.count == 4 {
+                equal(lines[1], "\(prefix)milk", "the item is untouched")
+                check(lines[2].hasPrefix("\(next)![") && lines[2].hasSuffix(".png)"), "the image is the next item (\(lines[2]))")
+                equal(lines[3], "after", "the rest stays")
+            }
+            let caret = view.selectedRange().location
+            equal(caret, ("before\n\(prefix)milk\n\(lines.count == 4 ? lines[2] : "")" as NSString).length,
+                  "the caret is after the image, ready for Return")
+        }
+    }
+
+    suite("image list item: in list mode an image pasted on a plain line lands as an item") {
+        let view = makeTextView("list\n")
+        view.insertImage(writeLayoutScratchNSImage(), at: 5)
+        check(view.string.hasPrefix("list\n- [ ] !["), "wrapped as an item (\(view.string))")
+    }
+}
+
+/// An in-memory image, for `insertImage`, which saves it beside the notes
+/// file `writeLayoutScratchImage` points at.
+private func writeLayoutScratchNSImage() -> NSImage {
+    _ = writeLayoutScratchImage()
+    let image = NSImage(size: NSSize(width: 120, height: 60))
+    image.lockFocus()
+    NSColor.systemPink.setFill()
+    NSRect(x: 0, y: 0, width: 120, height: 60).fill()
+    image.unlockFocus()
+    return image
+}
+
+// Maintainer: Backspace at the start of the line below an image, "fix however
+// you think is right." It used to join that line onto the image line, putting
+// text at the foot of an image-tall line. Now: an empty line is deleted and
+// the caret lands after the image; a line with text first selects the image
+// (tinted), and a second Backspace deletes the image's line, so the text
+// moves up to where the image was. Text is never joined onto the image.
+func runImageBackspaceTests() {
+    func fixture(_ build: (String) -> String) -> (view: ChecklistTextView, md: String, range: NSRange)? {
+        let path = writeLayoutScratchImage()
+        let md = Attachments.markdown(path: path, width: 200)
+        let text = build(md)
+        let view = makeTextView(text)
+        let range = (text as NSString).range(of: md)
+        guard range.location != NSNotFound else { return nil }
+        return (view, md, range)
+    }
+
+    suite("image backspace: on the empty line under an image, Backspace deletes the line and the caret sits after the image") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\n\nafter" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "before\n\(md)\nafter", "the empty line is gone")
+        equal(view.selectedRange(), NSRange(location: NSMaxRange(range), length: 0), "the caret is after the image")
+    }
+
+    suite("image backspace: the same on an empty last line") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\n" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "before\n\(md)", "the empty line is gone")
+        equal(view.selectedRange(), NSRange(location: NSMaxRange(range), length: 0), "the caret is after the image")
+    }
+
+    suite("image backspace: before text under an image, the first Backspace selects the image, the second deletes it") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\nafter" }) else { return }
+        let provider = AtomicUndoProvider()
+        view.delegate = provider
+        view.allowsUndo = true
+        let text = view.string
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        provider.manager.beginUndoGrouping()
+        view.deleteBackward(nil)
+        provider.manager.endUndoGrouping()
+        equal(view.string, text, "nothing is deleted or joined yet")
+        equal(view.selectedRange(), range, "the image is selected")
+        equal(view.selectedImageRects().count, 1, "and drawn tinted")
+
+        provider.manager.beginUndoGrouping()
+        view.deleteBackward(nil)
+        provider.manager.endUndoGrouping()
+        equal(view.string, "before\nafter", "the image's line is gone and the text moved up")
+        equal(view.selectedRange(), NSRange(location: 7, length: 0), "the caret is still at the start of that text")
+        provider.manager.undo()
+        equal(view.string, text, "one undo brings the image back")
+        view.delegate = nil
+        _ = md
+    }
+
+    suite("image backspace: moving away after the image is selected cancels the line delete") {
+        guard let (view, md, range) = fixture({ "before\n\($0)\nafter" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        view.setSelectedRange(range)
+        view.deleteBackward(nil)
+        equal(view.string, "before\n\nafter", "an image selected some other way deletes like any selection")
+        _ = md
+    }
+
+    suite("image backspace: under an image list item, the same two steps remove the item") {
+        guard let (view, _, range) = fixture({ "list\n- [ ] \($0)\nmilk" }) else { return }
+        view.setSelectedRange(NSRange(location: NSMaxRange(range) + 1, length: 0))
+        view.deleteBackward(nil)
+        equal(view.selectedRange(), range, "the picture is selected, not the marker")
+        view.deleteBackward(nil)
+        equal(view.string, "list\nmilk", "the image item is gone")
+    }
+
+    suite("image backspace: ordinary lines still join") {
+        let view = makeTextView("abc\ndef")
+        view.setSelectedRange(NSRange(location: 4, length: 0))
+        view.deleteBackward(nil)
+        equal(view.string, "abcdef", "plain Backspace at a line start")
     }
 }
