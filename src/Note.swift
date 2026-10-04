@@ -42,15 +42,40 @@ struct Note: Identifiable, Equatable, Codable {
     /// not words, and this is also where an explicit first-line heading
     /// replaces the automatic title (the heading text is the title).
     var title: String {
-        let line = text
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        let trimmed = (line.map(String.init) ?? "").trimmingCharacters(in: .whitespaces)
+        let trimmed = (firstNonBlankLine.map(String.init) ?? "").trimmingCharacters(in: .whitespaces)
         if let heading = Heading.parse(trimmed) {
             let body = trimmed.dropFirst(heading.markerLength)
                 .trimmingCharacters(in: .whitespaces)
             return body.isEmpty ? "Untitled note" : body
         }
         return trimmed.isEmpty ? "Untitled note" : trimmed
+    }
+
+    /// The first line holding anything but whitespace. Scans only as far as
+    /// that line rather than splitting the whole note: the header's note menu
+    /// asks this of every note each time the header redraws.
+    private var firstNonBlankLine: Substring? {
+        var start = text.startIndex
+        while start < text.endIndex {
+            let end = text[start...].firstIndex(of: "\n") ?? text.endIndex
+            let line = text[start..<end]
+            if !line.trimmingCharacters(in: .whitespaces).isEmpty { return line }
+            guard end < text.endIndex else { break }
+            start = text.index(after: end)
+        }
+        return nil
+    }
+
+    /// Longest `menuTitle`, in characters, ellipsis included.
+    static let menuTitleLength = 40
+
+    /// `title`, cut to fit a menu item. A note's first line can be a whole
+    /// paragraph, and an NSMenu grows as wide as its widest item.
+    var menuTitle: String {
+        let full = title
+        guard full.count > Self.menuTitleLength else { return full }
+        let cut = full.prefix(Self.menuTitleLength - 1)
+            .trimmingCharacters(in: .whitespaces)
+        return cut + "…"
     }
 }

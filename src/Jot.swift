@@ -348,10 +348,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return isInterfaceVisible && notesManager.currentIndex > 0
         case #selector(moveNoteDown(_:)):
             return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+        // The same answers the header chevrons, swipes and side buttons use.
+        // Next stays enabled at the last note because it starts a new one
+        // there, exactly as a swipe always has; only a blank last note is the
+        // end of the line.
         case #selector(previousNote(_:)):
-            return isInterfaceVisible && notesManager.currentIndex > 0
+            return isInterfaceVisible && notesManager.canGoToPreviousNote
         case #selector(nextNote(_:)):
-            return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+            return isInterfaceVisible && notesManager.canGoToNextNote
         default:
             return true
         }

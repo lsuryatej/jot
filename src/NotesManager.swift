@@ -319,6 +319,39 @@ final class NotesManager: ObservableObject {
         }
     }
 
+    /// Whether Back has anywhere to go. Every control that moves backwards
+    /// (swipe, Cmd-Option-Left, the mouse's Back button, the header chevron,
+    /// View › Previous Note) enables itself from this.
+    var canGoToPreviousNote: Bool {
+        currentIndex > 0
+    }
+
+    /// Whether `nextNote()` would do anything. One rule for every control:
+    /// forward past the last note starts a new note, so the only dead end is
+    /// a last note that is still blank, where a new note is refused.
+    var canGoToNextNote: Bool {
+        currentIndex < notes.count - 1
+            || !currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Jumps straight to one note, as the header's note menu does. Picked by
+    /// identity rather than index because, exactly like stepping, the jump
+    /// first tidies away blank notes, which can shift every index after
+    /// them. The note being left and the note chosen are both kept even if
+    /// blank: one is where you were, the other is where you asked to go.
+    func goToNote(id: UUID) {
+        guard notes.indices.contains(currentIndex),
+              notes[currentIndex].id != id,
+              notes.contains(where: { $0.id == id })
+        else { return }
+
+        let currentID = notes[currentIndex].id
+        notes.removeAll { $0.isBlank && $0.id != currentID && $0.id != id }
+        guard let target = notes.firstIndex(where: { $0.id == id }) else { return }
+        currentIndex = target
+        flush()
+    }
+
     func addNewNote() {
         // Refuse to stack blank notes on top of a blank note.
         guard !currentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
