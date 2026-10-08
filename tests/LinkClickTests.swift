@@ -64,7 +64,10 @@ func runLinkClickTests() {
     }
 
     suite("a bare domain and an email address come back as openable URLs") {
-        equal(LinkShrink.link(containing: 2, in: "example.com")?.url.scheme, "http", "a bare domain gets http")
+        // macOS picks the scheme for a bare domain: http through macOS 27.0,
+        // https from 27.2. Either opens; what matters is that there is one.
+        check(["http", "https"].contains(LinkShrink.link(containing: 2, in: "example.com")?.url.scheme ?? ""),
+              "a bare domain gets a web scheme")
         equal(LinkShrink.link(containing: 7, in: "mail me@example.com")?.url.scheme, "mailto", "an email address becomes mailto")
     }
 
@@ -79,10 +82,12 @@ func runLinkClickTests() {
         // The detector keeps the ? on links with a path; trimming it must
         // not drop the http it added.
         let bare = LinkShrink.link(containing: 6, in: "see example.com/page?")
-        equal(bare?.url.absoluteString, "http://example.com/page", "a bare domain with a path keeps http, minus the ?")
+        check(["http://example.com/page", "https://example.com/page"].contains(bare?.url.absoluteString ?? ""),
+              "a bare domain with a path keeps its web scheme, minus the ? (\(bare?.url.absoluteString ?? "nil"))")
         check(bare.map { LinkShrink.isSafeToOpen($0.url) } ?? false, "and Cmd+click can open it")
         let www = LinkShrink.link(containing: 8, in: "go to www.example.com/a?")
-        equal(www?.url.absoluteString, "http://www.example.com/a", "a www link keeps http too")
+        check(["http://www.example.com/a", "https://www.example.com/a"].contains(www?.url.absoluteString ?? ""),
+              "a www link keeps its web scheme too (\(www?.url.absoluteString ?? "nil"))")
     }
 
     suite("only http, https and mailto are safe to open") {

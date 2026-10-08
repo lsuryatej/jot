@@ -152,15 +152,17 @@ struct EdgeCardStyle: Equatable {
         highlightsCurrentLine = settings.highlightsCurrentLine
     }
 
-    /// A card's body font: the note's own font when it has one (a theme
-    /// note still wins, as everywhere), the default otherwise. Cards stay
-    /// compact previews: the note's family, but never larger than the 12pt
-    /// card body whatever its size.
+    /// A card's body font: the note's own family when it has one (a theme
+    /// note still wins, as everywhere), at the global text size. Not capped
+    /// smaller: cards have always drawn at the size people chose, and
+    /// shrinking them would undo a deliberate choice for legibility. Not the
+    /// note's own size either: in this mode Bigger and Smaller change the
+    /// global size, and every card has to follow them together.
     @MainActor
     static func font(for note: Note, settings: SettingsManager) -> NSFont {
         NoteFont.resolved(
             settings.resolvedFontName(perNote: note.fontName),
-            size: CGFloat(min(12, settings.resolvedFontSize(perNote: note.fontSize)))
+            size: CGFloat(settings.resolvedFontSize(perNote: nil))
         )
     }
 }

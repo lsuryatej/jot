@@ -227,14 +227,15 @@ func runEdgeStackTests() {
             equal(plain?.baseFont.isFixedPitch, true, "a note with no font of its own follows the default (SF Mono)")
         }
 
-        suite("an edge card keeps its compact size whatever the note's size") {
+        suite("an edge card draws at the global text size, never shrunk") {
             EdgeCardHeights.shared.removeAll()
             let manager = makeManager(seed: ["Big\nnote"])
             manager.notes[0].fontSize = 20
             let harness = EdgeStackHarness(manager: manager)
+            harness.settings.noteFontSize = 18
             harness.pump()
             let editor = harness.card(0)?.documentView as? ChecklistTextView
-            equal(editor?.baseFont.pointSize, 12, "capped at the 12pt card body")
+            equal(editor?.baseFont.pointSize, 18, "the global size (what Bigger and Smaller change here), not capped at 12")
         }
 
         suite("an edge card's title is a bold cut of the note's own font") {
