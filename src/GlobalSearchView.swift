@@ -237,6 +237,14 @@ struct GlobalSearchField: NSViewRepresentable {
         field.cell?.wraps = false
         field.cell?.isScrollable = true
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
+        // No typing suggestions. Once a few letters of a word are typed,
+        // macOS offers an inline prediction or a completion list, and while
+        // one shows it takes Up, Down and Return for itself: the arrow keys
+        // worked after one letter and stopped working mid-word. A search
+        // query has nothing to predict.
+        // The inline-prediction switch is on the field editor; see
+        // `FocusOnAppearTextField.becomeFirstResponder`.
+        field.isAutomaticTextCompletionEnabled = false
         field.placeholderString = placeholder
         field.setAccessibilityLabel(placeholder)
         field.delegate = context.coordinator
@@ -280,6 +288,15 @@ struct GlobalSearchField: NSViewRepresentable {
 /// leaving the window with nothing focused.
 private final class FocusOnAppearTextField: NSTextField {
     private weak var previousResponder: NSView?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became, let editor = currentEditor() as? NSTextView {
+            editor.inlinePredictionType = .no
+            editor.isAutomaticTextCompletionEnabled = false
+        }
+        return became
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
