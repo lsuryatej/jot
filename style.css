@@ -316,6 +316,26 @@ b { font-weight: 700; }
   }
 }
 
+/* The first-launch heads-up: amber edge and a tinted wash, so it reads as a
+   warning in the note rather than one more muted line. */
+:root[data-paper="cream"] { --warn: #8A5A12; --warn-wash: rgba(214, 150, 40, 0.14); }
+:root[data-paper="white"] { --warn: #8A5A12; --warn-wash: rgba(214, 150, 40, 0.12); }
+:root[data-paper="dark"]  { --warn: #E6B45E; --warn-wash: rgba(230, 180, 94, 0.12); }
+.heads-up {
+  margin: var(--lh) 0 0 calc(var(--pitch-x) * -1);
+  padding: 0 0 0 calc(var(--pitch-x) - 3px);
+  border-left: 3px solid var(--warn);
+  background: var(--warn-wash);
+  border-radius: 0 8px 8px 0;
+}
+.heads-up .l { padding-right: var(--pitch-x); }
+.heads-up b { color: var(--ink); }
+.heads-up #heads-up-title, .heads-up #heads-up-title .mk { color: var(--warn); opacity: 1; }
+.heads-up #heads-up-title b { color: var(--warn); }
+.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.steps .l { padding-left: 3ch; text-indent: -3ch; counter-increment: step; }
+.steps .l::before { content: counter(step) ". "; color: var(--warn); font-weight: 700; }
+
 /* Paper picker. */
 .paper-pick {
   font: inherit;
