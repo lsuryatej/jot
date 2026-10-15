@@ -337,7 +337,7 @@ final class NotesManager: ObservableObject {
     private func restore(_ deleted: DeletedNote) {
         var note = deleted.note
         let position: Int
-        if let existing = notes.firstIndex(where: { $0.id == note.id }), notes[existing].isBlank {
+        if let existing = notes.firstIndex(where: { $0.id == note.id }), notes[existing].text.isEmpty {
             // The cleared only-note, still there and still empty: refill it.
             notes[existing] = note
             position = existing
@@ -369,9 +369,15 @@ final class NotesManager: ObservableObject {
         }
         flush()
 
-        let redo = position
+        // Redo finds the note by id, not by the index it had now: a note
+        // added or removed in between would put a different note there.
+        let restoredID = notes[position].id
         noteUndoManager.beginUndoGrouping()
-        noteUndoManager.registerUndo(withTarget: self) { $0.deleteNote(at: redo) }
+        noteUndoManager.registerUndo(withTarget: self) { manager in
+            if let index = manager.notes.firstIndex(where: { $0.id == restoredID }) {
+                manager.deleteNote(at: index)
+            }
+        }
         noteUndoManager.setActionName("Delete Note")
         noteUndoManager.endUndoGrouping()
     }

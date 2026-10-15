@@ -48,6 +48,28 @@ private func deleteNoteUndoSuites() {
         equal(manager.currentText, "C", "on screen")
     }
 
+    suite("redo deletes the restored note even after the list shifted") {
+        // CodeRabbit on #20: redo used the restored note's index, so a note
+        // added in front between undo and redo made it delete a neighbour.
+        let manager = makeManager(seed: ["A", "B", "C"])
+        manager.currentIndex = 1
+        manager.deleteNote(at: 1)
+        manager.noteUndoManager.undo()
+        equal(manager.texts, ["A", "B", "C"], "B restored")
+        manager.notes.insert(Note(text: "Z"), at: 0)
+        manager.noteUndoManager.redo()
+        equal(manager.texts, ["Z", "A", "C"], "redo removed B, not whatever now sits at B's old index")
+    }
+
+    suite("a cleared only-note with only whitespace typed in is not overwritten by undo") {
+        let manager = makeManager(seed: ["keep me"])
+        manager.deleteNote(at: 0)
+        manager.notes[0].text = "   "
+        manager.noteUndoManager.undo()
+        check(manager.texts.contains("   ") && manager.texts.contains("keep me"),
+              "both survive: the typed whitespace and the restored text (\(manager.texts))")
+    }
+
     suite("several deletes undo in reverse order") {
         let manager = makeManager(seed: ["A", "B", "C", "D"])
         manager.deleteNote(at: 0)

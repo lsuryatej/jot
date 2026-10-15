@@ -34,7 +34,13 @@ RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")
   || die "could not reach GitHub. Check your connection and try again."
 
 VERSION="$(printf '%s' "$RELEASE_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')"
-ZIP_URL="$(printf '%s' "$RELEASE_JSON" | grep -o '"browser_download_url": *"[^"]*\.zip"' | head -1 | sed -E 's/.*"(https:[^"]+)".*/\1/')"
+# The versioned archive, which is the one with a .sha256 beside it. A release
+# also carries the same zip as Jot.zip (for a stable download link) and the
+# API does not promise asset order, so "the first .zip" could be that one and
+# the checksum would be skipped. Older releases have only the versioned zip.
+ZIP_URLS="$(printf '%s' "$RELEASE_JSON" | grep -o '"browser_download_url": *"[^"]*\.zip"' | sed -E 's/.*"(https:[^"]+)".*/\1/')"
+ZIP_URL="$(printf '%s\n' "$ZIP_URLS" | grep -F "/Jot-${VERSION}.zip" | head -1)"
+[ -n "$ZIP_URL" ] || ZIP_URL="$(printf '%s\n' "$ZIP_URLS" | grep -v '/Jot\.zip$' | head -1)"
 [ -n "$ZIP_URL" ] || die "no .zip asset found on the latest release"
 
 say "Latest version: $VERSION"

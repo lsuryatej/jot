@@ -477,7 +477,7 @@ struct SettingsPaneView: View {
                 ShortcutRow(action: "Toggle highlight", combo: "⇧⌘H")
                 ShortcutRow(action: "Toggle bold", combo: "⌘B")
                 ShortcutRow(action: "Toggle italic", combo: "⌘I")
-                ShortcutRow(action: "Bigger / smaller text", combo: "⌘= / ⌘-")
+                ShortcutRow(action: "Bigger / smaller text", combo: "⌘+ / ⌘-")
                 ShortcutRow(action: "Actual text size", combo: "⌘0")
                 ShortcutRow(action: "Nest / un-nest checklist item", combo: "⇥ / ⇧⇥")
                 ShortcutRow(action: "Move list item up / down", combo: "⌃⌘↑ / ⌃⌘↓")

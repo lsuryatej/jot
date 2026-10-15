@@ -89,10 +89,14 @@ func runTextSizeTests() {
 
 /// Disposable defaults, so a test run never reads or writes the user's real
 /// preferences.
+///
+/// One fixed suite, cleared before each use rather than after: clearing on
+/// return emptied the domain before the settings ever wrote to it, and every
+/// later write recreated a uniquely named plist that nothing removed.
 func makeTestSettings(seedSize: Double? = nil) -> SettingsManager {
-    let name = "JotTests.textsize-\(UUID().uuidString)"
+    let name = "JotTests.textsize"
+    UserDefaults().removePersistentDomain(forName: name)
     let defaults = UserDefaults(suiteName: name)!
-    defer { defaults.removePersistentDomain(forName: name) }
     if let seedSize { defaults.set(seedSize, forKey: "noteFontSize") }
     return SettingsManager(defaults: defaults)
 }
