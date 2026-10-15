@@ -3228,6 +3228,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let ns = textStorage.string as NSString
         let whole = NSRange(location: 0, length: ns.length)
         let target = ns.length == 0 ? whole : ns.lineRange(for: clamped(range ?? whole))
+        // Font fallback (issue #19). Setting `.font` below puts every
+        // character back on the note's font, including ones it has no glyph
+        // for, like `⮑` in SF Mono. AppKit substitutes a font that has them
+        // in its own fix-up pass, but during an edit that pass has already
+        // run by the time this does (from `didProcessEditing`), so typed or
+        // pasted symbols drew as empty boxes while the same note opened fine.
+        // Re-run the substitution over what was just restyled, last, after
+        // every font this pass sets (headings, emphasis, code).
+        defer { textStorage.fixFontAttribute(in: target) }
 
         let isCode = isCodeMode
         var baseline: [NSAttributedString.Key: Any] = [

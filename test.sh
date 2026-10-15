@@ -102,6 +102,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/ModifierMaskTests.swift \
     tests/ListMoveTests.swift \
     tests/NoteViewStateTests.swift \
+    tests/FontFallbackTests.swift \
     tests/SettingsWindowLogicTests.swift \
     tests/MainMenuTests.swift \
     tests/DeleteNoteUndoTests.swift \
