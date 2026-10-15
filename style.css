@@ -100,6 +100,7 @@ body {
   border-radius: 6px;
   cursor: pointer;
   text-decoration: none;
+  white-space: nowrap;
 }
 .chrome-button:hover { background: var(--rule); color: var(--ink); }
 
@@ -148,8 +149,23 @@ a:focus-visible, button:focus-visible, textarea:focus-visible, input:focus-visib
   border-radius: 3px;
 }
 
-.download { color: var(--ink); font-weight: 700; }
-.download:hover { color: var(--link); text-decoration: none; }
+/* The download: a key-shaped button that still sits on one line of the note. */
+.download {
+  display: inline-block;
+  height: 24px;
+  margin: 2px 0;
+  padding: 0 10px;
+  line-height: 22px;
+  border: 1px solid var(--accent);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  color: var(--accent);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.download:hover { text-decoration: none; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.download:active { transform: translateY(1px); border-bottom-width: 1px; margin-bottom: 3px; }
+.chrome-download { color: var(--accent); font-weight: 600; }
 
 code, kbd {
   font: inherit;
@@ -263,6 +279,43 @@ b { font-weight: 700; }
   color: var(--secondary);
 }
 
+/* The comparison, as a monospaced table in the note. On wide screens cells
+   wrap, each wrapped line still one 28px row of the grid; on phones it keeps
+   to one line per cell and scrolls sideways with the row labels pinned. */
+.compare-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.compare-wrap:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: var(--lh);
+}
+.compare th, .compare td {
+  padding: 0 12px 0 0;
+  text-align: left;
+  font-weight: 400;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+}
+.compare thead th { font-weight: 700; color: var(--ink); border-bottom-color: var(--secondary); white-space: nowrap; }
+.compare thead th a { color: var(--ink); }
+.compare tbody th { color: var(--secondary); width: 20ch; }
+.compare td { color: var(--secondary); }
+.compare .us { color: var(--accent); font-weight: 600; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .compare { width: auto; }
+  .compare th, .compare td { white-space: nowrap; }
+  .compare tbody th, .compare thead th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--paper);
+    width: auto;
+  }
+}
+
 /* Paper picker. */
 .paper-pick {
   font: inherit;
@@ -288,6 +341,16 @@ b { font-weight: 700; }
 
 @media (prefers-reduced-motion: reduce) {
   .caret { animation: none; }
+}
+
+/* Small phones: the header keeps to one line, and the download's version
+   note drops under the button instead of colliding with it. */
+@media (max-width: 420px) {
+  .dl-line { padding-right: 0; }
+  .dl-line .r { position: static; display: block; color: var(--secondary); }
+  .chrome { padding: 0 6px; gap: 0; }
+  .chrome-button { padding: 0 6px; }
+  .paper-label { display: none; }
 }
 
 /* Phones: the margin narrows and the screenshot moves under the list. */

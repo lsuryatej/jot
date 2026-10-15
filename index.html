@@ -30,8 +30,9 @@
 <header class="chrome">
   <span class="chrome-title">jot</span>
   <span class="chrome-spacer"></span>
-  <button class="chrome-button" id="paper-button" type="button" aria-label="Change paper">paper: <span id="paper-name">cream</span> <span aria-hidden="true">⌄</span></button>
+  <button class="chrome-button" id="paper-button" type="button" aria-label="Change paper"><span class="paper-label">paper: </span><span id="paper-name">cream</span> <span aria-hidden="true">⌄</span></button>
   <a class="chrome-button" href="https://github.com/lsuryatej/jot">github <span aria-hidden="true">↗</span></a>
+  <a class="chrome-button chrome-download" data-download href="https://github.com/lsuryatej/jot/releases/latest/download/Jot.zip">download <span aria-hidden="true">↓</span></a>
 </header>
 
 <main class="note" id="note">
@@ -41,9 +42,11 @@
   <p class="l">press <kbd>⌥A</kbd> anywhere to open it. press it again to put it away.</p>
   <p class="l blank"></p>
 
-  <p class="l"><a class="download" id="download" href="https://github.com/lsuryatej/jot/releases/latest/download/Jot.zip">→ download for mac</a><span class="r" id="version-meta">about 1 MB</span></p>
+  <p class="l dl-line"><a class="download" id="download" data-download href="https://github.com/lsuryatej/jot/releases/latest/download/Jot.zip">↓ download for mac</a><span class="r" id="version-meta">about 1 MB</span></p>
   <p class="l"><span class="indent"></span>or <code id="brew">brew install lsuryatej/jot/jot</code><button class="r copy" id="copy-brew" type="button">copy</button></p>
   <p class="l muted"><span class="indent"></span>macOS 14 or later · free · open source</p>
+  <p class="l blank"></p>
+  <p class="l muted gatekeeper">first time opening it? jot isn't notarized (there's no paid apple developer account behind it), so macOS asks first. open it once, then <b>System Settings › Privacy &amp; Security › Open Anyway</b>. brew skips this step.</p>
   <p class="l blank"></p>
 
   <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>try it, it's a real scratchpad</h2>
@@ -108,6 +111,37 @@ groceries = 240
   </p>
   <p class="l blank"></p>
 
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>how it compares</h2>
+  <p class="l muted">as of october 2026, read off each app's own site. all three are good tools; this is what you get for free.</p>
+  <div class="compare-wrap" tabindex="0" role="region" aria-label="Comparison of Jot with Antinote, Numi and Soulver">
+    <table class="compare">
+      <thead>
+        <tr><th scope="col"><span class="sr">feature</span></th><th scope="col" class="us">jot</th><th scope="col"><a href="https://antinote.io/">antinote</a></th><th scope="col"><a href="https://numi.app/">numi</a></th><th scope="col"><a href="https://soulver.app/">soulver 4</a></th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">price</th><td class="us">free</td><td>$5 once</td><td>free; $29.99 to unlock</td><td>$59 once</td></tr>
+        <tr><th scope="row">download</th><td class="us">~1 MB</td><td>n/a</td><td>n/a</td><td>~18 MB</td></tr>
+        <tr><th scope="row">math with variables</th><td class="us">yes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+        <tr><th scope="row">units</th><td class="us">yes, offline</td><td>yes</td><td>yes</td><td>yes</td></tr>
+        <tr><th scope="row">currency</th><td class="us">live rates opt&#8209;in</td><td>live, crypto</td><td>live, crypto</td><td>live by default</td></tr>
+        <tr><th scope="row">checklists</th><td class="us">yes</td><td>yes</td><td>no</td><td>no</td></tr>
+        <tr><th scope="row">images inline</th><td class="us">yes</td><td>become ocr text</td><td>no</td><td>no</td></tr>
+        <tr><th scope="row">screenshot to text</th><td class="us">yes, offline</td><td>yes, offline</td><td>no</td><td>no</td></tr>
+        <tr><th scope="row">display modes</th><td class="us">5</td><td>3</td><td>window</td><td>window</td></tr>
+        <tr><th scope="row">search every note</th><td class="us">yes</td><td>yes</td><td>n/a</td><td>yes</td></tr>
+        <tr><th scope="row">links shrink</th><td class="us">yes</td><td>yes</td><td>n/a</td><td>n/a</td></tr>
+        <tr><th scope="row">sync across devices</th><td class="us">no</td><td>icloud, optional</td><td>icloud, paid</td><td>icloud</td></tr>
+        <tr><th scope="row">scripting</th><td class="us">no, themes only</td><td>js, url schemes, cli</td><td>js plugins, cli</td><td>cli, url schemes</td></tr>
+        <tr><th scope="row">apple notes</th><td class="us">one&#8209;way sync</td><td>one&#8209;click export</td><td>no</td><td>no</td></tr>
+        <tr><th scope="row">network</th><td class="us">1 update check a day</td><td>a switch per feature</td><td>rates; icloud if paid</td><td>live data on</td></tr>
+        <tr><th scope="row">runs on</th><td class="us">mac</td><td>mac</td><td>mac, windows, linux</td><td>mac, iphone, ipad</td></tr>
+        <tr><th scope="row">source</th><td class="us">open, MIT</td><td>closed</td><td>app closed</td><td>closed</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="l muted">jot doesn't win every row. no sync and no scripting, and it's new.</p>
+  <p class="l blank"></p>
+
   <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>private by default</h2>
   <p class="l">no account. no analytics. no crash reports.</p>
   <p class="l">your notes stay on your mac, as plain text.</p>
@@ -126,6 +160,9 @@ groceries = 240
   <p class="l">made by surya, as a free, open-source app (MIT).</p>
   <p class="l">swift and appkit, no dependencies, about a 1 MB download.</p>
   <p class="l"><a href="https://github.com/lsuryatej/jot">source</a> · <a href="https://github.com/lsuryatej/jot/issues/new">report a bug</a> · <a href="https://github.com/lsuryatej/jot#readme">full docs</a></p>
+  <p class="l tip-line" id="tip-line" hidden>if it saves you time, <a id="tip-link" href="#">buy me a coffee</a>. it's free either way.</p>
+  <p class="l blank"></p>
+  <p class="l"><a class="download" data-download href="https://github.com/lsuryatej/jot/releases/latest/download/Jot.zip">↓ download for mac</a></p>
   <p class="l end"><span class="caret" aria-hidden="true"></span></p>
 
 </main>

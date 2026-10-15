@@ -2,6 +2,15 @@ import { evaluateNote } from "./math.js";
 
 const REPO = "lsuryatej/jot";
 
+// The tip jar. Empty keeps the line hidden; set it to a Buy Me a Coffee,
+// Ko-fi or GitHub Sponsors link and the "buy me a coffee" line appears.
+const TIP_URL = "";
+
+if (TIP_URL) {
+  document.getElementById("tip-link").href = TIP_URL;
+  document.getElementById("tip-line").hidden = false;
+}
+
 // Storage can be unavailable (private windows, blocked site data), so every
 // read and write is optional: the page works the same without it.
 const store = {
@@ -161,7 +170,9 @@ async function loadRelease() {
     const size = zip ? `${(zip.size / 1e6).toFixed(1)} MB` : "about 1 MB";
     meta.textContent = `${version} · ${size}`;
     // Until a release carries the fixed-name Jot.zip, link its own archive.
-    if (zip && zip.name !== "Jot.zip") document.getElementById("download").href = zip.browser_download_url;
+    if (zip && zip.name !== "Jot.zip") {
+      document.querySelectorAll("[data-download]").forEach((a) => { a.href = zip.browser_download_url; });
+    }
     const date = new Date(release.published_at);
     newsMeta.textContent = `${version} · ${date.toLocaleDateString("en", { month: "short", day: "numeric" }).toLowerCase()}`;
     link.href = release.html_url;
