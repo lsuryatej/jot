@@ -1,4 +1,4 @@
-import { evaluateNote } from "./math.js";
+import { evaluateNote } from "./math.js?v=30213c1f40";
 
 const REPO = "lsuryatej/jot";
 
