@@ -587,6 +587,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// The vertical distance between guide dots or grid lines: the font's own
     /// line box scaled by the spacing setting, with a floor so a tiny font
     /// never packs the pattern into noise.
+    /// The first guide line at or after the view's edge that is still in
+    /// phase with the text: `textOrigin` stepped back by whole pitches.
+    static func guideStart(textOrigin: CGFloat, pitch: CGFloat) -> CGFloat {
+        guard pitch > 0 else { return textOrigin }
+        return textOrigin - (textOrigin / pitch).rounded(.down) * pitch
+    }
+
     static func guideVerticalPitch(lineHeight: CGFloat, spacingMultiple: Double) -> CGFloat {
         max(18, lineHeight * CGFloat(spacingMultiple))
     }
@@ -1894,8 +1901,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             height: max(bounds.height, enclosingScrollView?.contentView.bounds.height ?? 0)
         )
 
-        let xs = stride(from: textContainerInset.width, through: covered.width, by: horizontalPitch)
-        let ys = stride(from: textContainerInset.height, through: covered.height, by: verticalPitch)
+        // Phase-locked to where the text starts, but run back to the view's
+        // own edge: starting at the inset left the band above the first line
+        // blank, which with the header hidden is the strip under the traffic
+        // lights, so the paper looked like it began partway down the window.
+        let xs = stride(from: Self.guideStart(textOrigin: textContainerInset.width, pitch: horizontalPitch),
+                        through: covered.width, by: horizontalPitch)
+        let ys = stride(from: Self.guideStart(textOrigin: textContainerInset.height, pitch: verticalPitch),
+                        through: covered.height, by: verticalPitch)
 
         switch guide {
         case .dots:

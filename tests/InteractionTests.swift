@@ -302,6 +302,16 @@ func runInteractionTests() {
         equal(ChecklistTextView.guideVerticalPitch(lineHeight: 18, spacingMultiple: 1.5), 27,
               "mid-range values scale linearly")
     }
+
+    suite("the guide pattern reaches the top edge, still in phase with the text") {
+        // Header hidden: 38pt inset, 18pt pitch. Rows at 2, 20, 38, ...: the
+        // band under the traffic lights is dotted, and 38 is still a row.
+        equal(ChecklistTextView.guideStart(textOrigin: 38, pitch: 18), 2, "steps back by whole pitches to the edge")
+        equal(ChecklistTextView.guideStart(textOrigin: 12, pitch: 18), 12, "an inset under one pitch is already the first row")
+        equal(ChecklistTextView.guideStart(textOrigin: 20, pitch: 22), 20, "horizontal: the default 20pt inset")
+        equal(ChecklistTextView.guideStart(textOrigin: 44, pitch: 22), 0, "an exact multiple lands on the edge")
+        equal(ChecklistTextView.guideStart(textOrigin: 38, pitch: 0), 38, "a zero pitch is left alone")
+    }
 }
 
 extension SwipeAccumulator.Outcome {
