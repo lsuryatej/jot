@@ -206,6 +206,10 @@ struct NoteCard: View, Equatable {
     /// The height a resize drag started from. Nil outside an active drag.
     @State private var dragStartHeight: CGFloat?
 
+    // Main actor explicitly: it reads the main-actor height cache. Newer
+    // SDKs make every View main-actor isolated, so this compiled locally;
+    // the release machine's older SDK does not, and the build failed there.
+    @MainActor
     init(
         notesManager: NotesManager,
         note: Note,

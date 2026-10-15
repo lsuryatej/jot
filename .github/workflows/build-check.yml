@@ -1,0 +1,28 @@
+name: Build check
+
+# Builds every pull request with the same runner and Xcode the release
+# workflow uses. A Mac with a newer Xcode (or a beta) can compile code the
+# release machine rejects: v1.6.0's first release run failed on an actor
+# isolation error that built cleanly locally. This catches that before merge.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Headless tests
+        run: ./test.sh
