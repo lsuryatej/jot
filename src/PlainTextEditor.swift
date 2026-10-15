@@ -3783,11 +3783,14 @@ extension ChecklistTextView {
                 fragments.append(layoutManager.extraLineFragmentRect)
             }
         }
+        // The caller's scale: it was ignored for the screen's, so on a 1x
+        // display the band snapped to whole points, up to half a point off
+        // the 2x edges the caller asked for.
         return Self.currentLineRect(
             lineFragments: fragments,
             containerOrigin: textContainerOrigin,
             containerWidth: textContainer.size.width,
-            scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            scale: scale
         )
     }
 

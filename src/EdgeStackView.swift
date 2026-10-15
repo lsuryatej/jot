@@ -20,7 +20,6 @@ struct EdgeStackView: View {
     /// Holds the visible cards still while one above them changes height.
     @State private var scrollAnchor = EdgeScrollAnchor()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,7 +73,7 @@ struct EdgeStackView: View {
                         // fade, untouched.
                         topFade: Self.topFadeHeight(
                             increasesContrast: settings.increasesContrast,
-                            reduceTransparency: reduceTransparency
+                            reduceTransparency: settings.reducesTransparency
                         )
                     ))
                 }
