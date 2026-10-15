@@ -924,8 +924,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.shortcutModifiers
         let key = event.charactersIgnoringModifiers?.lowercased()
+        // AppKit offers key equivalents to every view in the window, focused
+        // or not. Anything that edits this note's text must check that the
+        // note is what has the keyboard, or it reaches over the find bar or
+        // any other field (issue #18: Cmd+V in the find bar pasted into the
+        // note). No window: the headless tests, where the view is the editor.
+        let isFocusedEditor = window == nil || window?.firstResponder === self
 
-        if flags == [.command, .shift], key == "v" {
+        if flags == [.command, .shift], key == "v", isFocusedEditor {
             extractTextFromClipboardImage(nil)
             return true
         }
@@ -982,8 +988,16 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // mode, and if it is not consulted for key equivalents then the paste
         // override is never reached at all.
         if flags == [.command], key == "v" {
-            paste(nil)
-            return true
+            if isFocusedEditor {
+                paste(nil)
+                return true
+            }
+            // Another field has the keyboard. Hand it the paste through the
+            // responder chain rather than leaving it to the main menu, which
+            // is not consulted outside Dock mode.
+            if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) {
+                return true
+            }
         }
         // Cmd+C is claimed only for the case that would otherwise be missed:
         // the caret inside a code block, in a display mode with no main menu
@@ -994,11 +1008,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
            copyWholeCodeBlock() {
             return true
         }
-        if flags == [.command], key == "l" {
+        if flags == [.command], key == "l", isFocusedEditor {
             toggleChecklist(nil)
             return true
         }
-        if flags == [.command, .shift], key == "h" {
+        if flags == [.command, .shift], key == "h", isFocusedEditor {
             toggleHighlight(nil)
             return true
         }

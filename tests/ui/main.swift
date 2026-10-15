@@ -25,6 +25,7 @@ MainActor.assumeIsolated {
 
 runSettingsWindowTests()
 runHeaderDispatchTests()
+runFindBarPasteTests()
 runUndoAcrossNoteSwitchTests()
 runImageResizeTests()
 runPanelToggleTests()
