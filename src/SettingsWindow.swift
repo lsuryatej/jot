@@ -74,6 +74,12 @@ enum SettingsWindowLayout {
 /// The Settings window itself. Its only job beyond `NSWindow` is closing on
 /// the two keys people expect a settings window to close on.
 final class SettingsWindow: NSWindow {
+    /// However the window comes forward, nothing starts focused.
+    override func becomeKey() {
+        super.becomeKey()
+        clearInitialFocus(in: self)
+    }
+
     /// The modifiers that make a chord distinct. Caps Lock, the numeric pad
     /// and the function key are left out, so Caps Lock never stops ⌘W.
     private static let chordModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
@@ -138,6 +144,13 @@ final class SettingsPaneHostingController: NSHostingController<AnyView> {
     let category: SettingsCategory
     var idealSizeMayHaveChanged: (() -> Void)?
     private var notifyScheduled = false
+
+    /// SwiftUI gives a Form's first control default focus once the pane is
+    /// actually on screen, which is later than the tab switch; clear it here.
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        clearInitialFocus(in: view.window)
+    }
 
     init(category: SettingsCategory, settings: SettingsManager, notesManager: NotesManager) {
         self.category = category
@@ -260,7 +273,7 @@ final class SettingsTabViewController: NSTabViewController {
         // system's own settings windows. Left to AppKit, the pane's first
         // control (General's Mode radio) took focus on some switches and not
         // others, so a focus ring faded in on a control nobody had touched.
-        view.window?.makeFirstResponder(nil)
+        clearInitialFocus(in: view.window)
         fitToSelectedPane(animated: view.window?.isVisible == true)
         paneDidChange?(category)
     }
@@ -362,7 +375,26 @@ final class SettingsWindowController: NSWindowController {
         window?.makeKeyAndOrderFront(nil)
         // Ordering front hands focus to the initial first responder; clear
         // it for the same reason as on a pane switch.
-        window?.makeFirstResponder(nil)
+        clearInitialFocus(in: window)
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// No control holds focus until the person presses Tab. Cleared now, and
+/// again a turn later: SwiftUI hands a newly shown Form's first control
+/// default focus asynchronously, after AppKit's own pass, so clearing only
+/// once left the ring on General's Mode radio on some opens and not others.
+@MainActor
+func clearInitialFocus(in window: NSWindow?) {
+    guard let window else { return }
+    window.makeFirstResponder(nil)
+    DispatchQueue.main.async { [weak window] in
+        guard let window else { return }
+        // Only undo focus nobody asked for: leave it if the person has
+        // already tabbed or clicked into a control.
+        if window.firstResponder !== window, NSApp.currentEvent?.type != .keyDown,
+           NSApp.currentEvent?.type != .leftMouseDown {
+            window.makeFirstResponder(nil)
+        }
     }
 }
