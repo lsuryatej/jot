@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en" data-paper="cream">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jot · a scratchpad for your Mac</title>
+<meta name="description" content="A plain-text scratchpad for macOS that does the math in the margin. Option+A from anywhere. Free, open source, about 1 MB.">
+<meta property="og:title" content="Jot · a scratchpad for your Mac">
+<meta property="og:description" content="Plain text, answers in the margin. Option+A from anywhere. Free, open source, about 1 MB.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://lsuryatej.github.io/jot/">
+<meta name="theme-color" content="#F7F0E1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131315" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23F7F0E1'/%3E%3Ctext x='16' y='23' font-family='ui-monospace,Menlo,monospace' font-size='20' font-weight='700' text-anchor='middle' fill='%232E271C'%3Ej%3C/text%3E%3C/svg%3E">
+<script>
+  // Paper before first paint, so a dark-mode visitor never sees cream flash.
+  (function () {
+    var paper = null;
+    try { paper = localStorage.getItem("jot-paper"); } catch (e) {}
+    if (paper !== "cream" && paper !== "white" && paper !== "dark") {
+      paper = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "cream";
+    }
+    document.documentElement.setAttribute("data-paper", paper);
+  })();
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="chrome">
+  <span class="chrome-title">jot</span>
+  <span class="chrome-spacer"></span>
+  <button class="chrome-button" id="paper-button" type="button" aria-label="Change paper">paper: <span id="paper-name">cream</span> <span aria-hidden="true">⌄</span></button>
+  <a class="chrome-button" href="https://github.com/lsuryatej/jot">github <span aria-hidden="true">↗</span></a>
+</header>
+
+<main class="note" id="note">
+
+  <h1 class="l h1"><span class="mk" aria-hidden="true"># </span>jot</h1>
+  <p class="l">a scratchpad for your mac that does the math in the margin.</p>
+  <p class="l">press <kbd>⌥A</kbd> anywhere to open it. press it again to put it away.</p>
+  <p class="l blank"></p>
+
+  <p class="l"><a class="download" id="download" href="https://github.com/lsuryatej/jot/releases/latest/download/Jot.zip">→ download for mac</a><span class="r" id="version-meta">about 1 MB</span></p>
+  <p class="l"><span class="indent"></span>or <code id="brew">brew install lsuryatej/jot/jot</code><button class="r copy" id="copy-brew" type="button">copy</button></p>
+  <p class="l muted"><span class="indent"></span>macOS 14 or later · free · open source</p>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>try it, it's a real scratchpad</h2>
+  <p class="l muted">type below. answers show up on the right, same as the app.</p>
+  <div class="pad" id="pad">
+    <textarea id="scratch" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-label="Scratchpad. Calculations are answered in the margin." aria-describedby="pad-hint">rent = 1,800
+groceries = 240
+(rent + groceries) / 3
+5 apples
+20% of 85
+5 km to miles
+50 usd to inr</textarea>
+    <div class="pad-results" id="pad-results" aria-live="polite"></div>
+  </div>
+  <p class="l muted" id="pad-hint">variables, %, units and currency. a line with no math in it stays a line.</p>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>what's in it</h2>
+  <ul class="bullets">
+    <li class="l"><span class="mk" aria-hidden="true">- </span>math that works. variables, percentages, units, currency<span class="r">6000</span></li>
+    <li class="l"><span class="mk" aria-hidden="true">- </span>checklists. type <code>list</code> on the first line and every line becomes one</li>
+    <li class="l"><span class="mk" aria-hidden="true">- </span><code>5m timer</code> or <code>pomodoro 25/5</code>, with confetti when it's done<span class="r">4:59</span></li>
+    <li class="l"><span class="mk" aria-hidden="true">- </span><code>remind tomorrow 9am</code> sends a real macOS notification<span class="r">9:00 am</span></li>
+    <li class="l"><span class="mk" aria-hidden="true">- </span>paste images. <kbd>⇧⌘V</kbd> reads the text out of a screenshot<span class="r">offline</span></li>
+    <li class="l"><span class="mk" aria-hidden="true">- </span><b>**bold**</b>, <mark>==highlights==</mark>, headings, and long links that shrink to their domain</li>
+    <li class="l"><span class="mk" aria-hidden="true">- </span><kbd>⇧⌘F</kbd> searches every note at once</li>
+    <li class="l"><span class="mk" aria-hidden="true">- </span>sync across devices. not yet, honestly<span class="r">someday</span></li>
+  </ul>
+  <p class="l muted">it's all plain text on disk. a note still reads fine in <code>cat</code>, Obsidian or GitHub.</p>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>today</h2>
+  <ul class="todos">
+    <li><label class="l todo"><input type="checkbox"><span class="box" aria-hidden="true"></span><span class="t">download jot</span></label></li>
+    <li><label class="l todo"><input type="checkbox"><span class="box" aria-hidden="true"></span><span class="t">press <kbd>⌥A</kbd></span></label></li>
+    <li><label class="l todo"><input type="checkbox"><span class="box" aria-hidden="true"></span><span class="t">write the thing down before you forget it</span></label></li>
+  </ul>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>five ways to keep it around</h2>
+  <div class="modes">
+    <dl class="mode-list">
+      <div class="l"><dt>floating</dt><dd>on top of everything, no dock icon</dd></div>
+      <div class="l"><dt>menu bar</dt><dd>a window behind its menu bar icon</dd></div>
+      <div class="l"><dt>dropdown</dt><dd>drops down from the menu bar</dd></div>
+      <div class="l"><dt>dock</dt><dd>a normal app window</dd></div>
+      <div class="l"><dt>screen edge</dt><dd>a sidebar you push your cursor into</dd></div>
+    </dl>
+    <figure class="shot">
+      <img src="https://raw.githubusercontent.com/lsuryatej/jot/main/docs/screenshots/screen-edge.png" width="377" height="967" loading="lazy" alt="Jot docked as a sidebar on the right edge of the screen, showing a stack of notes: a checklist, a pizza dough calculation with answers in the margin, and a currency conversion.">
+      <figcaption>screen edge, every note as a card</figcaption>
+    </figure>
+  </div>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>paper</h2>
+  <p class="l">frosted, glass, solid, white, cream or true dark, with dots or a grid.</p>
+  <p class="l">this page has three of them:
+    <button class="paper-pick" data-paper="cream" type="button">cream</button>
+    <button class="paper-pick" data-paper="white" type="button">white</button>
+    <button class="paper-pick" data-paper="dark" type="button">true dark</button>
+  </p>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>private by default</h2>
+  <p class="l">no account. no analytics. no crash reports.</p>
+  <p class="l">your notes stay on your mac, as plain text.</p>
+  <p class="l">one anonymous update check a day, which you can turn off.</p>
+  <p class="l">live currency rates stay off until you turn them on.</p>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>what's new<span class="r" id="news-meta"></span></h2>
+  <div id="news">
+    <p class="l muted">loading the latest release notes from github…</p>
+  </div>
+  <p class="l"><a href="https://github.com/lsuryatej/jot/releases" id="news-link">every release on github →</a></p>
+  <p class="l blank"></p>
+
+  <h2 class="l h2"><span class="mk" aria-hidden="true">## </span>about</h2>
+  <p class="l">made by surya, as a free, open-source app (MIT).</p>
+  <p class="l">swift and appkit, no dependencies, about a 1 MB download.</p>
+  <p class="l"><a href="https://github.com/lsuryatej/jot">source</a> · <a href="https://github.com/lsuryatej/jot/issues/new">report a bug</a> · <a href="https://github.com/lsuryatej/jot#readme">full docs</a></p>
+  <p class="l end"><span class="caret" aria-hidden="true"></span></p>
+
+</main>
+
+<script type="module" src="page.js"></script>
+</body>
+</html>
