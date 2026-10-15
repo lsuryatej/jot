@@ -2,14 +2,44 @@ import { evaluateNote } from "./math.js?v=30213c1f40";
 
 const REPO = "lsuryatej/jot";
 
-// The tip jar. Empty keeps the line hidden; set it to a Buy Me a Coffee,
-// Ko-fi or GitHub Sponsors link and the "buy me a coffee" line appears.
-const TIP_URL = "";
+// Tips. UPI (India) is always shown inside "buy me a coffee"; set KOFI_URL
+// and an "anywhere else: ko-fi" line appears under it for everyone else.
+const KOFI_URL = "";
 
-if (TIP_URL) {
-  document.getElementById("tip-link").href = TIP_URL;
-  document.getElementById("tip-line").hidden = false;
+if (KOFI_URL) {
+  document.getElementById("kofi-link").href = KOFI_URL;
+  document.getElementById("kofi-line").hidden = false;
 }
+
+// The opening lines' "buy me a coffee" opens the section and goes to it.
+const coffee = document.getElementById("coffee");
+document.querySelectorAll("[data-open-coffee]").forEach((link) => link.addEventListener("click", (event) => {
+  event.preventDefault();
+  coffee.open = true;
+  coffee.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+}));
+
+// Copies a code's text; on failure selects it so Cmd+C works.
+function copyButton(buttonId, codeId) {
+  const button = document.getElementById(buttonId);
+  const code = document.getElementById(codeId);
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(code.textContent);
+      button.textContent = "copied";
+      button.dataset.done = "";
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      button.textContent = "⌘C";
+    }
+    setTimeout(() => { button.textContent = "copy"; delete button.dataset.done; }, 1800);
+  });
+}
+copyButton("copy-upi", "upi-id");
 
 // Storage can be unavailable (private windows, blocked site data), so every
 // read and write is optional: the page works the same without it.
@@ -79,24 +109,7 @@ picks.forEach((pick) => pick.addEventListener("click", () => setPaper(pick.datas
 
 // ---- Copy the brew command --------------------------------------------------
 
-const copyButton = document.getElementById("copy-brew");
-copyButton.addEventListener("click", async () => {
-  const command = document.getElementById("brew").textContent;
-  try {
-    await navigator.clipboard.writeText(command);
-    copyButton.textContent = "copied";
-    copyButton.dataset.done = "";
-  } catch {
-    // No clipboard access: select the text so ⌘C works.
-    const range = document.createRange();
-    range.selectNodeContents(document.getElementById("brew"));
-    const selection = getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    copyButton.textContent = "⌘C";
-  }
-  setTimeout(() => { copyButton.textContent = "copy"; delete copyButton.dataset.done; }, 1800);
-});
+copyButton("copy-brew", "brew");
 
 // ---- The latest release, live from GitHub ----------------------------------
 // The download link never changes (releases/latest/download/Jot.zip). The

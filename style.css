@@ -50,6 +50,8 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+/* `.l` sets display, which would otherwise beat the hidden attribute. */
+[hidden] { display: none !important; }
 
 html {
   background: var(--paper);
@@ -335,6 +337,40 @@ b { font-weight: 700; }
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
 .steps .l { padding-left: 3ch; text-indent: -3ch; counter-increment: step; }
 .steps .l::before { content: counter(step) ". "; color: var(--warn); font-weight: 700; }
+
+/* Buy me a coffee: a details block, closed until asked for. */
+.coffee summary { list-style: none; cursor: pointer; }
+.coffee summary::-webkit-details-marker { display: none; }
+.coffee-button {
+  display: inline-block;
+  height: 24px;
+  margin: 2px 0;
+  padding: 0 10px;
+  line-height: 22px;
+  border: 1px solid var(--warn);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  color: var(--warn);
+  font-weight: 700;
+  background: var(--warn-wash);
+}
+.coffee summary:hover .coffee-button { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.coffee[open] .coffee-button::after { content: " ×"; }
+.coffee summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 6px; }
+.coffee-body { padding: var(--lh) 0 0 2ch; }
+.upi-qr {
+  display: block;
+  width: 168px;
+  height: 168px;
+  margin: 0 0 calc(var(--lh) - 8px);
+  padding: 8px;
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid var(--rule);
+  image-rendering: pixelated;
+}
+/* The upi:// link only does anything on a phone with a UPI app. */
+@media (min-width: 721px) and (hover: hover) { .hide-desktop { display: none; } }
 
 /* Paper picker. */
 .paper-pick {
