@@ -93,7 +93,9 @@ making more. Pasting multi-line text splits it into items, one per line.
 Outside a list note, any `- [ ]` line is a checkbox too, and **Cmd+L** (or the
 header's Checklist button) turns the current line or a whole selection into
 items, then checks and unchecks them. Click a checkbox to toggle it,
-Tab/Shift-Tab nest items, completed items dim and strike through. The file
+Tab/Shift-Tab nest items, completed items dim and strike through. To
+rearrange, drag an item by its checkbox, bullet or number, or press
+**Ctrl+Cmd+↑/↓** with the caret in it; nested items move with their parent. The file
 stays plain markdown (`- [ ]` / `- [x]`), so it renders as a real task list
 elsewhere.
 
@@ -107,7 +109,8 @@ counts: `*` and `+` are already spent on emphasis and math.
 anywhere in any note, and it's a list item. Return continues it, `2.`, then
 `3.`, or `b.`, or `iii.`, case preserved, and Return on an empty item ends
 the list. Markers render bold beside their text. The file keeps exactly what
-you typed; nothing is renumbered behind your back.
+you typed; nothing is renumbered behind your back. The one exception is
+moving an item: a list numbered in sequence is renumbered to stay in order.
 
 ![Numbered, lettered, and roman-numeral lists in the same note](docs/screenshots/ordered-lists.png)
 
@@ -257,7 +260,7 @@ a two-finger swipe; moving past the last note starts a new one. With the
 header hidden, a brief badge names the note you landed on. Blank notes are
 tidied away as you move between notes.
 
-**Reorder.** **Ctrl+Cmd+↑** and **Ctrl+Cmd+↓** walk the open note up or down
+**Reorder.** **Cmd+Option+↑** and **Cmd+Option+↓** walk the open note up or down
 the list one slot at a time. In the Screen Edge sidebar, hover a card and
 drag it by the grip in its corner; the stack parts around the drag and the
 order you leave it in is the saved order.
@@ -266,8 +269,9 @@ order you leave it in is the saved order.
 with **Cmd+G** / **Shift+Cmd+G** for next and previous and **Cmd+E** to use
 the selection.
 
-**Search every note.** **Shift+Cmd+F** searches all your notes at once and
-jumps straight to the matching line. Esc closes it.
+**Search every note.** **Shift+Cmd+F** searches all your notes at once, with
+the match in bold. Up and Down move through the results, Return jumps to the
+selected line, and Esc closes it.
 
 **Share.** The share button in the header sends the note's text to any macOS
 share target: Mail, Messages, AirDrop, Notes, and so on.
@@ -298,9 +302,9 @@ Five modes, switchable live in Settings → General:
 **Screen Edge** reveals itself when you rest the cursor against that edge or
 click the bar that sits there, and slides away when the pointer leaves. A
 hover reveal never takes the keyboard from the app you're in; click into a
-card to type. Each card has its own delete button, a grip to reorder it, and
-a handle to resize it (double-click the handle to fit the card to its
-content); a button at the top adds a note. The sidebar's width and side are in
+card to type. Each card has its own delete button (Cmd+Z brings the note
+back), a grip to reorder it, and a handle to resize it (double-click the
+handle to fit the card to its content); a button at the top adds a note. The sidebar's width and side are in
 Settings.
 
 ![The Screen Edge sidebar, holding a checklist, a math note, and a currency conversion as separate cards](docs/screenshots/screen-edge.png)
@@ -319,6 +323,11 @@ held to readable contrast on every paper.
 
 **Guides.** Optional writing guides under the text, dot grid or square
 grid, drawn to follow your font and line spacing.
+
+**Highlight current line.** Off by default. Turn it on in Settings →
+Appearance and a faint band sits behind the line the caret is on, every
+wrapped part of it, so the caret is easy to find in a long paragraph. It
+hides while you have a selection.
 
 **Header and footer.** The header shows "Note N of M", the Checklist and
 Highlight buttons, this note's font and size, and Share. The footer shows the
@@ -343,14 +352,18 @@ becomes a theme for the whole app, live as you type:
 theme
 paper: #223038
 ink: #e8e4d8
+accent: #7cc4ff
 size: 14
 guides: dots
 ```
 
 One `key: value` pair per line: `paper` (a hex; the chrome, cards and ink
 derive from it), `tint` (a named wash for the translucent papers instead),
-`ink`, `font`, `size`, `spacing` (line height), `tracking` (letter spacing),
-and `guides` (`dots`, `grid`, or `none`). Anything unrecognised is ignored
+`ink`, `accent` (a hex for math results, checked items and links, in place of
+your system accent), `font`, `size`, `spacing` (line height), `tracking`
+(letter spacing), and `guides` (`dots`, `grid`, or `none`). An accent too
+faint to read on the paper is darkened (or lightened, on a dark paper) until
+it reaches 4.5:1, 7:1 under Increase Contrast, keeping its hue. Anything unrecognised is ignored
 rather than rejected, so prose can sit among the settings as commentary. The
 theme exists only while its note does: edit it like any other text, delete
 it and the app falls back to your Settings. When several notes are themes,
@@ -371,11 +384,14 @@ Settings → Shortcuts lists these too.
 | **Option+A** (configurable) | Show or hide Jot from anywhere on macOS |
 | **Cmd+N** | New note |
 | **Cmd+Option+→** / **Cmd+Option+←** | Next / previous note |
-| **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** | Move the current note up / down the list |
+| **Cmd+Option+↑** / **Cmd+Option+↓** | Move the current note up / down the list |
+| **Shift+Cmd+Delete** | Delete the current note (Cmd+Z brings it back) |
 | **Cmd+W** | Close the frontmost window: hides the note, or closes Settings |
 | **Cmd+L** | Toggle the checkbox on the current line, or every line selected |
 | **Tab** / **Shift+Tab** | Nest / un-nest a checklist item |
+| **Ctrl+Cmd+↑** / **Ctrl+Cmd+↓** (caret in a list item) | Move the item up / down, its nested items with it |
 | **Cmd+B** / **Cmd+I** | Bold / italicise the selection or the word at the caret, again to remove |
+| **Cmd+=** (or **Cmd++**) / **Cmd+-** / **Cmd+0** | Bigger / smaller / actual text size: the current note's own size, or every card's in Screen Edge |
 | **Shift+Cmd+H** | Highlight the selection, or start one at the caret, again to remove |
 | **Shift+Cmd+V** | Read the clipboard image as text (OCR) instead of pasting it |
 | **Cmd+C** (nothing selected, in a `code` note) | Copy the whole code block |
@@ -384,6 +400,8 @@ Settings → Shortcuts lists these too.
 | **Cmd+E** | Use the selection for find |
 | **Shift+Cmd+F** | Search every note |
 | **Cmd+/** | Toggle the header and footer together |
+| **Ctrl+Cmd+F** | Enter or exit full screen (Dock and Menu Bar modes) |
+| **Cmd+M** | Minimize (Dock mode) |
 | **Cmd+,** | Settings |
 | **Cmd+H** | Hide Jot |
 | **Cmd+Q** | Quit |
@@ -393,6 +411,11 @@ Settings → Shortcuts lists these too.
 
 Cut, Copy, Paste, Select All, Undo and Redo are the standard
 Cmd+X/C/V/A/Z/Shift+Cmd+Z you'd expect anywhere on macOS.
+
+The menu bar only shows in Dock mode. Everywhere else, right-click in a note
+for Bold, Italic, Bigger, Smaller, Move Note Up/Down and Delete Note, and
+right-click the menu bar icon for New Note, Delete Note, Check for Updates,
+Settings and Quit.
 
 ## Accessibility
 

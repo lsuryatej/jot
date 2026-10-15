@@ -162,45 +162,6 @@ func renderBitmap(_ view: NSView) -> (rep: NSBitmapImageRep, scaleX: CGFloat, sc
     return (rep, CGFloat(rep.pixelsWide) / view.bounds.width, CGFloat(rep.pixelsHigh) / view.bounds.height)
 }
 
-/// Measures where the settings sidebar actually ends, by finding the vertical
-/// `Divider()` between the sidebar and the pane in the rendered pixels.
-///
-/// This is deliberately a pixel measurement rather than a read of the declared
-/// `.frame(width: 172)`: the whole point is to catch the case where SwiftUI
-/// declares one width and lays out another because a pane's intrinsic content
-/// overflows the window and squeezes the sidebar. `yFromTop` should sit in the
-/// empty region below the last sidebar row, so nothing but the two backgrounds
-/// and the divider is on that scanline.
-@MainActor
-func measuredSidebarWidth(_ view: NSView, yFromTop: CGFloat) -> CGFloat? {
-    guard let (rep, scaleX, scaleY) = renderBitmap(view) else { return nil }
-    let row = Int((yFromTop * scaleY).rounded())
-    guard row >= 0, row < rep.pixelsHigh else { return nil }
-
-    func luminance(_ x: Int) -> CGFloat? {
-        guard let color = rep.colorAt(x: x, y: row)?.usingColorSpace(.deviceRGB) else { return nil }
-        return 0.299 * color.redComponent + 0.587 * color.greenComponent + 0.114 * color.blueComponent
-    }
-
-    // Scan a generous window either side of the declared sidebar width and take
-    // the sharpest column-to-column contrast step as the divider.
-    let limit = min(rep.pixelsWide - 1, Int(320 * scaleX))
-    var bestX = 0
-    var bestDelta: CGFloat = 0
-    var previous = luminance(0)
-    for x in 1...max(1, limit) {
-        guard let current = luminance(x), let before = previous else { previous = luminance(x); continue }
-        let delta = abs(current - before)
-        if delta > bestDelta {
-            bestDelta = delta
-            bestX = x
-        }
-        previous = current
-    }
-    guard bestDelta > 0.02 else { return nil }
-    return CGFloat(bestX) / scaleX
-}
-
 // MARK: - Key window
 
 /// Set once the machine has refused to hand this process key status at all —

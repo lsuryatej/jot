@@ -20,9 +20,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private var panel: FloatingPanel!
     private var statusItem: NSStatusItem?
-    private var preferencesWindow: NSWindow?
-    private var settingsCloseMonitor: Any?
-    private var edgeTrigger: EdgeTriggerWindow?
+    private var settingsWindowController: SettingsWindowController?
+    /// One strip per open stretch of the chosen edge, across every display.
+    /// See `EdgeTriggerGeometry.strips`.
+    private var edgeTriggers: [EdgeTriggerWindow] = []
+    /// The display the edge sidebar was last revealed on, by its stable
+    /// number: `NSScreen` objects are replaced when the configuration
+    /// changes, the number is not.
+    private var edgeDisplayID: CGDirectDisplayID?
+    /// The screens changed while the sidebar was sliding in; it lands
+    /// against the old geometry and is re-docked on arrival.
+    private var edgeNeedsRedock = false
     private var edgeAutoHideTimer: Timer?
     /// Which edge slide is in charge; stale completions check it and stand
     /// down. See `EdgeRevealState`.
@@ -57,7 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.mainMenu = MainMenu.build(
             target: self,
             preferencesAction: #selector(showPreferences),
+            checkForUpdatesAction: #selector(updateFromMenu),
             newNoteAction: #selector(newNoteFromMenu),
+            deleteNoteAction: #selector(deleteNoteFromMenu(_:)),
             globalSearchAction: #selector(requestGlobalSearch),
             moveNoteUpAction: #selector(moveNoteUp(_:)),
             moveNoteDownAction: #selector(moveNoteDown(_:)),
@@ -65,11 +75,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             previousNoteAction: #selector(previousNote(_:)),
             toggleChromeAction: #selector(toggleChromeFromMenu),
             toggleChecklistAction: #selector(toggleChecklistFromMenu),
-            toggleHighlightAction: #selector(toggleHighlightFromMenu)
+            toggleHighlightAction: #selector(toggleHighlightFromMenu),
+            textSizeAction: #selector(textSizeFromMenu(_:)),
+            showHelpAction: #selector(showHelp)
         )
+        if let mainMenu = NSApp.mainMenu {
+            MainMenu.registerSystemMenus(of: mainMenu, with: NSApp)
+        }
 
         panel = FloatingPanel(rootView: contentView())
         panel.delegate = self
+        panel.undoRouter = UndoRouter(notes: notesManager.noteUndoManager)
+        EditorContextMenu.isAvailable = { [weak self] command, noteID in
+            self?.editorCommandAvailable(command, noteID: noteID) ?? false
+        }
         if let saved = settings.windowedFrame {
             panel.setFrame(saved, display: false)
         }
@@ -103,8 +122,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func rememberWindowedFrame() {
         // Only windowed modes have a size worth keeping; the docked frame is
-        // derived from the screen.
-        guard !settings.displayMode.isEdgeDocked, panel?.isVisible == true else { return }
+        // derived from the screen, and a full-screen frame is the screen's,
+        // not one the user chose (it would come back as a screen-sized window
+        // after the next relaunch).
+        guard !settings.displayMode.isEdgeDocked, panel?.isVisible == true,
+              panel?.styleMask.contains(.fullScreen) == false
+        else { return }
         settings.windowedFrame = panel.frame
     }
 
@@ -195,6 +218,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             .store(in: &cancellables)
 
+        // Displays added or removed, a resolution change, the Dock or menu
+        // bar moving or resizing: every one moves the edges the strips and
+        // the docked sidebar are measured from.
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.settings.displayMode.isEdgeDocked else { return }
+                self.installEdgeTrigger()
+                self.redockAfterScreenChange()
+            }
+            .store(in: &cancellables)
+
         settings.$fetchesLiveCurrencyRates
             .receive(on: RunLoop.main)
             .sink { fetchesLive in
@@ -244,12 +279,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             .sink { [weak self] _ in self?.openPreferences(pane: .privacy) }
             .store(in: &cancellables)
 
+        // The object is a note id when a Screen Edge card's context menu
+        // asked; the keyboard's request has none and means the current note.
         NotificationCenter.default.publisher(for: .jotRequestMoveNoteUp)
-            .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: -1) }
+            .sink { [weak self] note in self?.moveNoteIfVisible(id: note.object as? UUID, by: -1) }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: .jotRequestMoveNoteDown)
-            .sink { [weak self] _ in self?.moveCurrentNoteIfVisible(by: +1) }
+            .sink { [weak self] note in self?.moveNoteIfVisible(id: note.object as? UUID, by: +1) }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .jotRequestDeleteNote)
+            .sink { [weak self] note in self?.deleteNote(id: note.object as? UUID) }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .jotRequestTextSize)
+            .sink { [weak self] note in
+                guard let raw = note.object as? String, let command = TextSizeCommand(rawValue: raw) else { return }
+                self?.applyTextSize(command)
+            }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: .jotRequestNextNote)
@@ -299,8 +347,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// A move aimed at a note nobody can see would read as the shortcut doing
     /// nothing at best, and as cards shuffling in the dark at worst.
     private func moveCurrentNoteIfVisible(by delta: Int) {
-        guard isInterfaceVisible else { return }
-        notesManager.moveCurrentNote(by: delta)
+        moveNoteIfVisible(id: nil, by: delta)
+    }
+
+    private func moveNoteIfVisible(id: UUID?, by delta: Int) {
+        guard isInterfaceVisible, let index = noteIndex(for: id) else { return }
+        notesManager.moveNote(at: index, by: delta)
+    }
+
+    /// A named note's position, or the current note's when none is named.
+    private func noteIndex(for id: UUID?) -> Int? {
+        guard let id else {
+            return notesManager.notes.indices.contains(notesManager.currentIndex) ? notesManager.currentIndex : nil
+        }
+        return notesManager.notes.firstIndex { $0.id == id }
+    }
+
+    /// What the editor's context menu shows; it hides what can't act.
+    private func editorCommandAvailable(_ command: EditorCommand, noteID: UUID?) -> Bool {
+        switch command {
+        case .bigger: return textSizeCanApply(.bigger)
+        case .smaller: return textSizeCanApply(.smaller)
+        case .deleteNote: return deletionIndex(for: noteID) != nil
+        case .moveUp, .moveDown:
+            guard isInterfaceVisible, let index = noteIndex(for: noteID) else { return false }
+            return command == .moveUp ? index > 0 : index < notesManager.notes.count - 1
+        }
+    }
+
+    // MARK: - Deleting
+
+    /// File › Delete Note.
+    @objc func deleteNoteFromMenu(_ sender: Any?) {
+        deleteNote(id: nil)
+    }
+
+    /// Which note a Delete Note means: the one named (a Screen Edge card's
+    /// own shortcut or context menu), else the focused card in Screen Edge
+    /// mode, else the current note. Nil when there is nothing it can safely
+    /// mean, such as the sidebar with no card focused: guessing there would
+    /// delete a note the user isn't looking at.
+    private func deletionIndex(for id: UUID?) -> Int? {
+        guard isInterfaceVisible else { return nil }
+        let target = id ?? (settings.displayMode.isEdgeDocked ? focusedCardNoteID : nil)
+        let index: Int?
+        if let target {
+            index = notesManager.notes.firstIndex { $0.id == target }
+        } else {
+            index = settings.displayMode.isEdgeDocked ? nil : notesManager.currentIndex
+        }
+        guard let index, notesManager.canDeleteNote(at: index) else { return nil }
+        return index
+    }
+
+    private var focusedCardNoteID: UUID? {
+        (panel?.firstResponder as? ChecklistTextView)?.noteID
+    }
+
+    /// Undoable through Edit › Undo Delete Note; see `NotesManager.deleteNote`.
+    private func deleteNote(id: UUID?) {
+        guard let index = deletionIndex(for: id) else { return }
+        notesManager.deleteNote(at: index)
+    }
+
+    // MARK: - Text size
+
+    /// Format › Font › Bigger, Smaller, Actual Size.
+    @objc func textSizeFromMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let command = TextSizeCommand(rawValue: raw)
+        else { return }
+        applyTextSize(command)
+    }
+
+    /// The single-note editor shows the current note's own size when it has
+    /// one, so that is what changes there, the same value the header's size
+    /// slider sets. Screen Edge cards all draw at the global size, so there
+    /// it is the global size that changes. A theme note that sets a size
+    /// overrides both, so nothing applies while one does.
+    private func textSizeCanApply(_ command: TextSizeCommand) -> Bool {
+        guard isInterfaceVisible, settings.themeOverride?.fontSize == nil else { return false }
+        if settings.displayMode.isEdgeDocked {
+            let global = settings.noteFontSize
+            return command.canApply(
+                to: global == SettingsManager.defaultFontSize ? nil : global,
+                inherited: SettingsManager.defaultFontSize
+            )
+        }
+        return command.canApply(to: notesManager.currentFontSize, inherited: settings.noteFontSize)
+    }
+
+    private func applyTextSize(_ command: TextSizeCommand) {
+        guard textSizeCanApply(command) else { return }
+        if settings.displayMode.isEdgeDocked {
+            settings.noteFontSize = command.resized(settings.noteFontSize, inherited: SettingsManager.defaultFontSize)
+                ?? SettingsManager.defaultFontSize
+        } else {
+            notesManager.currentFontSize = command.resized(
+                notesManager.currentFontSize,
+                inherited: settings.noteFontSize
+            )
+        }
     }
 
     // MARK: - Switching
@@ -340,18 +487,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     /// Greys out the move items at the ends of the list, or whenever the panel
-    /// is hidden, instead of letting them click into nothing. Every other item
-    /// targeted here was always enabled and stays that way.
+    /// is hidden, instead of letting them click into nothing, and retitles the
+    /// items whose wording follows state. Every other item targeted here is
+    /// always enabled.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(toggleChromeFromMenu):
+            menuItem.title = MainMenu.chromeToggleTitle(
+                showsHeader: settings.showsHeader,
+                showsFooter: settings.showsFooter
+            )
+            // The edge stack has no header or footer to show or hide.
+            return !settings.displayMode.isEdgeDocked
+        case #selector(updateFromMenu):
+            let state = currentUpdateItemState
+            menuItem.title = state.title
+            return state.isEnabled
+        case #selector(deleteNoteFromMenu(_:)):
+            return deletionIndex(for: nil) != nil
+        case #selector(textSizeFromMenu(_:)):
+            guard let raw = menuItem.representedObject as? String,
+                  let command = TextSizeCommand(rawValue: raw)
+            else { return false }
+            return textSizeCanApply(command)
         case #selector(moveNoteUp(_:)):
             return isInterfaceVisible && notesManager.currentIndex > 0
         case #selector(moveNoteDown(_:)):
             return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+        // The same answers the header chevrons, swipes and side buttons use.
+        // Next stays enabled at the last note because it starts a new one
+        // there, exactly as a swipe always has; only a blank last note is the
+        // end of the line.
         case #selector(previousNote(_:)):
-            return isInterfaceVisible && notesManager.currentIndex > 0
+            return isInterfaceVisible && notesManager.canGoToPreviousNote
         case #selector(nextNote(_:)):
-            return isInterfaceVisible && notesManager.currentIndex < notesManager.notes.count - 1
+            return isInterfaceVisible && notesManager.canGoToNextNote
         default:
             return true
         }
@@ -380,8 +550,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if mode.isEdgeDocked {
             installEdgeTrigger()
         } else {
-            edgeTrigger?.orderOut(nil)
-            edgeTrigger = nil
+            edgeTriggers.forEach { $0.orderOut(nil) }
+            edgeTriggers = []
             restoreWindowedFrame()
         }
 
@@ -480,9 +650,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     // MARK: - Screen edge
 
+    /// Puts a strip on every open stretch of the chosen edge, reusing the
+    /// windows already there. Called again whenever the edge or the screens
+    /// change.
     private func installEdgeTrigger() {
-        if edgeTrigger == nil {
-            edgeTrigger = EdgeTriggerWindow { [weak self] activating in
+        let edge = settings.screenEdge
+        var strips = EdgeTriggerGeometry.strips(
+            screens: NSScreen.screens.map { (frame: $0.frame, visible: $0.visibleFrame) },
+            edge: edge
+        )
+        if strips.isEmpty, let screen = NSScreen.main {
+            // Cannot happen with real displays (one of them is outermost),
+            // but never leave the sidebar with no way in.
+            strips = EdgeTriggerGeometry.strips(
+                screens: [(frame: screen.frame, visible: screen.visibleFrame)], edge: edge
+            )
+        }
+        while edgeTriggers.count < strips.count {
+            edgeTriggers.append(EdgeTriggerWindow { [weak self] activating in
                 guard let self else { return }
                 if self.isEdgeRevealedOrArriving {
                     // Already out: a click on the bar should still hand it focus.
@@ -490,13 +675,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     return
                 }
                 self.revealFromEdge(activating: activating)
-            }
+            })
         }
-        edgeTrigger?.position(on: settings.screenEdge, screen: NSScreen.main)
-        // orderFrontRegardless: the strip has to appear without activating the
-        // app, or pushing the cursor at the edge would steal focus from
-        // whatever the user is actually working in.
-        edgeTrigger?.orderFrontRegardless()
+        while edgeTriggers.count > strips.count {
+            edgeTriggers.removeLast().orderOut(nil)
+        }
+        for (window, strip) in zip(edgeTriggers, strips) {
+            window.position(at: strip, edge: edge)
+            // orderFrontRegardless: the strip has to appear without activating
+            // the app, or pushing the cursor at the edge would steal focus
+            // from whatever the user is actually working in.
+            window.orderFrontRegardless()
+        }
+    }
+
+    /// The display under the pointer: where the user is, for a reveal from
+    /// the strip, the hot key or the menu bar alike.
+    private func screenUnderPointer() -> NSScreen? {
+        let screens = NSScreen.screens
+        let index = EdgeTriggerGeometry.screenIndex(
+            containing: NSEvent.mouseLocation, frames: screens.map(\.frame)
+        )
+        return index.map { screens[$0] } ?? NSScreen.main
+    }
+
+    /// The display the sidebar was revealed on, if it is still connected.
+    private var edgeScreen: NSScreen? {
+        guard let edgeDisplayID else { return nil }
+        return NSScreen.screens.first { $0.displayID == edgeDisplayID }
+    }
+
+    /// After the screens change, a sidebar that is out moves to the new
+    /// docked frame on its display (or, if that display is gone, the one
+    /// under the pointer) at once. One mid-slide is re-docked when it lands;
+    /// one sliding away is gone, and the next reveal measures afresh.
+    private func redockAfterScreenChange() {
+        guard panel.isVisible else { return }
+        switch edgeReveal.phase {
+        case .shown:
+            redock()
+        case .revealing:
+            edgeNeedsRedock = true
+        case .hidden, .concealing:
+            break
+        }
+    }
+
+    private func redock() {
+        edgeNeedsRedock = false
+        let screen = edgeScreen ?? screenUnderPointer()
+        edgeDisplayID = screen?.displayID
+        guard let frames = edgeFrames(on: screen), panel.frame != frames.docked else { return }
+        panel.setFrame(frames.docked, display: true)
     }
 
     /// Docks the note full-height against the chosen edge and slides it in.
@@ -510,10 +740,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// the time the remaining distance needs, rather than jumping back off
     /// screen and starting over.
     private func revealFromEdge(activating: Bool) {
-        guard let frames = edgeFrames() else { return }
         // Only a hide still under way is reversed from where it is; anything
         // else (first reveal, after a mode switch) starts from the edge.
         let interrupting = panel.isVisible && edgeReveal.phase == .concealing
+        // A fresh reveal comes out on the display the user is on; reversing
+        // a hide stays on the display that hide is leaving.
+        let screen = interrupting ? (edgeScreen ?? screenUnderPointer()) : screenUnderPointer()
+        guard let frames = edgeFrames(on: screen) else { return }
+        edgeDisplayID = screen?.displayID
+        edgeNeedsRedock = false
         let token = edgeReveal.beginReveal()
 
         // Under Reduce Motion the sidebar never travels: it is placed docked
@@ -565,6 +800,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Keyed before the slide began; only if something took the
             // keyboard away during it does landing hand it back.
             if activating, !self.panel.isKeyWindow { self.focusPanel() }
+            if self.edgeNeedsRedock { self.redock() }
             self.startEdgeAutoHide()
         }
     }
@@ -576,7 +812,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func concealToEdge() {
         // Already sliding away: let that slide finish rather than cutting it.
         guard edgeReveal.phase != .concealing else { return }
-        guard let frames = edgeFrames(), let token = edgeReveal.beginConceal() else {
+        guard let frames = edgeFrames(on: edgeScreen ?? panel.screen ?? NSScreen.main),
+              let token = edgeReveal.beginConceal() else {
             hideImmediately()
             return
         }
@@ -605,9 +842,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
 
-    /// The docked and just-off-screen frames for the current edge and width.
-    private func edgeFrames() -> (docked: CGRect, hidden: CGRect)? {
-        guard let visible = NSScreen.main?.visibleFrame else { return nil }
+    /// The docked and just-off-screen frames on `screen` for the current
+    /// edge and width.
+    private func edgeFrames(on screen: NSScreen?) -> (docked: CGRect, hidden: CGRect)? {
+        guard let visible = (screen ?? NSScreen.main)?.visibleFrame else { return nil }
         return EdgeRevealGeometry.frames(
             visible: visible, width: CGFloat(settings.edgeWidth), edge: settings.screenEdge
         )
@@ -746,46 +984,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func showStatusMenu() {
-        let menu = NSMenu()
-
-        let toggle = NSMenuItem(
-            title: isInterfaceVisible ? "Hide Jot" : "Show Jot",
-            action: #selector(toggleFromMenu),
-            keyEquivalent: ""
+        // validateMenuItem retitles the update row and disables it while an
+        // update runs, so a second run can't start.
+        let menu = MainMenu.buildStatusMenu(
+            target: self,
+            isInterfaceVisible: isInterfaceVisible,
+            updateTitle: currentUpdateItemState.title,
+            toggleAction: #selector(toggleFromMenu),
+            newNoteAction: #selector(newNoteFromMenu),
+            deleteNoteAction: #selector(deleteNoteFromMenu(_:)),
+            updateAction: #selector(updateFromMenu),
+            preferencesAction: #selector(showPreferences),
+            quitAction: #selector(quit)
         )
-        toggle.target = self
-        menu.addItem(toggle)
-
-        menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showPreferences), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-
-        if UpdateChecker.shared.isUpdating {
-            // No action, so the menu auto-disables it and a second run can't start.
-            menu.addItem(NSMenuItem(title: "Updating…", action: nil, keyEquivalent: ""))
-        } else if let version = UpdateChecker.shared.availableVersion {
-            let update = NSMenuItem(
-                title: "Update Available (v\(version))…",
-                action: #selector(performUpdate),
-                keyEquivalent: ""
-            )
-            update.target = self
-            menu.addItem(update)
-        } else {
-            let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow), keyEquivalent: "")
-            check.target = self
-            menu.addItem(check)
-        }
-
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Quit Jot", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
 
         statusItem?.menu = menu
         statusItem?.button?.performClick(nil)
@@ -806,21 +1017,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.terminate(nil)
     }
 
-    @objc private func performUpdate() {
-        UpdateChecker.shared.performUpdate()
+    private var currentUpdateItemState: MainMenu.UpdateItemState {
+        MainMenu.updateItemState(
+            isUpdating: UpdateChecker.shared.isUpdating,
+            availableVersion: UpdateChecker.shared.availableVersion
+        )
     }
 
-    @objc private func checkForUpdatesNow() {
+    /// The update row in both the app menu and the status item's menu.
+    @objc private func updateFromMenu() {
+        switch currentUpdateItemState.action {
+        case .install: UpdateChecker.shared.performUpdate()
+        case .check: checkForUpdatesNow()
+        }
+    }
+
+    /// A check someone asked for always answers: up to date, or what is
+    /// available with the choice to install it now. Before, a check that
+    /// found something said nothing, and the news only surfaced the next
+    /// time the status item's menu happened to be opened.
+    private func checkForUpdatesNow() {
         Task {
             await UpdateChecker.shared.forceCheck()
-            if UpdateChecker.shared.availableVersion == nil {
-                let alert = NSAlert()
+            // An accessory app's alert would otherwise open behind whatever
+            // app is frontmost.
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            if UpdateChecker.shared.availableVersion != nil, UpdateChecker.brewForCaskInstall() == nil {
+                // Not a Homebrew install: performUpdate's own alert already
+                // says what is available and offers the download.
+                UpdateChecker.shared.performUpdate()
+            } else if let available = UpdateChecker.shared.availableVersion {
+                alert.messageText = "Jot \(available) is available"
+                alert.informativeText = "Install it now? Jot relaunches when the update finishes."
+                alert.addButton(withTitle: "Install Update")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    UpdateChecker.shared.performUpdate()
+                }
+            } else {
                 let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
                 alert.messageText = "You're up to date"
                 alert.informativeText = "Jot \(version) is the latest version."
                 alert.runModal()
             }
         }
+    }
+
+    /// Help › Jot Help. The README is the manual.
+    @objc private func showHelp() {
+        NSWorkspace.shared.open(UpdateChecker.helpPage)
     }
 
     // MARK: - Preferences
@@ -848,55 +1094,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NotificationCenter.default.post(name: .jotRequestGlobalSearch, object: nil)
     }
 
+    /// ⌘, and the status menu's Settings item. Opens on the pane last
+    /// viewed (HIG: restore the most recently viewed pane), or just brings
+    /// the window forward if it is already open.
     @objc func showPreferences() {
-        openPreferences(pane: .general)
+        openPreferences(pane: nil)
     }
 
-    func openPreferences(pane: SettingsCategory) {
-        if let window = preferencesWindow {
-            // The view is already alive, so the pane it should show is sent to
-            // it rather than passed at init the way a fresh window gets it.
-            NotificationCenter.default.post(name: .jotShowSettingsPane, object: pane)
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
+    /// `pane` switches to that pane first; nil keeps whichever pane the
+    /// window last showed. The window is built once and kept, so its panes
+    /// keep their state between opens.
+    func openPreferences(pane: SettingsCategory?) {
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController(
+                settings: settings, notesManager: notesManager, initialPane: pane
+            )
         }
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 480),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Jot Settings"
-        // Wide enough for the sidebar plus a comfortable content column; each
-        // pane scrolls internally rather than the window needing to grow to
-        // fit the tallest one.
-        window.minSize = NSSize(width: 560, height: 380)
-        window.contentViewController = NSHostingController(
-            rootView: PreferencesView(settings: settings, notesManager: notesManager, category: pane)
-        )
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        // Belt and suspenders: the app menu's Close item (Cmd+W) should reach
-        // this window through the normal responder chain since opening
-        // Settings genuinely activates the app, unlike the main panel's
-        // .nonactivatingPanel. A local monitor guarantees it regardless —
-        // cheap, and matches the direct-handling pattern Cmd+L and
-        // Shift-Cmd-V needed for the same class of menu-routing doubt.
-        settingsCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
-            guard window?.isKeyWindow == true,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-                  event.charactersIgnoringModifiers?.lowercased() == "w"
-            else { return event }
-            window?.performClose(nil)
-            return nil
-        }
-
-        preferencesWindow = window
+        settingsWindowController?.show(pane: pane)
     }
 
     // MARK: - Reminder notifications
@@ -947,8 +1161,44 @@ final class FloatingPanel: NSPanel {
         contentView = NSHostingView(rootView: rootView)
     }
 
+    /// Which Window and View menu commands apply. Set by `apply(mode:)`.
+    private var mode: DisplayMode = .floating
+
+    /// Edit › Undo and Redo span the editor's typing and the notes list
+    /// (deleting a note). Set once by AppDelegate.
+    var undoRouter: UndoRouter? {
+        didSet {
+            undoRouter?.observeText(undoManager)
+            undoRouter?.onNotesAction = { [weak self] in
+                // Typing after a delete is a new step, not more of the run
+                // the delete interrupted.
+                (self?.firstResponder as? NSTextView)?.breakUndoCoalescing()
+            }
+        }
+    }
+
+    /// NSWindow's own `undo:`/`redo:` (which Edit › Undo reaches through the
+    /// responder chain) only know this window's undo manager; these defer to
+    /// the router so a note deletion can be undone too.
+    @objc func undo(_ sender: Any?) {
+        currentUndoManager(for: .undo)?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        currentUndoManager(for: .redo)?.redo()
+    }
+
+    private func currentUndoManager(for direction: UndoRouter.Direction) -> UndoManager? {
+        guard let undoRouter else {
+            let own = undoManager
+            return (direction == .undo ? own?.canUndo : own?.canRedo) == true ? own : nil
+        }
+        return undoRouter.manager(for: direction, text: undoManager)
+    }
+
     /// Window level, Spaces behaviour, and focus-stealing all differ per mode.
     func apply(mode: DisplayMode) {
+        self.mode = mode
         hidesOnDeactivate = mode.hidesOnDeactivate
         animationBehavior = mode.windowAnimationBehavior
 
@@ -965,6 +1215,16 @@ final class FloatingPanel: NSPanel {
         // it stranded off its edge until the next reveal snapped it back.
         isMovable = mode.allowsWindowDrag
         isMovableByWindowBackground = mode.allowsWindowDrag
+        // Dock mode is a normal app window, so its yellow button and
+        // Window › Minimize work; elsewhere there is no Dock icon to return to.
+        if mode.allowsMinimize {
+            styleMask.insert(.miniaturizable)
+        } else {
+            styleMask.remove(.miniaturizable)
+        }
+        // Every note is already on screen as a card; there is no "current
+        // note" for Back/Forward to move between.
+        handlesNavigationButtons = !mode.isEdgeDocked
 
         if mode.wantsFloatingLevel {
             level = .floating
@@ -1001,6 +1261,27 @@ final class FloatingPanel: NSPanel {
             if let found = firstTextView(in: subview) { return found }
         }
         return nil
+    }
+
+    /// False while docked to a screen edge; see `apply(mode:)`.
+    private(set) var handlesNavigationButtons = true
+
+    /// A mouse's Back/Forward buttons anywhere on the panel the editor does not
+    /// cover: the header, the footer, the margins. Over the text,
+    /// `SwipeScrollView` answers first, through the swipe path. Here, with no
+    /// swipe to borrow, the press posts exactly what Cmd-Option-Left/Right
+    /// post, so all three inputs land on `NotesManager`'s one rule for the ends.
+    override func otherMouseDown(with event: NSEvent) {
+        guard handlesNavigationButtons,
+              let direction = MouseNavigationButton.direction(forButtonNumber: event.buttonNumber)
+        else {
+            super.otherMouseDown(with: event)
+            return
+        }
+        NotificationCenter.default.post(
+            name: direction == .left ? .jotRequestNextNote : .jotRequestPreviousNote,
+            object: nil
+        )
     }
 
     // Closing must only hide. Outside Dock mode there is no Dock icon, so a real
@@ -1054,6 +1335,41 @@ final class FloatingPanel: NSPanel {
         return event.charactersIgnoringModifiers == "."
     }
 
+    /// The Window menu's Minimize and Zoom and the View menu's Enter Full
+    /// Screen reach this window whenever it is key. AppKit's own validation
+    /// only looks at the style mask, which says nothing about a sidebar
+    /// docked to an edge or a dropdown pinned under the menu bar icon.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)):
+            let manager = currentUndoManager(for: .undo)
+            menuItem.title = manager?.undoMenuItemTitle ?? "Undo"
+            return manager != nil
+        case #selector(redo(_:)):
+            let manager = currentUndoManager(for: .redo)
+            menuItem.title = manager?.redoMenuItemTitle ?? "Redo"
+            return manager != nil
+        case #selector(performMiniaturize(_:)):
+            return mode.allowsMinimize && super.validateMenuItem(menuItem)
+        case #selector(performZoom(_:)):
+            return mode.allowsZoom && super.validateMenuItem(menuItem)
+        case #selector(toggleFullScreen(_:)):
+            // super first: it is what retitles Enter/Exit Full Screen.
+            let allowed = super.validateMenuItem(menuItem)
+            return mode.allowsFullScreen && allowed
+        default:
+            return super.validateMenuItem(menuItem)
+        }
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+private extension NSScreen {
+    /// The display's stable number, which survives configuration changes
+    /// that replace the `NSScreen` object itself.
+    var displayID: CGDirectDisplayID? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
 }

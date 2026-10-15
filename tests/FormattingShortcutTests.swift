@@ -41,10 +41,6 @@ private func formattingKey(_ view: ChecklistTextView, _ chars: String, _ modifie
     return view.performKeyEquivalent(with: event)
 }
 
-private final class MenuTarget: NSObject {
-    @objc func noop() {}
-}
-
 func runFormattingShortcutTests() {
 
     // MARK: - Wrapping a selection
@@ -306,21 +302,10 @@ func runFormattingShortcutTests() {
         equal(edits, 1, "exactly one text change was made")
     }
 
-    suite("the Format menu offers Bold and Italic") {
-        let menu = MainMenu.build(
-            target: MenuTarget(),
-            preferencesAction: #selector(MenuTarget.noop),
-            newNoteAction: #selector(MenuTarget.noop),
-            globalSearchAction: #selector(MenuTarget.noop),
-            moveNoteUpAction: #selector(MenuTarget.noop),
-            moveNoteDownAction: #selector(MenuTarget.noop),
-            nextNoteAction: #selector(MenuTarget.noop),
-            previousNoteAction: #selector(MenuTarget.noop),
-            toggleChromeAction: #selector(MenuTarget.noop),
-            toggleChecklistAction: #selector(MenuTarget.noop),
-            toggleHighlightAction: #selector(MenuTarget.noop)
-        )
-        let format = menu.items.first { $0.submenu?.title == "Format" }?.submenu
+    suite("the Format menu offers Bold and Italic, under Font") {
+        let menu = makeTestMainMenu()
+        let format = menu.items.first { $0.submenu?.title == "Format" }?.submenu?
+            .items.first { $0.title == "Font" }?.submenu
         let bold = format?.items.first { $0.title == "Bold" }
         let italic = format?.items.first { $0.title == "Italic" }
         equal(bold?.keyEquivalent, "b", "Bold shows Cmd+B")
@@ -328,7 +313,10 @@ func runFormattingShortcutTests() {
         equal(italic?.keyEquivalent, "i", "Italic shows Cmd+I")
         check(bold?.action == #selector(ChecklistTextView.toggleBold(_:)), "Bold reaches the editor")
         check(italic?.action == #selector(ChecklistTextView.toggleItalic(_:)), "Italic reaches the editor")
-        let allItems = menu.items.flatMap { $0.submenu?.items ?? [] }
+        func everyItem(_ menu: NSMenu) -> [NSMenuItem] {
+            menu.items.flatMap { [$0] + ($0.submenu.map(everyItem) ?? []) }
+        }
+        let allItems = everyItem(menu)
         equal(allItems.filter { $0.keyEquivalent == "b" && $0.keyEquivalentModifierMask == [.command] }.count, 1,
               "nothing else in the menu bar claims Cmd+B")
         equal(allItems.filter { $0.keyEquivalent == "i" && $0.keyEquivalentModifierMask == [.command] }.count, 1,

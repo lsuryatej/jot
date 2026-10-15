@@ -8,15 +8,69 @@ enum SwipeDirection {
     case right
 }
 
+/// One scroll-wheel event, reduced to what swipe recognition reads from it.
+///
+/// A value rather than an `NSEvent` so the tests can describe a trackpad
+/// gesture, its momentum, or a mouse wheel's notches exactly, with timestamps
+/// they choose, instead of synthesising events against a window server.
+struct ScrollSample {
+    var deltaX: CGFloat
+    var deltaY: CGFloat
+    /// Non-empty only for a trackpad (or Magic Mouse) gesture's own events.
+    var phase: NSEvent.Phase = []
+    /// Non-empty only for the inertia the system adds after lift-off.
+    var momentumPhase: NSEvent.Phase = []
+    /// Seconds, on the same clock as `NSEvent.timestamp`.
+    var timestamp: TimeInterval
+
+    init(deltaX: CGFloat, deltaY: CGFloat, phase: NSEvent.Phase = [], momentumPhase: NSEvent.Phase = [], timestamp: TimeInterval) {
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.phase = phase
+        self.momentumPhase = momentumPhase
+        self.timestamp = timestamp
+    }
+
+    init(_ event: NSEvent) {
+        self.init(
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY,
+            phase: event.phase,
+            momentumPhase: event.momentumPhase,
+            timestamp: event.timestamp
+        )
+    }
+}
+
 /// The swipe-recognition state machine behind `SwipeScrollView`, extracted so
 /// the rules are testable without synthesising scroll events against a real
 /// scroll view (which needs a window server).
 ///
-/// A gesture accumulates horizontal deltas until they cross the threshold,
-/// fires exactly once, then goes quiet until the fingers lift or a new gesture
-/// begins. Vertical-dominant deltas are not swipes at all.
+/// Three kinds of event arrive through the one `scrollWheel(with:)`:
+///
+/// - A trackpad gesture has phases. It accumulates horizontal deltas until
+///   they cross `threshold`, fires exactly once, mid-gesture, then goes quiet
+///   until the fingers lift or a new gesture begins.
+/// - Momentum, the inertia after lift-off, never navigates (H4). It used to
+///   accumulate from zero after the reset at lift-off and could cross the
+///   threshold a second time: one swipe, two notes.
+/// - A mouse wheel has no phase at all: Shift+wheel, a tilt wheel, a thumb
+///   wheel. Nothing ever says such a gesture ended, so a burst of notches is
+///   delimited by time instead. The first notch of a burst fires, the rest
+///   are absorbed, and `wheelIdleGap` of silence starts the next burst.
+///
+/// Vertical-dominant deltas are never swipes, from any source.
 struct SwipeAccumulator {
+    /// Trackpad points of horizontal travel before a gesture switches notes.
     static let threshold: CGFloat = 55
+    /// A wheel delta is in lines, not points: one notch is about 1, and some
+    /// mice report a slow single notch as a fraction of that. Any real notch
+    /// counts, so one click of the wheel is one switch.
+    static let wheelThreshold: CGFloat = 0.1
+    /// Long enough to join the notches of one flick or one continuous spin
+    /// (they arrive 10-60ms apart), short enough that a deliberate second
+    /// flick switches again without feeling ignored.
+    static let defaultWheelIdleGap: TimeInterval = 0.3
 
     enum Outcome: Equatable {
         /// Crossed the threshold this event: navigate, and consume the event.
@@ -28,9 +82,39 @@ struct SwipeAccumulator {
         case passThrough
     }
 
+    let wheelIdleGap: TimeInterval
+
     private var accumulatedX: CGFloat = 0
     private var didFire = false
 
+    private var wheelAccumulatedX: CGFloat = 0
+    private var wheelDidFire = false
+    private var lastWheelTimestamp: TimeInterval?
+
+    init(wheelIdleGap: TimeInterval = SwipeAccumulator.defaultWheelIdleGap) {
+        self.wheelIdleGap = wheelIdleGap
+    }
+
+    /// The scroll view's single entry point: routes one event by its kind.
+    mutating func receive(_ sample: ScrollSample) -> Outcome {
+        if !sample.momentumPhase.isEmpty {
+            return receiveMomentum(deltaX: sample.deltaX, deltaY: sample.deltaY)
+        }
+        if sample.phase.isEmpty {
+            return receiveWheel(deltaX: sample.deltaX, deltaY: sample.deltaY, timestamp: sample.timestamp)
+        }
+
+        if sample.phase.contains(.began) {
+            begin()
+        }
+        let outcome = receive(deltaX: sample.deltaX, deltaY: sample.deltaY)
+        if sample.phase.contains(.ended) || sample.phase.contains(.cancelled) {
+            end()
+        }
+        return outcome
+    }
+
+    /// One trackpad gesture event. Unchanged since before wheels were handled.
     mutating func receive(deltaX: CGFloat, deltaY: CGFloat) -> Outcome {
         guard abs(deltaX) > abs(deltaY) else { return .passThrough }
 
@@ -39,7 +123,7 @@ struct SwipeAccumulator {
             didFire = true
             // Natural scrolling: fingers moving right (positive dx) means
             // "go back", matching the direction pages move under your fingers.
-            return .fire(accumulatedX > 0 ? .right : .left)
+            return .fire(Self.direction(of: accumulatedX))
         }
         return .absorb
     }
@@ -53,37 +137,101 @@ struct SwipeAccumulator {
     mutating func end() {
         begin()
     }
+
+    /// Inertia is the system's, not the user's: a horizontal coast is
+    /// swallowed, so it neither switches a note nor scrolls the text
+    /// sideways, and a vertical one keeps scrolling the note.
+    private func receiveMomentum(deltaX: CGFloat, deltaY: CGFloat) -> Outcome {
+        abs(deltaX) > abs(deltaY) ? .absorb : .passThrough
+    }
+
+    private mutating func receiveWheel(deltaX: CGFloat, deltaY: CGFloat, timestamp: TimeInterval) -> Outcome {
+        guard abs(deltaX) > abs(deltaY) else { return .passThrough }
+
+        // Measured from the previous notch, not the first, so one long spin
+        // stays one burst however long it lasts.
+        if let last = lastWheelTimestamp, timestamp - last <= wheelIdleGap {
+            // Same burst.
+        } else {
+            wheelAccumulatedX = 0
+            wheelDidFire = false
+        }
+        lastWheelTimestamp = timestamp
+
+        wheelAccumulatedX += deltaX
+        if !wheelDidFire, abs(wheelAccumulatedX) >= Self.wheelThreshold {
+            wheelDidFire = true
+            return .fire(Self.direction(of: wheelAccumulatedX))
+        }
+        return .absorb
+    }
+
+    private static func direction(of accumulatedX: CGFloat) -> SwipeDirection {
+        accumulatedX > 0 ? .right : .left
+    }
 }
 
-/// Scroll view that turns a horizontal two-finger swipe into a note-navigation
-/// event instead of a horizontal scroll.
+/// The extra buttons on a mouse's side, read as a browser reads them: Back to
+/// the previous note, Forward to the next. AppKit numbers buttons from zero,
+/// so the ones people call 4 and 5 arrive as 3 and 4.
+enum MouseNavigationButton {
+    static let back = 3
+    static let forward = 4
+
+    /// The swipe this button stands for, or nil when the button is not a
+    /// navigation button at all and belongs to whoever handled it before.
+    static func direction(forButtonNumber buttonNumber: Int) -> SwipeDirection? {
+        switch buttonNumber {
+        case back: return .right
+        case forward: return .left
+        default: return nil
+        }
+    }
+}
+
+/// Scroll view that turns a horizontal two-finger swipe, or a horizontal
+/// mouse-wheel burst, into a note-navigation event instead of a horizontal
+/// scroll.
 ///
 /// SwiftUI's `DragGesture` cannot do this: trackpad swipes arrive as
 /// scroll-wheel events, which `DragGesture` never receives, and the text view
 /// swallows real drags for text selection.
+///
+/// Not `NSEvent.trackSwipeEvent` (H4's other suggestion). That API is gated on
+/// System Settings' "Swipe between pages", so anyone who set it to three
+/// fingers, or off, would lose two-finger note switching entirely. It also
+/// only completes after lift-off and its settle animation, where this fires
+/// mid-gesture at 55pt. Both change how switching feels, and the momentum fix
+/// above already closes the double-fire it was meant to prevent.
 final class SwipeScrollView: NSScrollView {
     var onSwipe: ((SwipeDirection) -> Void)?
 
     private var accumulator = SwipeAccumulator()
 
     override func scrollWheel(with event: NSEvent) {
-        if event.phase.contains(.began) {
-            accumulator.begin()
-        }
-
-        switch accumulator.receive(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
+        switch accumulator.receive(ScrollSample(event)) {
         case .fire(let direction):
             onSwipe?(direction)
         case .absorb:
             break  // consumed: never scroll the text view sideways
         case .passThrough:
             super.scrollWheel(with: event)
+        }
+    }
+
+    /// A mouse's Back/Forward buttons switch notes the way they move through
+    /// a browser's history, by the same closure a swipe calls: same "past the
+    /// last note starts a new one" rule, same landing chip with the header
+    /// hidden. A press over the text arrives here because the text view
+    /// leaves other-button presses to its next responder. Only buttons 3 and 4
+    /// are claimed, and only on press, so clicks, drags and selection, all
+    /// primary-button events, never come near this.
+    override func otherMouseDown(with event: NSEvent) {
+        guard let direction = MouseNavigationButton.direction(forButtonNumber: event.buttonNumber) else {
+            super.otherMouseDown(with: event)
             return
         }
-
-        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
-            accumulator.end()
-        }
+        onSwipe?(direction)
     }
 }
 
@@ -387,6 +535,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// storage delegate.
     private var isStyling = false
 
+    /// The note a Screen Edge card shows, so commands from this editor (Delete
+    /// Note, the context menu) act on that card rather than on whichever note
+    /// happens to be current. Nil in the single-note editor, which always
+    /// shows the current note.
+    var noteID: UUID?
+
     // MARK: - Pure geometry (extracted for the headless tests)
 
     /// The smallest an image may be dragged down to: below this the resize
@@ -433,6 +587,13 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// The vertical distance between guide dots or grid lines: the font's own
     /// line box scaled by the spacing setting, with a floor so a tiny font
     /// never packs the pattern into noise.
+    /// The first guide line at or after the view's edge that is still in
+    /// phase with the text: `textOrigin` stepped back by whole pitches.
+    static func guideStart(textOrigin: CGFloat, pitch: CGFloat) -> CGFloat {
+        guard pitch > 0 else { return textOrigin }
+        return textOrigin - (textOrigin / pitch).rounded(.down) * pitch
+    }
+
     static func guideVerticalPitch(lineHeight: CGFloat, spacingMultiple: Double) -> CGFloat {
         max(18, lineHeight * CGFloat(spacingMultiple))
     }
@@ -479,6 +640,27 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
     }
 
+    /// A faint band behind the line the caret is on (Settings, "Highlight
+    /// current line"). See the "Current line highlight" extension.
+    var highlightsCurrentLine = false {
+        didSet {
+            guard highlightsCurrentLine != oldValue else { return }
+            refreshCurrentLineHighlight()
+        }
+    }
+
+    /// The band as last drawn and invalidated, in view coordinates; nil when
+    /// none is showing.
+    private(set) var displayedCurrentLineRect: NSRect?
+
+    /// What the last refresh invalidated, so a test can see a caret move
+    /// repaint exactly the two bands and nothing else.
+    private(set) var lastCurrentLineInvalidation: [NSRect] = []
+
+    /// Stands in for "is first responder" in the headless tests, which have
+    /// no window. Always nil in the app.
+    var currentLineFocusOverride: Bool?
+
     /// Whether the note was in list mode at the last edit, so the switch can be
     /// noticed and the existing body converted once.
     private var wasListMode = false
@@ -507,8 +689,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
     }
 
+    /// A point larger than the body and a real bold of the note's own font,
+    /// resolved the way headings resolve theirs (`NoteFont.bold(of:)`), so an
+    /// SF Pro or New York note gets an SF Pro or New York title rather than
+    /// a monospaced one. A family with no heavier cut (Monaco) keeps its
+    /// regular face here, a point larger.
     private var titleFont: NSFont {
-        .monospacedSystemFont(ofSize: baseFont.pointSize + 1, weight: .semibold)
+        let sized = NSFontManager.shared.convert(baseFont, toSize: baseFont.pointSize + 1)
+        return NoteFont.bold(of: sized).font
     }
 
     /// Reports the height the content needs, for cards that size to their note.
@@ -741,18 +929,45 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// dispatch key equivalents there is a bet not worth making. Handling them
     /// here means Cmd+L and Shift-Cmd-V behave the same in every display mode.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let flags = event.modifierFlags.shortcutModifiers
         let key = event.charactersIgnoringModifiers?.lowercased()
+        // AppKit offers key equivalents to every view in the window, focused
+        // or not. Anything that edits this note's text must check that the
+        // note is what has the keyboard, or it reaches over the find bar or
+        // any other field (issue #18: Cmd+V in the find bar pasted into the
+        // note). No window: the headless tests, where the view is the editor.
+        let isFocusedEditor = window == nil || window?.firstResponder === self
 
-        if flags == [.command, .shift], key == "v" {
+        if flags == [.command, .shift], key == "v", isFocusedEditor {
             extractTextFromClipboardImage(nil)
             return true
         }
-        // Ctrl-Cmd-Up/Down walk the current note through the list. Like Cmd+N
-        // and Cmd+Shift+F below, this posts rather than acts: the text view
+        // Ctrl-Cmd-Up/Down on a list item moves the item among its siblings,
+        // the Apple Notes convention. Only the focused view acts (Screen Edge
+        // mode has one per card), and only when the caret is in a list.
+        // Moving the note itself is Option-Cmd-Up/Down, below.
+        if flags == [.command, .control],
+           event.keyCode == UInt16(kVK_UpArrow) || event.keyCode == UInt16(kVK_DownArrow),
+           window == nil || window?.firstResponder === self,
+           moveListItem(event.keyCode == UInt16(kVK_UpArrow) ? .up : .down) {
+            return true
+        }
+        // Shift-Cmd-Delete: Delete Note. Never plain Cmd-Delete, which is the
+        // text view's delete-to-start-of-line. Posted with this editor's note,
+        // and only from the focused editor: every card's text view is offered
+        // the key equivalent, and the first to claim it would win.
+        if flags == [.command, .shift], event.keyCode == UInt16(kVK_Delete),
+           window == nil || window?.firstResponder === self {
+            NotificationCenter.default.post(name: .jotRequestDeleteNote, object: noteID)
+            return true
+        }
+        // Option-Cmd-Up/Down walk the current note through the list, the
+        // same chord family as Option-Cmd-Left/Right below (Ctrl-Cmd-Up/Down
+        // is left to list items, as in Apple Notes). Like Cmd+N and
+        // Cmd+Shift+F below, this posts rather than acts: the text view
         // exists in every display mode, and AppDelegate owns the one
         // NotesManager along with the knowledge of whether the panel shows.
-        if flags == [.command, .control] {
+        if flags == [.command, .option] {
             if event.keyCode == UInt16(kVK_UpArrow) {
                 NotificationCenter.default.post(name: .jotRequestMoveNoteUp, object: nil)
                 return true
@@ -763,10 +978,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             }
         }
         // Cmd-Option-Left/Right switch which note is showing, the keyboard
-        // equivalent of a two-finger swipe. Option rather than Control, so it
-        // doesn't collide with the reordering shortcut above, and it matches
-        // Safari/Chrome's own Cmd-Option-Left/Right tab-switching muscle
-        // memory. Same posting pattern as the move above.
+        // equivalent of a two-finger swipe. It matches Safari/Chrome's own
+        // Cmd-Option-Left/Right tab-switching muscle memory. Same posting
+        // pattern as the move above.
         if flags == [.command, .option] {
             if event.keyCode == UInt16(kVK_RightArrow) {
                 NotificationCenter.default.post(name: .jotRequestNextNote, object: nil)
@@ -781,8 +995,16 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // mode, and if it is not consulted for key equivalents then the paste
         // override is never reached at all.
         if flags == [.command], key == "v" {
-            paste(nil)
-            return true
+            if isFocusedEditor {
+                paste(nil)
+                return true
+            }
+            // Another field has the keyboard. Hand it the paste through the
+            // responder chain rather than leaving it to the main menu, which
+            // is not consulted outside Dock mode.
+            if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) {
+                return true
+            }
         }
         // Cmd+C is claimed only for the case that would otherwise be missed:
         // the caret inside a code block, in a display mode with no main menu
@@ -793,11 +1015,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
            copyWholeCodeBlock() {
             return true
         }
-        if flags == [.command], key == "l" {
+        if flags == [.command], key == "l", isFocusedEditor {
             toggleChecklist(nil)
             return true
         }
-        if flags == [.command, .shift], key == "h" {
+        if flags == [.command, .shift], key == "h", isFocusedEditor {
             toggleHighlight(nil)
             return true
         }
@@ -816,6 +1038,12 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             NotificationCenter.default.post(name: .jotRequestNewNote, object: nil)
             return true
         }
+        // Format › Font › Bigger (Cmd-+, and Cmd-= so Shift isn't needed),
+        // Smaller, Actual Size. + usually arrives with Shift held.
+        if let size = Self.textSizeCommand(flags: flags, key: key) {
+            NotificationCenter.default.post(name: .jotRequestTextSize, object: size.rawValue)
+            return true
+        }
         if flags == [.command], key == "/" {
             NotificationCenter.default.post(name: .jotRequestToggleChrome, object: nil)
             return true
@@ -825,6 +1053,24 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// The main menu is hidden outside Dock mode, so the note commands are
+    /// appended here too; see `EditorContextMenu`. A copy, so the additions
+    /// never accumulate on a menu AppKit may hand out again.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = (super.menu(for: event)?.copy() as? NSMenu) ?? NSMenu()
+        EditorContextMenu.append(to: menu, for: self)
+        return menu
+    }
+
+    static func textSizeCommand(flags: NSEvent.ModifierFlags, key: String?) -> TextSizeCommand? {
+        switch (flags, key) {
+        case ([.command], "="), ([.command], "+"), ([.command, .shift], "+"): return .bigger
+        case ([.command], "-"): return .smaller
+        case ([.command], "0"): return .actualSize
+        default: return nil
+        }
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
@@ -1239,6 +1485,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         }
 
         let point = convert(event.locationInWindow, from: nil)
+        // A press on a list marker might be a click (toggle the box, place
+        // the caret) or the start of a drag to reorder; only movement past
+        // the threshold tells them apart. Any modifier keeps the ordinary
+        // meaning (Shift extends a selection, Cmd opens a link).
+        if event.modifierFlags.shortcutModifiers.isEmpty, imageForResize(at: point) == nil,
+           let hit = listMarkerHit(at: point) {
+            trackListMarker(hit, from: point)
+            return
+        }
         guard handleSpecialClick(at: point, modifiers: event.modifierFlags) else {
             isTrackingClick = true
             defer { isTrackingClick = false }
@@ -1321,6 +1576,251 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         return true
     }
 
+    // MARK: - Moving list items
+
+    /// Called where a list move is refused. A seam so tests can count beeps.
+    var beep: () -> Void = { NSSound.beep() }
+
+    /// Ctrl-Cmd-Up/Down. True when the chord was the list's: the item moved,
+    /// or it was already at the end of its list and the move beeped. False
+    /// when the caret is not in a list item, so the chord can mean Move Note.
+    @discardableResult
+    func moveListItem(_ direction: ListMove.Direction) -> Bool {
+        guard !isCodeMode else { return false }
+        switch ListMove.move(direction, in: string, selection: selectedRange()) {
+        case .notInList:
+            return false
+        case .atBoundary:
+            beep()
+            return true
+        case .moved(let edit):
+            applyListMove(edit)
+            // Only scrolls when the item left the visible area; a move inside
+            // it leaves the view exactly where it was.
+            scrollRangeToVisible(selectedRange())
+            return true
+        }
+    }
+
+    /// One `replace`, so one undo step, with coalescing broken first so it
+    /// never merges into the typing before it.
+    private func applyListMove(_ edit: ListMove.Edit) {
+        breakUndoCoalescing()
+        replace(range: edit.range, with: edit.replacement, selecting: edit.selection)
+        undoManager?.setActionName("Move Item")
+        let edited = NSRange(location: edit.range.location, length: (edit.replacement as NSString).length)
+        applyLinkFolding(in: (string as NSString).lineRange(for: edited))
+    }
+
+    /// A press on a list item's marker.
+    struct ListMarkerHit: Equatable {
+        /// Where the item's line starts.
+        var lineLocation: Int
+        /// A checkbox toggles on a plain click; a bullet or number places
+        /// the caret.
+        var isCheckbox: Bool
+    }
+
+    /// The list marker under `point` (checkbox, bullet or number), if any.
+    /// The marker's own glyphs plus a few points either side, on its line.
+    func listMarkerHit(at point: NSPoint) -> ListMarkerHit? {
+        guard !isCodeMode, let layoutManager, let textContainer else { return nil }
+        let ns = string as NSString
+        guard ns.length > 0 else { return nil }
+        let lineRange = contentRange(forLineAt: characterIndexForInsertion(at: point))
+        let line = ns.substring(with: lineRange)
+
+        let marker: NSRange
+        let isCheckbox: Bool
+        if let item = Checklist.item(in: line) {
+            (marker, isCheckbox) = (item.markerRange, true)
+        } else if let item = OrderedList.item(in: line) {
+            (marker, isCheckbox) = (item.markerRange, false)
+        } else if let item = Bullet.item(in: line) {
+            (marker, isCheckbox) = (item.markerRange, false)
+        } else {
+            return nil
+        }
+
+        let absolute = NSRange(location: lineRange.location + marker.location, length: marker.length)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: absolute, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return nil }
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            .offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            .offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        guard point.x >= rect.minX - 4, point.x <= rect.maxX + 4,
+              point.y >= fragment.minY, point.y <= fragment.maxY
+        else { return nil }
+        return ListMarkerHit(lineLocation: lineRange.location, isCheckbox: isCheckbox)
+    }
+
+    /// Pointing hand over a checkbox (it is a button first, and draggable),
+    /// open hand over a bullet or number (draggable only).
+    private func listMarkerCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> NSCursor? {
+        guard modifiers.shortcutModifiers.isEmpty, let hit = listMarkerHit(at: point) else { return nil }
+        return hit.isCheckbox ? .pointingHand : .openHand
+    }
+
+    private var showsMarkerCursor = false
+
+    /// How far the pointer travels before a press on a marker is a drag. A
+    /// hand never releases exactly where it pressed, and a click on a
+    /// checkbox must toggle it, not nudge the item.
+    static let listDragThreshold: CGFloat = 4
+
+    static func isListDrag(from start: NSPoint, to point: NSPoint) -> Bool {
+        hypot(point.x - start.x, point.y - start.y) >= listDragThreshold
+    }
+
+    /// The slot whose line is nearest `y`.
+    static func nearestSlot(toY y: CGFloat, slotYs: [CGFloat]) -> Int {
+        slotYs.indices.min(by: { abs(slotYs[$0] - y) < abs(slotYs[$1] - y) }) ?? 0
+    }
+
+    /// The y of each drop slot in view coordinates: the top of each
+    /// sibling's first line, then the foot of the last sibling's last line.
+    func listDropSlotYs(for context: ListMove.DragContext) -> [CGFloat] {
+        guard let layoutManager, let textContainer else { return [] }
+        layoutManager.ensureLayout(for: textContainer)
+        func fragment(at location: Int) -> NSRect {
+            let glyph = layoutManager.glyphIndexForCharacter(at: location)
+            return layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                .offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        }
+        var ys = context.itemRanges.map { fragment(at: $0.location).minY }
+        if let last = context.itemRanges.last {
+            ys.append(fragment(at: max(last.location, NSMaxRange(last) - 1)).maxY)
+        }
+        return ys
+    }
+
+    /// A press on a marker that never became a drag.
+    func finishListMarkerClick(_ hit: ListMarkerHit, at point: NSPoint) {
+        let ns = string as NSString
+        guard hit.lineLocation <= ns.length else { return }
+        if hit.isCheckbox {
+            let lineRange = contentRange(forLineAt: hit.lineLocation)
+            let line = ns.substring(with: lineRange)
+            replace(range: lineRange, with: Checklist.toggled(block: line), selecting: selectedRange())
+        } else {
+            window?.makeFirstResponder(self)
+            setSelectedRange(NSRange(location: characterIndexForInsertion(at: point), length: 0))
+        }
+    }
+
+    /// Drops the item on the line starting at `lineLocation` into `slot`.
+    /// False when the drop changes nothing.
+    @discardableResult
+    func dropListItem(lineLocation: Int, toSlot slot: Int) -> Bool {
+        guard let edit = ListMove.move(in: string, itemAt: lineLocation, toSlot: slot, selection: selectedRange()) else {
+            return false
+        }
+        applyListMove(edit)
+        return true
+    }
+
+    /// Where the insertion line is drawn while an item is dragged.
+    private var listDropIndicator: NSRect? {
+        didSet {
+            guard listDropIndicator != oldValue else { return }
+            if let oldValue { setNeedsDisplay(oldValue.insetBy(dx: -2, dy: -2)) }
+            if let listDropIndicator { setNeedsDisplay(listDropIndicator.insetBy(dx: -2, dy: -2)) }
+        }
+    }
+
+    private static let dropIndicatorHeight: CGFloat = 6
+
+    private func dropIndicatorRect(atY y: CGFloat, context: ListMove.DragContext) -> NSRect {
+        guard let layoutManager, let textContainer, let first = context.itemRanges.first else { return .zero }
+        let indentEnd = (string as NSString).substring(with: first).prefix { $0 == " " || $0 == "\t" }.utf16.count
+        let markerGlyph = layoutManager.glyphIndexForCharacter(at: first.location + indentEnd)
+        let markerX = layoutManager.boundingRect(forGlyphRange: NSRange(location: markerGlyph, length: 1), in: textContainer).minX
+        let left = textContainerInset.width + markerX - Self.dropIndicatorHeight / 2
+        let right = textContainerInset.width + textContainer.size.width - textContainer.lineFragmentPadding
+        let height = Self.dropIndicatorHeight
+        return NSRect(x: left, y: y - height / 2, width: max(height, right - left), height: height)
+    }
+
+    /// The standard Mac insertion mark: a small ring where the item will
+    /// land, and a line running out from it.
+    private func drawListDropIndicator(_ rect: NSRect) {
+        ink.accent.set()
+        let ring = NSBezierPath(ovalIn: NSRect(x: rect.minX, y: rect.minY, width: rect.height, height: rect.height).insetBy(dx: 1, dy: 1))
+        ring.lineWidth = 1.5
+        ring.stroke()
+        NSBezierPath(
+            roundedRect: NSRect(x: rect.minX + rect.height - 1, y: rect.midY - 1, width: rect.width - rect.height + 1, height: 2),
+            xRadius: 1, yRadius: 1
+        ).fill()
+    }
+
+    /// Follows a press on a marker until release: a click if it stayed put,
+    /// a reorder if it travelled. Escape cancels a drag.
+    private func trackListMarker(_ hit: ListMarkerHit, from start: NSPoint) {
+        let context = ListMove.dragContext(in: string, itemAt: hit.lineLocation)
+        var travelled = false
+        var isDragging = false
+        var slot: Int?
+
+        func endDrag() {
+            if isDragging { NSCursor.pop() }
+            listDropIndicator = nil
+        }
+
+        // As in `beginResize`: a stray left-mouse-down ends the loop and is
+        // handed back, so a lost mouse-up can never strand it.
+        window?.trackEvents(
+            matching: [.leftMouseDragged, .leftMouseUp, .leftMouseDown, .keyDown],
+            timeout: .infinity,
+            mode: .default
+        ) { event, stop in
+            guard let event else {
+                endDrag()
+                stop.pointee = true
+                return
+            }
+            switch event.type {
+            case .leftMouseDragged:
+                let point = self.convert(event.locationInWindow, from: nil)
+                travelled = travelled || Self.isListDrag(from: start, to: point)
+                guard travelled, let context, context.itemRanges.count > 1 else { return }
+                if !isDragging {
+                    isDragging = true
+                    NSCursor.closedHand.push()
+                }
+                self.autoscroll(with: event)
+                // Recomputed after the autoscroll, which may have moved the
+                // view under a pointer that stayed still.
+                let current = self.convert(event.locationInWindow, from: nil)
+                let ys = self.listDropSlotYs(for: context)
+                guard !ys.isEmpty else { return }
+                let nearest = Self.nearestSlot(toY: current.y, slotYs: ys)
+                slot = nearest
+                self.listDropIndicator = context.isNoOp(slot: nearest)
+                    ? nil
+                    : self.dropIndicatorRect(atY: ys[nearest], context: context)
+            case .keyDown:
+                guard event.keyCode == UInt16(kVK_Escape) else { return }
+                endDrag()
+                stop.pointee = true
+            default:
+                stop.pointee = true
+                if event.type == .leftMouseDown {
+                    NSApp.postEvent(event, atStart: true)
+                }
+                let wasDragging = isDragging
+                endDrag()
+                guard event.type == .leftMouseUp else { return }
+                if wasDragging {
+                    if let slot { self.dropListItem(lineLocation: hit.lineLocation, toSlot: slot) }
+                } else if !travelled {
+                    self.finishListMarkerClick(hit, at: start)
+                }
+            }
+        }
+    }
+
     // MARK: - Caret
 
     /// Draws the caret on the text's own baseline, at the text's height.
@@ -1401,8 +1901,14 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             height: max(bounds.height, enclosingScrollView?.contentView.bounds.height ?? 0)
         )
 
-        let xs = stride(from: textContainerInset.width, through: covered.width, by: horizontalPitch)
-        let ys = stride(from: textContainerInset.height, through: covered.height, by: verticalPitch)
+        // Phase-locked to where the text starts, but run back to the view's
+        // own edge: starting at the inset left the band above the first line
+        // blank, which with the header hidden is the strip under the traffic
+        // lights, so the paper looked like it began partway down the window.
+        let xs = stride(from: Self.guideStart(textOrigin: textContainerInset.width, pitch: horizontalPitch),
+                        through: covered.width, by: horizontalPitch)
+        let ys = stride(from: Self.guideStart(textOrigin: textContainerInset.height, pitch: verticalPitch),
+                        through: covered.height, by: verticalPitch)
 
         switch guide {
         case .dots:
@@ -1495,6 +2001,9 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
                 imageSelectionTint.setFill()
                 placed.rect.fill(using: .sourceOver)
             }
+        }
+        if let indicator = listDropIndicator, indicator.intersects(dirtyRect) {
+            drawListDropIndicator(indicator)
         }
     }
 
@@ -2030,9 +2539,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        if wantsResizeCursor(at: convert(event.locationInWindow, from: nil)) {
+        let point = convert(event.locationInWindow, from: nil)
+        if wantsResizeCursor(at: point) {
             NSCursor.resizeLeftRight.set()
             showsResizeCursor = true
+            return
+        }
+        if let cursor = listMarkerCursor(at: point, modifiers: event.modifierFlags) {
+            cursor.set()
+            showsMarkerCursor = true
             return
         }
         super.cursorUpdate(with: event)
@@ -2251,6 +2766,7 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             return snapped == proposed ? value : NSValue(range: snapped)
         }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        refreshCurrentLineHighlight()
         if !imageAtoms.isEmpty || !tintedImageRects.isEmpty || hiddenSelectionBackground != nil {
             refreshImageSelection()
         }
@@ -2281,8 +2797,65 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// `PlainTextEditor.updateNSView`, kept on the view so the sequence has one
     /// home and can be driven directly by a test. Callers are responsible for
     /// only reaching it on a genuine divergence between the model and the view.
+    /// The same note's text changed underneath the view: the caret keeps
+    /// its offset, clamped. A switch to another note goes through
+    /// `openNote(_:restoring:)` instead.
     func loadNoteText(_ text: String) {
         let caret = selectedRange().location
+        replaceDocument(with: text)
+        let length = (text as NSString).length
+        setSelectedRange(NSRange(location: min(caret, length), length: 0))
+        restyleDocument()
+    }
+
+    /// Where this note was left: its selection and how far it was scrolled.
+    var viewState: NoteViewState {
+        NoteViewState(
+            selection: selectedRange(),
+            scrollOrigin: enclosingScrollView?.contentView.bounds.origin ?? .zero
+        )
+    }
+
+    /// Shows another note, with the selection and scroll it was left with
+    /// this session, or, opened for the first time, the caret at its end and
+    /// scrolled into view (design review H7). Laid out and scrolled here,
+    /// synchronously, so the first display already shows the right place:
+    /// no frame at the old offset, no visible jump.
+    func openNote(_ text: String, restoring state: NoteViewState?) {
+        replaceDocument(with: text)
+        let length = (text as NSString).length
+        let selection = state.map { clamped($0.selection) } ?? NSRange(location: length, length: 0)
+        setSelectedRange(selection)
+        restyleDocument()
+        restoreScroll(state?.scrollOrigin)
+    }
+
+    /// Scrolls to `origin`, clamped to the document, or with none, to the
+    /// top and then just far enough to show the selection.
+    func restoreScroll(_ origin: CGPoint?) {
+        guard let scrollView = enclosingScrollView else { return }
+        if let layoutManager, let textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+        }
+        sizeToFit()
+        let clip = scrollView.contentView
+        let top = -clip.contentInsets.top
+        let bottom = max(top, frame.height - clip.bounds.height + clip.contentInsets.bottom)
+        let y = min(max(origin?.y ?? top, top), bottom)
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+        scrollView.reflectScrolledClipView(clip)
+        if origin == nil {
+            scrollRangeToVisible(selectedRange())
+        }
+    }
+
+    private func restyleDocument() {
+        applyChecklistStyling()
+        recomputeLinkMatches()
+        applyLinkFolding()
+    }
+
+    private func replaceDocument(with text: String) {
         // Another note's results are a starting point, not a change to speak.
         mathSpeech.rebase()
         string = text
@@ -2296,11 +2869,6 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         // notes.json 0.6s later. Undo history belongs to a note, and this is
         // where a note ends, so the stack goes with it.
         undoManager?.removeAllActions()
-        let length = (text as NSString).length
-        setSelectedRange(NSRange(location: min(caret, length), length: 0))
-        applyChecklistStyling()
-        recomputeLinkMatches()
-        applyLinkFolding()
     }
 
     func recomputeLinkMatches() {
@@ -2587,10 +3155,11 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     /// stuck on whatever the pointer moves over next.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        if showsLinkCursor || showsResizeCursor {
+        if showsLinkCursor || showsResizeCursor || showsMarkerCursor {
             NSCursor.arrow.set()
             showsLinkCursor = false
             showsResizeCursor = false
+            showsMarkerCursor = false
         }
     }
 
@@ -2603,10 +3172,17 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
             NSCursor.resizeLeftRight.set()
             showsResizeCursor = true
             showsLinkCursor = false
-        } else if showsLinkCursor || showsResizeCursor {
+            showsMarkerCursor = false
+        } else if let cursor = listMarkerCursor(at: point, modifiers: modifiers) {
+            cursor.set()
+            showsMarkerCursor = true
+            showsLinkCursor = false
+            showsResizeCursor = false
+        } else if showsLinkCursor || showsResizeCursor || showsMarkerCursor {
             NSCursor.iBeam.set()
             showsLinkCursor = false
             showsResizeCursor = false
+            showsMarkerCursor = false
         }
     }
 
@@ -2665,6 +3241,15 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
         let ns = textStorage.string as NSString
         let whole = NSRange(location: 0, length: ns.length)
         let target = ns.length == 0 ? whole : ns.lineRange(for: clamped(range ?? whole))
+        // Font fallback (issue #19). Setting `.font` below puts every
+        // character back on the note's font, including ones it has no glyph
+        // for, like `⮑` in SF Mono. AppKit substitutes a font that has them
+        // in its own fix-up pass, but during an edit that pass has already
+        // run by the time this does (from `didProcessEditing`), so typed or
+        // pasted symbols drew as empty boxes while the same note opened fine.
+        // Re-run the substitution over what was just restyled, last, after
+        // every font this pass sets (headings, emphasis, code).
+        defer { textStorage.fixFontAttribute(in: target) }
 
         let isCode = isCodeMode
         var baseline: [NSAttributedString.Key: Any] = [
@@ -3122,6 +3707,157 @@ final class ChecklistTextView: NSTextView, NSTextStorageDelegate, NSLayoutManage
     }
 }
 
+// MARK: - Current line highlight
+
+/// "Highlight current line" (issue #12): a faint band behind the whole logical
+/// line the caret is on, every wrapped fragment of it, across the text
+/// container's full width, so the caret is easy to find in long wrapped lines.
+///
+/// Drawn in `drawBackground(in:)`, under the selection and the glyphs, so no
+/// text moves. Hidden with a selection (the selection is what to look at) and
+/// whenever the view is not first responder.
+///
+/// No residue: both edges of the band are snapped to device pixels, and a
+/// move invalidates exactly the band as drawn plus the new one, so the region
+/// AppKit repaints always contains everything that was painted. This is the
+/// pixel-snapping rule `TextHeightBackgroundLayoutManager.selectionRect`
+/// arrived at for selections. Typing along a line leaves the band where it
+/// is, so nothing is invalidated and nothing flickers.
+extension ChecklistTextView {
+    /// The band for a caret's line fragments (container coordinates), in
+    /// view coordinates, every edge on a device pixel. Nil when there is
+    /// nothing with height to cover.
+    static func currentLineRect(
+        lineFragments: [NSRect],
+        containerOrigin: NSPoint,
+        containerWidth: CGFloat,
+        scale: CGFloat
+    ) -> NSRect? {
+        let heights = lineFragments.filter { $0.height > 0 }
+        guard let top = heights.map(\.minY).min(), let bottom = heights.map(\.maxY).max() else { return nil }
+        let pixels = max(1, scale)
+        func snap(_ value: CGFloat) -> CGFloat { (value * pixels).rounded() / pixels }
+        let minY = snap(containerOrigin.y + top), maxY = snap(containerOrigin.y + bottom)
+        let minX = snap(containerOrigin.x), maxX = snap(containerOrigin.x + containerWidth)
+        guard maxY > minY, maxX > minX else { return nil }
+        return NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// Whether the band shows at all: the setting is on, the view has the
+    /// keyboard, and the selection is a single bare caret.
+    static func showsCurrentLine(enabled: Bool, selections: [NSRange], isFocused: Bool) -> Bool {
+        enabled && isFocused && selections.count == 1 && selections[0].length == 0
+    }
+
+    /// What to invalidate when the band goes from `old` to `new`: nothing
+    /// when it stays put, otherwise each band that is or was on screen.
+    static func currentLineInvalidation(from old: NSRect?, to new: NSRect?) -> [NSRect] {
+        guard old != new else { return [] }
+        return [old, new].compactMap { $0 }
+    }
+
+    /// The band's colour: the paper's own ink, faint. Ink rather than a
+    /// fixed grey so it works on every paper, theme notes included, light or
+    /// dark; a little stronger under Increase Contrast.
+    static func currentLineColor(ink: NSColor, increaseContrast: Bool) -> NSColor {
+        ink.withAlphaComponent(increaseContrast ? 0.10 : 0.055)
+    }
+
+    /// The band for the caret's logical line, ignoring focus and selection.
+    func caretLineRect(scale: CGFloat) -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        let ns = string as NSString
+        let caret = min(selectedRange().location, ns.length)
+        let paragraph = ns.paragraphRange(for: NSRange(location: caret, length: 0))
+        var fragments: [NSRect] = []
+        if paragraph.length > 0 {
+            let glyphs = layoutManager.glyphRange(forCharacterRange: paragraph, actualCharacterRange: nil)
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                fragments.append(rect)
+            }
+        } else {
+            // The empty line after a trailing newline (or an empty note) has
+            // no glyphs; AppKit lays it out as the extra line fragment.
+            layoutManager.ensureLayout(for: textContainer)
+            if layoutManager.extraLineFragmentTextContainer != nil {
+                fragments.append(layoutManager.extraLineFragmentRect)
+            }
+        }
+        return Self.currentLineRect(
+            lineFragments: fragments,
+            containerOrigin: textContainerOrigin,
+            containerWidth: textContainer.size.width,
+            scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        )
+    }
+
+    private var hasCurrentLineFocus: Bool {
+        currentLineFocusOverride ?? (window?.firstResponder === self)
+    }
+
+    /// The band that should be on screen right now, or nil.
+    private func currentLineRectToShow() -> NSRect? {
+        guard Self.showsCurrentLine(
+            enabled: highlightsCurrentLine,
+            selections: selectedRanges.map(\.rangeValue),
+            isFocused: hasCurrentLineFocus
+        ) else { return nil }
+        return caretLineRect(scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
+    }
+
+    /// Moves the band: invalidates the old and new rects only. Layout can't
+    /// be asked for in the middle of an edit, so a change arriving inside one
+    /// is handled as soon as the edit closes (the band is drawn from fresh
+    /// layout anyway, so it is never drawn in a stale place meanwhile).
+    func refreshCurrentLineHighlight() {
+        guard highlightsCurrentLine || displayedCurrentLineRect != nil else {
+            lastCurrentLineInvalidation = []
+            return
+        }
+        guard textStorage?.editedMask.isEmpty ?? true else {
+            DispatchQueue.main.async { [weak self] in self?.refreshCurrentLineHighlight() }
+            return
+        }
+        moveCurrentLineHighlight(to: currentLineRectToShow())
+    }
+
+    private func moveCurrentLineHighlight(to new: NSRect?) {
+        let invalidation = Self.currentLineInvalidation(from: displayedCurrentLineRect, to: new)
+        lastCurrentLineInvalidation = invalidation
+        displayedCurrentLineRect = new
+        for rect in invalidation { setNeedsDisplay(rect) }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard highlightsCurrentLine || displayedCurrentLineRect != nil else { return }
+        // Drawn from the layout as it is now. If something other than a
+        // caret move shifted the line (a resize rewrapping it, a font
+        // change), the band moves here and the old one is invalidated.
+        let band = currentLineRectToShow()
+        if band != displayedCurrentLineRect { moveCurrentLineHighlight(to: band) }
+        guard let band, band.intersects(rect) else { return }
+        Self.currentLineColor(
+            ink: ink.text,
+            increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        ).setFill()
+        band.intersection(rect).fill(using: .sourceOver)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        // The window only records the new first responder after this returns.
+        if became { DispatchQueue.main.async { [weak self] in self?.refreshCurrentLineHighlight() } }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { DispatchQueue.main.async { [weak self] in self?.refreshCurrentLineHighlight() } }
+        return resigned
+    }
+}
+
 /// Plain-text editor backed by `NSTextView`.
 ///
 /// SwiftUI's `TextEditor` exposes neither the caret position nor scroll events,
@@ -3132,6 +3868,7 @@ struct PlainTextEditor: NSViewRepresentable {
     var letterSpacing: Double = 0
     var ink: InkTheme = .system
     var guide: PaperGuide = .none
+    var highlightsCurrentLine: Bool = false
     var listKeyword: String = "list"
     var codeKeyword: String = CodeBlock.defaultKeyword
     /// Extra room at the top when the header bar is hidden, so the first line
@@ -3143,6 +3880,11 @@ struct PlainTextEditor: NSViewRepresentable {
     /// to nil in `updateNSView` once applied, so it fires exactly once per
     /// selection rather than re-scrolling on every unrelated update.
     @Binding var scrollTarget: NSRange?
+    /// The note being edited, so a switch is told apart from the same
+    /// note's text changing.
+    var noteID: UUID? = nil
+    /// Where each note's caret and scroll were left this session.
+    var viewStates: NoteViewStateStore? = nil
     var onSwipe: (SwipeDirection) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -3219,6 +3961,7 @@ struct PlainTextEditor: NSViewRepresentable {
         // above only covers the moment before it.
         textView.ink = ink
         textView.guide = guide
+        textView.highlightsCurrentLine = highlightsCurrentLine
         textView.textStorage?.delegate = textView
         textView.enableImageDrops()
         textView.enableHeaderToggleButtons()
@@ -3229,7 +3972,32 @@ struct PlainTextEditor: NSViewRepresentable {
         textView.applyLinkFolding()
 
         scrollView.documentView = textView
+
+        // A rebuilt editor (display-mode change) reopens where the note was
+        // left, or at its end the first time. The scroll waits a tick: the
+        // scroll view has no size until SwiftUI lays it out.
+        context.coordinator.noteID = noteID
+        let state = noteID.flatMap { viewStates?[$0] }
+        let length = (text as NSString).length
+        let selection = state?.selection ?? NSRange(location: length, length: 0)
+        textView.setSelectedRange(NSRange(
+            location: min(selection.location, length),
+            length: min(selection.length, length - min(selection.location, length))
+        ))
+        if noteID != nil, viewStates != nil {
+            DispatchQueue.main.async { [weak textView] in
+                textView?.restoreScroll(state?.scrollOrigin)
+            }
+        }
         return scrollView
+    }
+
+    /// The editor going away (display-mode change) is a switch away too.
+    static func dismantleNSView(_ scrollView: SwipeScrollView, coordinator: Coordinator) {
+        guard let id = coordinator.noteID, let states = coordinator.parent.viewStates,
+              let textView = scrollView.documentView as? ChecklistTextView
+        else { return }
+        states[id] = textView.viewState
     }
 
     func updateNSView(_ scrollView: SwipeScrollView, context: Context) {
@@ -3268,34 +4036,67 @@ struct PlainTextEditor: NSViewRepresentable {
         if textView.guide != guide {
             textView.guide = guide
         }
-
-        // Only touch the text view when the model genuinely diverged (note
-        // switch). Assigning unconditionally would fight the user's typing and
-        // reset undo on every keystroke.
-        if textView.string != text {
-            textView.loadNoteText(text)
+        if textView.highlightsCurrentLine != highlightsCurrentLine {
+            textView.highlightsCurrentLine = highlightsCurrentLine
         }
 
-        // Runs after the text-diff block above, so a jump into a different
-        // note lands against that note's already-current string rather than
-        // the one it's replacing.
+        Self.showNote(noteID, text: text, leaving: context.coordinator.noteID, in: textView, states: viewStates)
+        context.coordinator.noteID = noteID
+
+        // Runs after the note switch above, so a jump into a different note
+        // lands against that note's already-current string rather than the
+        // one it's replacing, and wins over the spot that note remembered.
         if let target = scrollTarget {
-            let length = (textView.string as NSString).length
-            if target.location != NSNotFound, target.location <= length {
-                let safeRange = NSRange(
-                    location: target.location,
-                    length: min(target.length, length - target.location)
-                )
-                textView.scrollRangeToVisible(safeRange)
-                textView.setSelectedRange(safeRange)
-                textView.showFindIndicator(for: safeRange)
-            }
+            Self.applyScrollTarget(target, in: textView)
             DispatchQueue.main.async { self.scrollTarget = nil }
         }
     }
 
+    /// Selects a global-search match and brings it into view.
+    static func applyScrollTarget(_ target: NSRange, in textView: ChecklistTextView) {
+        let length = (textView.string as NSString).length
+        guard target.location != NSNotFound, target.location <= length else { return }
+        let safeRange = NSRange(
+            location: target.location,
+            length: min(target.length, length - target.location)
+        )
+        textView.scrollRangeToVisible(safeRange)
+        textView.setSelectedRange(safeRange)
+        textView.showFindIndicator(for: safeRange)
+    }
+
+    /// Puts note `id` in the text view. A switch from `previous` records
+    /// where that note was left and restores where `id` was; the same note
+    /// with new text only swaps the text. Without a store (or a note id),
+    /// it is the plain text swap this always was.
+    static func showNote(
+        _ id: UUID?,
+        text: String,
+        leaving previous: UUID?,
+        in textView: ChecklistTextView,
+        states: NoteViewStateStore?
+    ) {
+        guard let id, let states else {
+            if textView.string != text { textView.loadNoteText(text) }
+            return
+        }
+        guard id != previous else {
+            // Only touch the text view when the model genuinely diverged.
+            // Assigning unconditionally would fight the user's typing and
+            // reset undo on every keystroke.
+            if textView.string != text { textView.loadNoteText(text) }
+            return
+        }
+        if let previous {
+            states[previous] = textView.viewState
+        }
+        textView.openNote(text, restoring: states[id])
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: PlainTextEditor
+        /// The note the text view is showing.
+        var noteID: UUID?
 
         init(_ parent: PlainTextEditor) {
             self.parent = parent
@@ -3311,5 +4112,17 @@ struct PlainTextEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             parent.selectedRange = textView.selectedRange()
         }
+    }
+}
+
+extension NSEvent.ModifierFlags {
+    /// Just the chord keys, for comparing an event against a shortcut.
+    ///
+    /// `.deviceIndependentFlagsMask` is not enough: it keeps `.capsLock`, so
+    /// every exact-match shortcut failed with Caps Lock on, and it keeps
+    /// `.numericPad` and `.function`, which AppKit sets on every arrow key,
+    /// so an arrow chord could never match a real event (design review M5).
+    var shortcutModifiers: NSEvent.ModifierFlags {
+        intersection([.command, .option, .control, .shift])
     }
 }

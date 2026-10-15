@@ -117,13 +117,18 @@ jobs:
           name: release-archive
           path: dist
 
+      # Jot.zip is the same archive under a name that never changes, so
+      # github.com/<repo>/releases/latest/download/Jot.zip always serves the
+      # newest release. The website's Download button points there.
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cp "dist/Jot-${{ needs.build.outputs.version }}.zip" dist/Jot.zip
           gh release create "${{ github.ref_name }}" \
             "dist/Jot-${{ needs.build.outputs.version }}.zip" \
             "dist/Jot-${{ needs.build.outputs.version }}.zip.sha256" \
+            dist/Jot.zip \
             --title "Jot ${{ needs.build.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --generate-notes
@@ -132,6 +137,18 @@ jobs:
     needs: [build, publish-release]
     runs-on: macos-14
     steps:
+      - name: The stable download link serves this release
+        run: |
+          # Retried: the latest redirect can trail a just-published release.
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            "https://github.com/${{ github.repository }}/releases/latest/download/Jot.zip" -o Jot.zip
+          ditto -x -k Jot.zip unpacked
+          VERSION="$(plutil -extract CFBundleShortVersionString raw unpacked/Jot.app/Contents/Info.plist)"
+          [ "$VERSION" = "${{ needs.build.outputs.version }}" ] || {
+            echo "::error::releases/latest/download/Jot.zip is $VERSION, expected ${{ needs.build.outputs.version }}"
+            exit 1
+          }
+
       - name: Run install.sh exactly as a real user would
         run: |
           curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh" | bash

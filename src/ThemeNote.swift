@@ -14,12 +14,18 @@ import AppKit
 ///     paper: #223038        (hex paper; everything else is derived from it)
 ///     tint: amber           (for translucent papers instead of a hex)
 ///     ink: #e8e4d8          (optional; derived from the paper otherwise)
-///     accent: #7cc4ff       (optional)
+///     accent: #7cc4ff       (optional; math results, checked items, links)
 ///     font: Avenir Next     (any installed font name)
 ///     size: 14              (points)
 ///     spacing: 1.3          (line-height multiple)
 ///     tracking: 0.5         (extra points between characters)
 ///     guides: dots|grid|none
+///
+/// `accent` replaces the system accent for everything drawn in the accent
+/// ink while the theme is in force. Like the system accent it is held to
+/// 4.5:1 against the theme's paper, chrome and cards (7:1 under Increase
+/// Contrast) by moving only its lightness, so a pale accent on a light paper
+/// comes out darker but keeps its hue. See `SettingsManager.effectiveInk`.
 ///
 /// Lines that are not recognised pairs are ignored rather than rejected, so
 /// plain prose can sit among the settings as commentary. A pair with an

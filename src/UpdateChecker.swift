@@ -17,9 +17,11 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var isUpdating = false
 
     /// Update if the project moves to a different owner or repo name.
-    private static let repository = "lsuryatej/jot"
+    nonisolated private static let repository = "lsuryatej/jot"
     private static let releasesAPI = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     static let releasesPage = URL(string: "https://github.com/\(repository)/releases/latest")!
+    /// Help › Jot Help. The README is the manual.
+    nonisolated static let helpPage = URL(string: "https://github.com/\(repository)#readme")!
 
     private static let refreshInterval: TimeInterval = 86400
     private var lastChecked: Date?

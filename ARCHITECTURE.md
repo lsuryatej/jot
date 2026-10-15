@@ -11,8 +11,11 @@ finding where a given piece of behaviour lives.
 | `src/main.swift` | AppKit entry point |
 | `src/Jot.swift` | App delegate, display modes, panel, status item |
 | `src/MainMenu.swift` | Menu bar, including the Find items that drive Cmd+F |
+| `src/EditorContextMenu.swift` | The editor's right-click note commands, for modes without a menu bar |
+| `src/UndoRouter.swift` | One Edit › Undo over the editor's typing and note deletion |
 | `src/SettingsManager.swift` | Preferences, display-mode and privacy-toggle definitions |
-| `src/PreferencesView.swift` | Settings window and the shortcut recorder |
+| `src/PreferencesView.swift` | Settings pane contents and the shortcut recorder |
+| `src/SettingsWindow.swift` | Settings window: toolbar panes, per-pane title and height, remembered pane |
 | `src/HotKeyController.swift` | Global shortcut registration |
 | `src/KeyCombo.swift` | Shortcut model and its display form |
 | `src/MathExpression.swift` | The math parser and evaluator |
@@ -23,6 +26,7 @@ finding where a given piece of behaviour lives.
 | `src/Checklist.swift` | Checklist parsing, rewriting, and list mode |
 | `src/CodeBlock.swift` | Code-block keyword matching and the copyable body |
 | `src/OrderedList.swift` | Numbered/lettered/roman list parsing and continuation |
+| `src/ListMove.swift` | Moving list items (keyboard and drag), nesting and renumbering |
 | `src/Headings.swift` | Heading line parsing and marker ranges |
 | `src/ThemeNote.swift` | Theme-as-note parsing and derived palettes |
 | `src/GlassTint.swift` | Tint choices for the translucent papers |
@@ -33,6 +37,7 @@ finding where a given piece of behaviour lives.
 | `src/EdgeReveal.swift` | Edge sidebar show/hide: generation guard and slide geometry |
 | `src/EdgeStackView.swift` | The edge sidebar and its note cards |
 | `src/Note.swift` | The note model and its stable identity |
+| `src/NoteViewState.swift` | Each note's caret and scroll, remembered for the session |
 | `src/GlobalSearch.swift` | Cross-note search, matching every note's text directly |
 | `src/GlobalSearchView.swift` | The Cmd+Shift+F overlay |
 | `src/LinkShrink.swift` | Finds long URLs and the domain worth keeping visible |
@@ -53,7 +58,7 @@ finding where a given piece of behaviour lives.
 
 ## Test isolation
 
-`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `CodeBlock`, `OrderedList`,
+`NotesManager`, `NoteStore`, `MathExpression`, `Checklist`, `CodeBlock`, `OrderedList`, `ListMove`,
 `GlobalSearch`, `LinkShrink`, and `Attachments` are deliberately free of
 SwiftUI and AppKit, so every rule in them is covered by a dependency-free
 test. The theme parser, glass tints, and celebration configuration touch

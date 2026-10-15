@@ -29,11 +29,13 @@ OUT="$(mktemp -d)/NotesManagerTests"
     -sdk "$SDK" \
     -target arm64-apple-macos14.0 \
     src/Note.swift \
+    src/NoteViewState.swift \
     src/NoteFont.swift \
     src/Headings.swift \
     src/Highlight.swift \
     src/Emphasis.swift \
     src/GlobalSearch.swift \
+    src/GlobalSearchView.swift \
     src/LinkShrink.swift \
     src/Attachments.swift \
     src/AppleNotesSync.swift \
@@ -50,6 +52,7 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/Checklist.swift \
     src/CodeBlock.swift \
     src/OrderedList.swift \
+    src/ListMove.swift \
     src/KeyCombo.swift \
     src/SettingsManager.swift \
     src/GlassTint.swift \
@@ -59,8 +62,13 @@ OUT="$(mktemp -d)/NotesManagerTests"
     src/EdgeReveal.swift \
     src/PlainTextEditor.swift \
     src/EditorAccessibility.swift \
+    src/EdgeStackView.swift \
+    src/EdgeTrigger.swift \
     src/PreferencesView.swift \
+    src/SettingsWindow.swift \
     src/MainMenu.swift \
+    src/UndoRouter.swift \
+    src/EditorContextMenu.swift \
     tests/NotesManagerTests.swift \
     tests/ReminderDirectiveTests.swift \
     tests/ResizableCardTests.swift \
@@ -91,6 +99,20 @@ OUT="$(mktemp -d)/NotesManagerTests"
     tests/MotionTests.swift \
     tests/EdgeRevealTests.swift \
     tests/VoiceOverTests.swift \
+    tests/ModifierMaskTests.swift \
+    tests/ListMoveTests.swift \
+    tests/NoteViewStateTests.swift \
+    tests/FontFallbackTests.swift \
+    tests/SettingsWindowLogicTests.swift \
+    tests/MainMenuTests.swift \
+    tests/DeleteNoteUndoTests.swift \
+    tests/TextSizeTests.swift \
+    tests/ContextMenuTests.swift \
+    tests/GlobalSearchKeyboardTests.swift \
+    tests/ThemeAccentTests.swift \
+    tests/CurrentLineHighlightTests.swift \
+    tests/EdgeStackTests.swift \
+    tests/EdgeTriggerTests.swift \
     tests/main.swift \
     -o "$OUT"
 

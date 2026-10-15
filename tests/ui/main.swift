@@ -25,11 +25,13 @@ MainActor.assumeIsolated {
 
 runSettingsWindowTests()
 runHeaderDispatchTests()
+runFindBarPasteTests()
 runUndoAcrossNoteSwitchTests()
 runImageResizeTests()
 runPanelToggleTests()
 runPanelCancelTests()
 runSelectionRectTests()
+runMouseNavigationTests()
 
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
