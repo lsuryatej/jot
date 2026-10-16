@@ -266,9 +266,12 @@ func runEdgeStackTests() {
         }
 
         suite("the fade is a mask over the stack's scroll view, covering the cards' AppKit views") {
-            @MainActor func mask(increasesContrast: Bool) -> (CAGradientLayer?, NSScrollView?) {
+            @MainActor func mask(increasesContrast: Bool, reducesTransparency: Bool = false) -> (CAGradientLayer?, NSScrollView?) {
                 let harness = EdgeStackHarness(notes: edgeStackSeed(8), height: 400)
                 harness.settings.increasesContrast = increasesContrast
+                // From settings, not the machine: a CI Mac with Reduce
+                // Transparency on had no fade, and the test failed there.
+                harness.settings.reducesTransparency = reducesTransparency
                 harness.pump()
                 let scroll = harness.stackScrollView
                 return (scroll?.layer?.mask as? CAGradientLayer, scroll)
@@ -280,6 +283,8 @@ func runEdgeStackTests() {
             check(abs(stop - 10) < 0.01, "opaque from 10pt down (\(stop))")
             let (none, _) = mask(increasesContrast: true)
             check(none == nil, "and none under Increase Contrast")
+            let (opaque, _) = mask(increasesContrast: false, reducesTransparency: true)
+            check(opaque == nil, "and none under Reduce Transparency")
         }
     }
 }

@@ -733,6 +733,10 @@ final class SettingsManager: ObservableObject {
     /// persisted: the system owns it. Hairlines strengthen and the purely
     /// decorative lit edge and tint wash step aside while it is on.
     @Published var increasesContrast = false
+    /// Mirrors Reduce Transparency the same way, so views read it from here
+    /// rather than SwiftUI's environment, which a test cannot set: a test
+    /// run would otherwise depend on the machine it runs on.
+    @Published var reducesTransparency = false
     private var accessibilityObserver: NSObjectProtocol?
 
     @Published var displayMode: DisplayMode {
@@ -1014,15 +1018,18 @@ final class SettingsManager: ObservableObject {
         // machine's accessibility settings.
         if defaults === UserDefaults.standard {
             increasesContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            reducesTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
             accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
                 let increase = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+                let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
                 MainActor.assumeIsolated {
-                    guard let self, self.increasesContrast != increase else { return }
-                    self.increasesContrast = increase
+                    guard let self else { return }
+                    if self.increasesContrast != increase { self.increasesContrast = increase }
+                    if self.reducesTransparency != reduce { self.reducesTransparency = reduce }
                 }
             }
         }

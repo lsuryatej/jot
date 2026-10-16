@@ -186,6 +186,22 @@ func runCurrentLineHighlightTests() {
             check(headingBand.maxY <= band.minY, "and does not reach into the next line")
         }
 
+        suite("current line: the band snaps to the scale it is asked for, not the screen's") {
+            // A 1x display snapped it to whole points even when asked for 2x:
+            // the parameter was ignored. Both scales are asked for here, so
+            // this holds whatever screen the test runs on.
+            let fixture = LineFixture(text: text, width: 260)
+            let ns = text as NSString
+            fixture.view.setSelectedRange(NSRange(location: ns.range(of: "Short").location, length: 0))
+            for scale in [CGFloat(1), 2, 3] {
+                guard let band = fixture.view.caretLineRect(scale: scale) else { check(false, "a band at \(scale)x"); continue }
+                for edge in [band.minY, band.maxY, band.minX, band.maxX] {
+                    let pixels = edge * scale
+                    check(abs(pixels - pixels.rounded()) < 0.0001, "\(scale)x: edge \(edge) on the \(scale)x pixel grid")
+                }
+            }
+        }
+
         suite("current line: a caret at the end, after a trailing newline, lights the empty last line") {
             let fixture = LineFixture(text: "one\ntwo\n")
             fixture.view.setSelectedRange(NSRange(location: 8, length: 0))
