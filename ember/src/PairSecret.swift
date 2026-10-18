@@ -27,7 +27,10 @@ struct PairSecret: Codable, Equatable {
     /// What one of you copies and the other pastes. Self-contained: it
     /// carries the server too, so a self-hosted pair needs no extra setup.
     var code: String {
-        let json = (try? JSONEncoder().encode(Portable(s: server.absoluteString, t: topic, k: Base64URL.encode(key)))) ?? Data()
+        // Sorted keys: the same pair always prints the same code.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = (try? encoder.encode(Portable(s: server.absoluteString, t: topic, k: Base64URL.encode(key)))) ?? Data()
         return Self.codePrefix + Base64URL.encode(json)
     }
 

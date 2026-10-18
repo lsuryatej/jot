@@ -9,6 +9,9 @@ import Foundation
 //   EmberProbe prepare <state.json>
 //   EmberProbe exchange <state.json>
 
+// Line-buffered, so CI timestamps show when each step really happened.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 var failures = 0
 
 func check(_ condition: Bool, _ label: String) {

@@ -6,6 +6,9 @@ import Foundation
 // byte, and that a Mac coming back online catches up on exactly what it
 // missed and nothing it already had.
 
+// Line-buffered, so CI timestamps show when each step really happened.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 var failures = 0
 
 func check(_ condition: Bool, _ label: String) {

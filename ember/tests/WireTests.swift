@@ -7,7 +7,9 @@ func runWireTests() {
         check(secret.code.hasPrefix("ember1."), "codes are versioned")
         equal(PairSecret(code: secret.code), secret, "a code round-trips")
         equal(PairSecret(code: secret.link), secret, "so does the link")
-        let mangled = "  " + secret.code.prefix(20) + "\n" + secret.code.dropFirst(20) + " \n"
+        equal(secret.code, secret.code, "the same pair always prints the same code")
+        let code = secret.code
+        let mangled = "  " + code.prefix(20) + "\n" + code.dropFirst(20) + " \n"
         equal(PairSecret(code: String(mangled)), secret, "line breaks and spaces from a chat app are ignored")
         equal(PairSecret(code: "hello"), nil, "garbage is rejected")
         equal(PairSecret(code: "ember1.e30"), nil, "an empty payload is rejected")
