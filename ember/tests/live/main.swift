@@ -75,7 +75,13 @@ resumed.onMessage = { _, body in
 resumed.start()
 check(spin(20) { arrived.count >= 1 }, "reconnecting delivers what was missed")
 _ = spin(3) { false } // anything extra would show up now
-check(arrived == [missed], "and only that, not the ping it already had")
+check(arrived.contains(missed), "including the reply")
+// Whether ntfy repeats the message the resume point names is up to the
+// server; what matters is that a repeat does nothing on this side.
+let repeats = arrived.filter { $0 != missed }
+print("  info resume delivered \(arrived.count) message(s), \(repeats.count) already seen")
+check(repeats.allSatisfy { riya.receive($0, at: Date()).isEmpty }, "anything already seen is ignored, so nothing buzzes twice")
+check(!riya.receive(missed, at: Date()).isEmpty, "while the missed reply still lands")
 resumed.stop()
 
 print("\nlive: junk on the topic")

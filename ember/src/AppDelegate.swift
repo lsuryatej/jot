@@ -24,9 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.imagePosition = .imageLeading
 
-        let hosting = NSHostingController(rootView: MenuView(model: model))
-        hosting.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = hosting
+        popover.contentViewController = makeMenu()
         popover.behavior = .transient
         popover.delegate = self
 
@@ -88,6 +86,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     // MARK: - Popover
+
+    private func makeMenu() -> NSViewController {
+        let hosting = NSHostingController(rootView: MenuView(model: model))
+        hosting.sizingOptions = [.preferredContentSize]
+        return hosting
+    }
+
+    /// A fresh view each time, so the menu always reopens on the home page
+    /// rather than wherever it was left (half-edited settings included).
+    func popoverDidClose(_ notification: Notification) {
+        popover.contentViewController = makeMenu()
+    }
 
     @objc private func togglePopover() {
         popover.isShown ? popover.performClose(nil) : showPopover()
