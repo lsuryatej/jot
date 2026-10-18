@@ -1,0 +1,64 @@
+name: Ember
+
+# Builds, tests, and packages Ember (the ember/ folder) on a real Mac. Ember
+# is a separate app that lives on the `ember` branch for now; nothing here
+# touches Jot's own build or release.
+#
+# The packaged Ember.app is uploaded as a workflow artifact rather than a
+# GitHub release, so it never shows up as this repo's "latest release" (which
+# Jot's install.sh and Homebrew cask rely on).
+on:
+  push:
+    branches: [ember]
+    paths:
+      - 'ember/**'
+      - '.github/workflows/ember.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Unit tests
+        run: ./ember/test.sh
+
+      - name: Build
+        run: ./ember/build.sh
+
+      - name: Check the bundle
+        working-directory: ember
+        run: |
+          lipo -archs Ember.app/Contents/MacOS/Ember | grep -q "x86_64 arm64" || {
+            echo "::error::Ember is not universal: $(lipo -archs Ember.app/Contents/MacOS/Ember)"; exit 1; }
+          codesign --verify --verbose Ember.app
+          plutil -lint Ember.app/Contents/Info.plist
+          test -s Ember.app/Contents/Resources/AppIcon.icns
+
+      - name: Live round trip through ntfy.sh
+        run: ./ember/test.sh --live
+
+      - name: Smoke test the real app
+        run: ./ember/smoke.sh
+
+      - name: Package
+        working-directory: ember
+        run: |
+          VERSION="$(plutil -extract CFBundleShortVersionString raw resources/Info.plist)"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent Ember.app "dist/Ember-$VERSION.zip"
+          cp install.sh dist/
+          shasum -a 256 "dist/Ember-$VERSION.zip" | tee "dist/Ember-$VERSION.zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ember
+          path: ember/dist/
+          retention-days: 90
