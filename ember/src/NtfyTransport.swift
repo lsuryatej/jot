@@ -116,6 +116,18 @@ final class NtfyTransport: NSObject, URLSessionDataDelegate {
         }.resume()
     }
 
+    /// Blocks until the message is sent or `timeout` passes. Only for quit,
+    /// when there's no run loop left to finish an async send.
+    func publishAndWait(_ body: String, timeout: TimeInterval) {
+        var request = URLRequest(url: topicURL)
+        request.httpMethod = "POST"
+        request.httpBody = Data(body.utf8)
+        request.timeoutInterval = timeout
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + timeout)
+    }
+
     // MARK: - Stream
 
     private struct Event: Decodable {

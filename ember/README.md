@@ -116,7 +116,7 @@ other. (Only the first copy gets the hotkey.)
 ## Development
 
 ```bash
-./ember/test.sh          # 137 offline checks: engine, crypto, wire format, parser, storage
+./ember/test.sh          # 138 offline checks: engine, crypto, wire format, parser, storage
 ./ember/test.sh --live   # real round trips through ntfy.sh, including catch-up after going offline
 ./ember/build.sh         # Ember.app, universal, ad-hoc signed
 ./ember/smoke.sh         # launches the built app and plays "the other Mac" against it

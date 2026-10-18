@@ -127,9 +127,16 @@ final class AppModel: ObservableObject {
     }
 
     func shutdown() {
-        // Best effort: the request may not finish before the process exits,
-        // in which case the other Mac shows "at their Mac" a little longer.
-        if pair != nil { run(engine.setAway(true, at: Date())) }
+        // Sent synchronously: an async send rarely finishes before the
+        // process exits, and the other Mac would show "at their Mac" until
+        // you next launched. Capped so quitting never hangs offline.
+        if let pair, let transport {
+            for case .publish(let envelope) in engine.setAway(true, at: Date()) {
+                if let sealed = try? pair.seal(envelope) {
+                    transport.publishAndWait(sealed, timeout: 2)
+                }
+            }
+        }
         hotKey.unregister()
         store.lastEventID = transport?.lastEventID ?? store.lastEventID
         save()
@@ -313,14 +320,19 @@ final class AppModel: ObservableObject {
         store.lastEventID = eventID
         guard let pair, let envelope = try? pair.open(body) else { return }
         run(engine.receive(envelope, at: Date()))
+        sync() // even an echo of our own message moves the resume point
     }
 
     private func tick() {
         guard pair != nil else { return }
+        if connection == .online { flushOutbox() }
         run(engine.tick(at: Date()))
     }
 
     private func run(_ effects: [Effect]) {
+        // The ticker runs this every 20 seconds; most of the time nothing
+        // happened, and there's no reason to rewrite the file.
+        guard !effects.isEmpty || engine.state != state else { return }
         for effect in effects {
             switch effect {
             case .publish(let envelope): publish(envelope)

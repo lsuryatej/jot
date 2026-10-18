@@ -228,6 +228,16 @@ func runEngineTests() {
         equal(c.state.visit.plan, newer, "and the stale Mac is brought up to date")
     }
 
+    suite("A late, stale status doesn't overwrite a newer one") {
+        let (a, b) = makePair()
+        let t = at(2026, 11, 5, 22)
+        let away = b.setAway(true, at: t)          // queued while the Mac slept
+        let back = b.setAway(false, at: t.addingTimeInterval(600))
+        _ = deliver(back, to: a, at: t.addingTimeInterval(601))
+        _ = deliver(away, to: a, at: t.addingTimeInterval(602)) // flushed after reconnect
+        equal(a.state.partner?.away, false, "still shows them at their Mac")
+    }
+
     suite("Hello is answered once, not forever") {
         let (a, b) = makePair()
         let reply = deliver(a.hello(at: at(2026, 11, 5)), to: b, at: at(2026, 11, 5))

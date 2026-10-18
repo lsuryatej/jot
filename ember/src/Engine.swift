@@ -92,6 +92,9 @@ struct EngineState: Codable, Equatable {
     var presenceAt = Date.distantPast
     var visit = VisitState.empty
     var partner: Snapshot?
+    /// When the snapshot in `partner` was sent. A queued message flushed
+    /// after a reconnect can arrive after a newer one; older ones are ignored.
+    var partnerAt: Date?
     var lastSent: PingMark?
     var lastReceived: PingMark?
     var repliedTo: UUID?
@@ -317,7 +320,7 @@ final class Engine {
             }
             return []
         case .snapshot(let snapshot, let wantsReply):
-            return receiveSnapshot(snapshot, wantsReply: wantsReply, at: now)
+            return receiveSnapshot(snapshot, sentAt: envelope.sentAt, wantsReply: wantsReply, at: now)
         }
     }
 
@@ -405,7 +408,7 @@ final class Engine {
         return effects
     }
 
-    private func receiveSnapshot(_ snapshot: Snapshot, wantsReply: Bool, at now: Date) -> [Effect] {
+    private func receiveSnapshot(_ snapshot: Snapshot, sentAt: Date, wantsReply: Bool, at now: Date) -> [Effect] {
         var effects: [Effect] = []
         let theirVisitIsNewer = snapshot.visit.updatedAt > state.visit.updatedAt
         if theirVisitIsNewer {
@@ -413,7 +416,10 @@ final class Engine {
             state.visit = snapshot.visit
             if changed { effects.append(.notify(visitChangedAlert(snapshot.visit.plan))) }
         }
-        state.partner = snapshot
+        if sentAt >= (state.partnerAt ?? .distantPast) {
+            state.partner = snapshot
+            state.partnerAt = sentAt
+        }
 
         // A Mac that has been off sends an old visit; answering with ours is
         // what brings it up to date.
@@ -580,6 +586,7 @@ extension EngineState {
         presenceAt = c.value(.presenceAt, or: presenceAt)
         visit = c.value(.visit, or: visit)
         partner = try? c.decodeIfPresent(Snapshot.self, forKey: .partner)
+        partnerAt = try? c.decodeIfPresent(Date.self, forKey: .partnerAt)
         lastSent = try? c.decodeIfPresent(PingMark.self, forKey: .lastSent)
         lastReceived = try? c.decodeIfPresent(PingMark.self, forKey: .lastReceived)
         repliedTo = try? c.decodeIfPresent(UUID.self, forKey: .repliedTo)

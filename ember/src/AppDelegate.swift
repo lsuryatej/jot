@@ -69,11 +69,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let alert = NSAlert()
         alert.messageText = "Pair with this link?"
         alert.informativeText = model.pair == nil
-            ? "Ember will connect to the person who sent it."
+            ? "Ember will connect to the person who sent it. Your name is what they'll see."
             : "This replaces your current pair with \(model.engine.partnerName)."
+        let nameField = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        nameField.placeholderString = "Your name"
+        nameField.stringValue = model.state.settings.myName
+        alert.accessoryView = nameField
         alert.addButton(withTitle: "Pair")
         alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = nameField
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty && name != model.state.settings.myName {
+            var settings = model.state.settings
+            settings.myName = name
+            model.updateSettings(settings)
+        }
 
         if model.join(code: url.absoluteString) {
             showPopover()
