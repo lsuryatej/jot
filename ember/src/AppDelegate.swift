@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func showPopover() {
         guard let button = statusItem.button else { return }
         stopGlow()
+        model.refreshNotificationPermission()
         NSApp.activate(ignoringOtherApps: true)
         if !popover.isShown {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)

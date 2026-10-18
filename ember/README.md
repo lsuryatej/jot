@@ -53,10 +53,11 @@ Building from source instead: `./ember/build.sh && ./ember/install.sh`
 
 ### First launch
 
-- **Allow notifications** when macOS asks.
-- Then go to **System Settings → Notifications → Ember** and set the style to
-  **Alerts**. Banners vanish after a few seconds and hide the reply buttons
-  behind a hover. Alerts stay until you answer.
+- **Allow notifications** when macOS asks. (Clicked Don't Allow? The menu
+  shows a *Turn them on* button.)
+- Set the style to **Alerts**: the menu shows a tip with a shortcut to the right
+  System Settings page until you do. Banners vanish after a few seconds and
+  hide the reply buttons behind a hover. Alerts stay until you answer.
 - Optional: Settings (gear icon) → *Open Ember at login*.
 
 ## Pair (once)

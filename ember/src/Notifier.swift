@@ -15,19 +15,48 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case open
     }
 
+    /// Whether notifications can show, and as Alerts (which keep their
+    /// reply buttons on screen) or Banners (which hide them behind a hover).
+    enum Permission: Equatable {
+        case unknown
+        case denied
+        case allowed(alerts: Bool)
+    }
+
     /// Called on the main queue.
     var onAction: ((Action) -> Void)?
+    /// Called on the main queue after the permission prompt is answered.
+    var onPermission: ((Permission) -> Void)?
 
     private var center: UNUserNotificationCenter { .current() }
 
     func setUp() {
         center.delegate = self
         center.setNotificationCategories(Self.categories())
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
             if !granted {
                 NSLog("Ember: notifications not allowed (\(error?.localizedDescription ?? "turned off in System Settings"))")
             }
+            self?.checkPermission { permission in self?.onPermission?(permission) }
         }
+    }
+
+    /// `completion` runs on the main queue.
+    func checkPermission(_ completion: @escaping (Permission) -> Void) {
+        center.getNotificationSettings { settings in
+            let permission: Permission
+            switch settings.authorizationStatus {
+            case .authorized, .provisional: permission = .allowed(alerts: settings.alertStyle == .alert)
+            case .denied: permission = .denied
+            default: permission = .unknown
+            }
+            DispatchQueue.main.async { completion(permission) }
+        }
+    }
+
+    static func openSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.suryatejlalam.Ember")!
+        NSWorkspace.shared.open(url)
     }
 
     static func categories() -> Set<UNNotificationCategory> {

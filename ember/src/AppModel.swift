@@ -70,6 +70,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var connection: NtfyTransport.Status = .offline
     /// Messages that couldn't be sent yet; retried when the stream is back.
     @Published private(set) var unsent = 0
+    /// Without notifications a ping still plays its sound and lights the
+    /// icon, but you'd never see it or its reply buttons, so the menu says so.
+    @Published private(set) var notifications: Notifier.Permission = .unknown
 
     /// The menu bar icon's glow.
     var onSignal: (() -> Void)?
@@ -103,6 +106,9 @@ final class AppModel: ObservableObject {
     func start() {
         notifier.onAction = { [weak self] action in
             MainActor.assumeIsolated { self?.handle(action) }
+        }
+        notifier.onPermission = { [weak self] permission in
+            MainActor.assumeIsolated { self?.notifications = permission }
         }
         notifier.setUp()
 
@@ -225,6 +231,16 @@ final class AppModel: ObservableObject {
             category: .pingDistance,
             sound: Level.spicy.sound
         ))
+    }
+
+    /// Re-read each time the menu opens: the fix happens in System Settings,
+    /// and there's no notification for coming back from there.
+    func refreshNotificationPermission() {
+        notifier.checkPermission { [weak self] permission in
+            MainActor.assumeIsolated {
+                if self?.notifications != permission { self?.notifications = permission }
+            }
+        }
     }
 
     func startFaceTime() {

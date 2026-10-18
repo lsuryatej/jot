@@ -47,6 +47,7 @@ struct HomeView: View {
         let phase = engine.phase(at: now)
         return VStack(alignment: .leading, spacing: 14) {
             header(engine, now: now)
+            notificationsCard
             if engine.state.partner == nil, let pair = model.pair {
                 waitingCard(pair)
             }
@@ -81,6 +82,33 @@ struct HomeView: View {
             Text("Connecting…").font(.caption).foregroundStyle(.secondary)
         } else if model.connection == .offline {
             Text("Offline").font(.caption).foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder private var notificationsCard: some View {
+        switch model.notifications {
+        case .denied:
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Notifications are off for Ember").font(.subheadline.weight(.semibold))
+                Text("Pings still play a sound and light up the flame, but you won't see them or their reply buttons.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Turn them on") { Notifier.openSettings() }
+            }
+            .card()
+        case .allowed(alerts: false):
+            HStack(alignment: .firstTextBaseline) {
+                Text("Tip: set Ember's notification style to Alerts so the reply buttons stay on screen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Settings") { Notifier.openSettings() }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+        default:
+            EmptyView()
         }
     }
 
